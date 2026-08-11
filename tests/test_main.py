@@ -23,6 +23,9 @@ def test_application_factory_uses_injected_settings() -> None:
 
     assert application.title == "SEQRET Test API"
     assert application.debug is True
+    assert application.docs_url == "/docs"
+    assert application.redoc_url == "/redoc"
+    assert application.openapi_url == "/openapi.json"
     assert application.state.runtime_context.kind is RuntimeKind.API
     assert application.state.runtime_context.settings is settings
 
@@ -34,9 +37,25 @@ def test_healthcheck_reports_runtime_without_secrets() -> None:
         response = client.get("/healthz")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     assert response.json() == {
         "status": "ok",
         "service": "seqret-api",
         "environment": "test",
         "runtime": "api",
     }
+
+
+def test_production_application_disables_api_documentation_routes() -> None:
+    settings = Settings(environment=AppEnvironment.PRODUCTION)
+    application = create_app(settings)
+
+    assert application.docs_url is None
+    assert application.redoc_url is None
+    assert application.openapi_url is None
+
+    with TestClient(application) as client:
+        assert client.get("/docs").status_code == 404
+        assert client.get("/redoc").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+        assert client.get("/healthz").status_code == 200

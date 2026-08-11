@@ -27,7 +27,15 @@ build-backend = "hatchling.build"
 packages = ["app"]
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers -ra"
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=app",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-fail-under=100",
+    "-ra",
+]
 testpaths = ["tests"]
 
 [tool.ruff]

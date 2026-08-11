@@ -19,7 +19,8 @@ class AppEnvironment(StrEnum):
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-SERVICE_NAME_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+MAX_SERVICE_NAME_LENGTH = 56
+SERVICE_NAME_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{0,54}[a-z0-9])?$")
 API_PREFIX_PATTERN = re.compile(r"^/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$")
 
 
@@ -49,7 +50,10 @@ class Settings(BaseSettings):
         """Keep service identity safe for logs, metrics, and deployment names."""
 
         if SERVICE_NAME_PATTERN.fullmatch(value) is None:
-            msg = "service_name must be a lowercase DNS label that starts with a letter"
+            msg = (
+                "service_name must be a lowercase DNS label that starts with a letter "
+                f"and is at most {MAX_SERVICE_NAME_LENGTH} characters"
+            )
             raise ValueError(msg)
         return value
 

@@ -48,11 +48,20 @@ def test_settings_strip_human_readable_names() -> None:
 
 @pytest.mark.parametrize(
     "service_name",
-    ["", "SEQRET", "seqret_1", "-seqret", "seqret-", "seqret/worker", f"s{'e' * 63}"],
+    ["", "SEQRET", "seqret_1", "-seqret", "seqret-", "seqret/worker", f"s{'e' * 56}"],
 )
 def test_settings_reject_invalid_service_name(service_name: str) -> None:
     with pytest.raises(ValidationError, match="service_name must be a lowercase DNS label"):
         Settings(service_name=service_name)
+
+
+def test_runtime_service_name_stays_within_dns_label_limit() -> None:
+    settings = Settings(service_name=f"s{'e' * 55}")
+
+    context = create_runtime_context(RuntimeKind.WORKER, settings)
+
+    assert len(settings.service_name) == 56
+    assert len(context.service_name) == 63
 
 
 def test_settings_normalize_api_prefix() -> None:

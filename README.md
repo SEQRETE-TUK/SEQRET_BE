@@ -70,3 +70,6 @@ uv run mypy
 ```
 
 API가 정상적으로 bootstrap됐는지는 `GET /healthz`로 확인합니다.
+
+- health 응답은 중간 cache가 이전 상태를 재사용하지 않도록 `Cache-Control: no-store`를 반환합니다.
+- production 환경에서는 `/docs`, `/redoc`, `/openapi.json` HTTP endpoint를 노출하지 않습니다.

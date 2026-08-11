@@ -2,7 +2,7 @@
 
 from typing import Literal, cast
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.config import AppEnvironment
@@ -28,10 +28,11 @@ class HealthResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     summary="프로세스 상태 확인",
 )
-def healthcheck(request: Request) -> HealthResponse:
+def healthcheck(request: Request, response: Response) -> HealthResponse:
     """Confirm that the API process completed application bootstrap."""
 
     context = cast(RuntimeContext, request.app.state.runtime_context)
+    response.headers["Cache-Control"] = "no-store"
     return HealthResponse(
         service=context.service_name,
         environment=context.settings.environment,
