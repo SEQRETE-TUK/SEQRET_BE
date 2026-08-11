@@ -41,4 +41,23 @@
 
 ## 상태
 
-기술 스택 확정 및 프로젝트 초기화 단계입니다.
+`FND-A01` 기준 FastAPI application factory와 API·worker·job이 공유하는 설정 계약을 구성하는 단계입니다.
+
+## 로컬 개발
+
+Python 버전과 dependency는 `uv`로 고정합니다.
+
+```bash
+uv sync --dev
+uv run uvicorn app.entrypoints.api:app --reload
+```
+
+기본 설정은 `SEQRET_` 접두사의 환경변수로 덮어쓸 수 있습니다. 로컬 설정은 `.env.example`을 참고하되 실제 `.env` 파일과 비밀값은 commit하지 않습니다.
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run mypy
+```
+
+API가 정상적으로 bootstrap됐는지는 `GET /healthz`로 확인합니다.
