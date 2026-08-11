@@ -34,4 +34,5 @@ def create_runtime_context(
 ) -> RuntimeContext:
     """Create a runtime context from the shared settings contract."""
 
-    return RuntimeContext(kind=kind, settings=settings or get_settings())
+    resolved_settings = settings if settings is not None else get_settings()
+    return RuntimeContext(kind=kind, settings=resolved_settings)
