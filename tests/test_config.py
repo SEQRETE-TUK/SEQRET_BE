@@ -5,7 +5,13 @@ from collections.abc import Iterator
 import pytest
 from pydantic import ValidationError
 
-from app.config import AppEnvironment, Settings, get_settings
+from app.config import (
+    CLOUD_RUN_SERVICE_NAME_MAX_LENGTH,
+    MAX_SERVICE_NAME_LENGTH,
+    AppEnvironment,
+    Settings,
+    get_settings,
+)
 from app.runtime import RuntimeKind, create_runtime_context
 
 
@@ -48,20 +54,31 @@ def test_settings_strip_human_readable_names() -> None:
 
 @pytest.mark.parametrize(
     "service_name",
-    ["", "SEQRET", "seqret_1", "-seqret", "seqret-", "seqret/worker", f"s{'e' * 56}"],
+    [
+        "",
+        "SEQRET",
+        "seqret_1",
+        "-seqret",
+        "seqret-",
+        "seqret/worker",
+        f"s{'e' * MAX_SERVICE_NAME_LENGTH}",
+    ],
 )
 def test_settings_reject_invalid_service_name(service_name: str) -> None:
     with pytest.raises(ValidationError, match="service_name must be a lowercase DNS label"):
         Settings(service_name=service_name)
 
 
-def test_runtime_service_name_stays_within_dns_label_limit() -> None:
-    settings = Settings(service_name=f"s{'e' * 55}")
+@pytest.mark.parametrize("runtime_kind", list(RuntimeKind))
+def test_runtime_service_name_stays_within_cloud_run_limit(
+    runtime_kind: RuntimeKind,
+) -> None:
+    settings = Settings(service_name=f"s{'e' * (MAX_SERVICE_NAME_LENGTH - 1)}")
 
-    context = create_runtime_context(RuntimeKind.WORKER, settings)
+    context = create_runtime_context(runtime_kind, settings)
 
-    assert len(settings.service_name) == 56
-    assert len(context.service_name) == 63
+    assert len(settings.service_name) == MAX_SERVICE_NAME_LENGTH
+    assert len(context.service_name) <= CLOUD_RUN_SERVICE_NAME_MAX_LENGTH
 
 
 def test_settings_normalize_api_prefix() -> None:

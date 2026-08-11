@@ -19,8 +19,14 @@ class AppEnvironment(StrEnum):
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-MAX_SERVICE_NAME_LENGTH = 56
-SERVICE_NAME_PATTERN = re.compile(r"^[a-z](?:[a-z0-9-]{0,54}[a-z0-9])?$")
+# Cloud Run service names are limited to 49 characters. Reserve the longest
+# runtime suffix so one shared base name remains deployable for every runtime.
+CLOUD_RUN_SERVICE_NAME_MAX_LENGTH = 49
+LONGEST_RUNTIME_SUFFIX_LENGTH = len("-worker")
+MAX_SERVICE_NAME_LENGTH = CLOUD_RUN_SERVICE_NAME_MAX_LENGTH - LONGEST_RUNTIME_SUFFIX_LENGTH
+SERVICE_NAME_PATTERN = re.compile(
+    rf"^[a-z](?:[a-z0-9-]{{0,{MAX_SERVICE_NAME_LENGTH - 2}}}[a-z0-9])?$"
+)
 API_PREFIX_PATTERN = re.compile(r"^/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$")
 
 

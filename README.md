@@ -57,7 +57,7 @@ uv run uvicorn app.entrypoints.api:app --reload
 | 환경변수 | 기본값 | 설명 |
 | --- | --- | --- |
 | `SEQRET_APP_NAME` | `SEQRET Backend` | API 문서와 application에 표시할 이름 |
-| `SEQRET_SERVICE_NAME` | `seqret` | 소문자 DNS label 형식의 runtime 공통 식별자 |
+| `SEQRET_SERVICE_NAME` | `seqret` | 소문자 DNS label 형식의 runtime 공통 식별자. suffix 제외 최대 42자, 최종 Cloud Run 이름 최대 49자 |
 | `SEQRET_ENVIRONMENT` | `local` | `local`, `test`, `staging`, `production` 중 하나 |
 | `SEQRET_DEBUG` | `false` | FastAPI debug 여부. production에서는 `true`를 거부함 |
 | `SEQRET_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` 중 하나 |
