@@ -46,6 +46,7 @@
 ## 로컬 개발
 
 Python 버전과 dependency는 `uv`로 고정합니다.
+패키지 버전은 `app/__init__.py`의 `__version__`을 단일 원본으로 사용합니다.
 
 ```bash
 uv sync --dev
