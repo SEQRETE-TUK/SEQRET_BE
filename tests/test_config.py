@@ -55,6 +55,23 @@ def test_database_url_is_hidden_from_settings_representation() -> None:
     assert "database-secret" not in repr(settings)
 
 
+def test_redis_url_is_hidden_and_validated() -> None:
+    settings = Settings(redis_url=SecretStr("rediss://cache-secret@cache.internal:6379/0"))
+
+    assert settings.redis_url is not None
+    assert settings.redis_url.get_secret_value().startswith("rediss://")
+    assert "cache-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    "redis_url",
+    ["http://cache.internal", "redis:///0", "cache.internal:6379"],
+)
+def test_settings_reject_invalid_redis_url(redis_url: str) -> None:
+    with pytest.raises(ValidationError, match="redis_url must use redis"):
+        Settings(redis_url=SecretStr(redis_url))
+
+
 def test_settings_strip_human_readable_names() -> None:
     settings = Settings(app_name="  SEQRET Test API  ", service_name="  seqret-test  ")
 

@@ -6,11 +6,12 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.contracts.actor import ActorContext, ActorKind
+from app.contracts.ports import CachePort, ProviderError, ProviderErrorKind
 from app.contracts.primitives import JobId, ParticipantId, RequestId, utc_now
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.schemas import AccessLinkResponse
@@ -24,6 +25,14 @@ ACCESS_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
 
 class InvalidAccessTokenError(PermissionError):
     """Raised without revealing why a bearer credential failed."""
+
+
+class AccessRateLimitExceededError(PermissionError):
+    """Raised after a valid access link exceeds its fixed request window."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("access rate limit exceeded")
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -97,7 +106,90 @@ async def load_participant(
     return (await session.scalars(statement)).one_or_none()
 
 
-async def authenticate_access_token(session: AsyncSession, secret: str) -> ActorContext:
+async def _increment_database_rate_window(
+    session: AsyncSession,
+    access_link_id: UUID,
+    *,
+    now: datetime,
+    window_seconds: int,
+) -> int:
+    """Atomically increment the recoverable counter stored with one access link."""
+
+    window_cutoff = now - timedelta(seconds=window_seconds)
+    window_expired = (ParticipantAccessToken.rate_window_started_at.is_(None)) | (
+        ParticipantAccessToken.rate_window_started_at <= window_cutoff
+    )
+    statement = (
+        update(ParticipantAccessToken)
+        .where(
+            ParticipantAccessToken.id == access_link_id,
+            ParticipantAccessToken.revoked_at.is_(None),
+            ParticipantAccessToken.expires_at > now,
+        )
+        .values(
+            rate_window_started_at=case(
+                (window_expired, now),
+                else_=ParticipantAccessToken.rate_window_started_at,
+            ),
+            rate_window_count=case(
+                (window_expired, 1),
+                else_=ParticipantAccessToken.rate_window_count + 1,
+            ),
+        )
+        .returning(ParticipantAccessToken.rate_window_count)
+        .execution_options(synchronize_session=False)
+    )
+    count = (await session.execute(statement)).scalar_one_or_none()
+    if count is None:
+        raise InvalidAccessTokenError
+    return count
+
+
+async def _enforce_access_rate_limit(
+    session: AsyncSession,
+    access_link: ParticipantAccessToken,
+    cache: CachePort | None,
+    *,
+    now: datetime,
+    request_limit: int,
+    window_seconds: int,
+    timeout_seconds: float,
+) -> None:
+    count: int | None = None
+    if cache is not None:
+        try:
+            count = await cache.increment_fixed_window(
+                key=f"seqret:rate:access:{access_link.token_hash}",
+                window_seconds=window_seconds,
+                timeout_seconds=timeout_seconds,
+            )
+        except ProviderError as error:
+            if error.kind not in {
+                ProviderErrorKind.DEADLINE_EXCEEDED,
+                ProviderErrorKind.UNAVAILABLE,
+            }:
+                raise
+            count = None
+    if count is None:
+        count = await _increment_database_rate_window(
+            session,
+            access_link.id,
+            now=now,
+            window_seconds=window_seconds,
+        )
+    if count > request_limit:
+        raise AccessRateLimitExceededError(window_seconds)
+
+
+async def authenticate_access_token(
+    session: AsyncSession,
+    secret: str,
+    *,
+    cache: CachePort | None,
+    rate_limit_requests: int,
+    rate_limit_window_seconds: int,
+    cache_timeout_seconds: float,
+) -> ActorContext:
     """Resolve one active bearer secret into the shared actor contract."""
 
     if ACCESS_SECRET_PATTERN.fullmatch(secret) is None:
@@ -118,6 +210,15 @@ async def authenticate_access_token(session: AsyncSession, secret: str) -> Actor
         raise InvalidAccessTokenError
 
     participant = access_link.participant
+    await _enforce_access_rate_limit(
+        session,
+        access_link,
+        cache,
+        now=now,
+        request_limit=rate_limit_requests,
+        window_seconds=rate_limit_window_seconds,
+        timeout_seconds=cache_timeout_seconds,
+    )
     access_link.last_used_at = now
     return ActorContext(
         actor_kind=ActorKind.PARTICIPANT,

@@ -4,6 +4,7 @@ import re
 from enum import StrEnum
 from functools import lru_cache
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -55,6 +56,11 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1, le=50)
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     database_pool_timeout_seconds: float = Field(default=30.0, gt=0, le=300.0)
+    redis_url: SecretStr | None = Field(default=None, repr=False)
+    redis_max_connections: int = Field(default=10, ge=1, le=100)
+    cache_timeout_seconds: float = Field(default=0.2, gt=0, le=5.0)
+    access_rate_limit_requests: int = Field(default=120, ge=1, le=10_000)
+    access_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3_600)
     pubsub_project_id: str | None = None
     pubsub_topic_id: str | None = None
     outbox_batch_size: int = Field(default=100, ge=1, le=100)
@@ -103,6 +109,14 @@ class Settings(BaseSettings):
         if self.environment is AppEnvironment.PRODUCTION and self.debug:
             msg = "debug must be disabled in production"
             raise ValueError(msg)
+        if self.redis_url is not None:
+            parsed_redis_url = urlsplit(self.redis_url.get_secret_value())
+            if (
+                parsed_redis_url.scheme not in {"redis", "rediss"}
+                or parsed_redis_url.hostname is None
+            ):
+                msg = "redis_url must use redis:// or rediss:// and include a host"
+                raise ValueError(msg)
         if (self.pubsub_project_id is None) != (self.pubsub_topic_id is None):
             msg = "pubsub_project_id and pubsub_topic_id must be configured together"
             raise ValueError(msg)

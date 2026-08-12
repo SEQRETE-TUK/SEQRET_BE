@@ -5,6 +5,7 @@ import sys
 from asyncio import Event, SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -24,6 +25,8 @@ from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StorageObjectMetadata
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
+from app.modules.access.models import ParticipantAccessToken
+from app.modules.access.service import _increment_database_rate_window
 from app.modules.capture.schemas import MediaUploadCreate
 from app.modules.capture.service import (
     complete_media_upload,
@@ -75,8 +78,9 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_09_0001"
+ALEMBIC_HEAD = "a_10_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
+ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -189,6 +193,14 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert _current_revision(engine) == ALEMBIC_HEAD
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
+            command.downgrade(configuration, ALEMBIC_RATE_LIMIT_PREVIOUS)
+            access_columns = {
+                column["name"] for column in inspect(engine).get_columns("participant_access_token")
+            }
+            assert "rate_window_started_at" not in access_columns
+            assert "rate_window_count" not in access_columns
+            command.upgrade(configuration, "head")
+
             command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
             assert "outbox_event" not in inspect(engine).get_table_names()
             assert "event_consumption" not in inspect(engine).get_table_names()
@@ -221,6 +233,58 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert _current_revision(engine) == ALEMBIC_HEAD
         finally:
             engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_database_rate_fallback_increments_atomically_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        command_data = MoveJobCreate(
+            title="Rate fallback race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+                access_link_id = created.access_links[0].id
+
+            now = datetime.now(UTC)
+
+            async def increment() -> int:
+                async with transactional_session(factory) as session:
+                    return await _increment_database_rate_window(
+                        session,
+                        access_link_id,
+                        now=now,
+                        window_seconds=60,
+                    )
+
+            counts = await gather(*(increment() for _ in range(20)))
+
+            assert sorted(counts) == list(range(1, 21))
+            async with transactional_session(factory) as session:
+                stored = await session.get(ParticipantAccessToken, access_link_id)
+                assert stored is not None
+                assert stored.rate_window_count == 20
+                assert stored.rate_window_started_at == now
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.anyio

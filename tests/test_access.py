@@ -8,14 +8,23 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
+from app.contracts.fakes import FakeCache
+from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.main import create_app
 from app.modules.access.models import ParticipantAccessToken
+from app.modules.access.service import InvalidAccessTokenError, _increment_database_rate_window
 from app.platform.db import Base, create_session_factory
 
 
@@ -36,6 +45,30 @@ async def access_api(
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client, factory
     await engine.dispose()
+
+
+async def _access_api_with_settings(
+    tmp_path: Path,
+    settings: Settings,
+) -> tuple[
+    AsyncClient,
+    async_sessionmaker[AsyncSession],
+    tuple[FastAPI, AsyncEngine],
+]:
+    database_path = (tmp_path / f"access-{uuid4().hex}.sqlite3").as_posix()
+    sync_engine = create_engine(f"sqlite+pysqlite:///{database_path}")
+    Base.metadata.create_all(sync_engine)
+    sync_engine.dispose()
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
+    factory = create_session_factory(engine)
+    application = create_app(settings)
+    application.state.database_session_factory = factory
+    client = AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://testserver",
+    )
+    return client, factory, (application, engine)
 
 
 async def _create_job(client: AsyncClient) -> dict[str, Any]:
@@ -199,3 +232,177 @@ async def test_access_link_endpoints_hide_missing_targets_and_validate_expiry(
     )
     assert missing_participant.status_code == 404
     assert missing_link.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_database_fallback_limits_valid_access_link_and_resets_window(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        environment=AppEnvironment.TEST,
+        access_rate_limit_requests=2,
+        access_rate_limit_window_seconds=30,
+    )
+    client, factory, resources = await _access_api_with_settings(tmp_path, settings)
+    _, engine = resources
+    try:
+        created = await _create_job(client)
+        job_id = created["job"]["id"]
+        customer_link = created["access_links"][0]
+        secret = customer_link["secret"]
+        url = f"/api/v1/move-jobs/{job_id}"
+
+        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+        rejected = await client.get(url, headers=_bearer(secret))
+
+        assert rejected.status_code == 429
+        assert rejected.headers["retry-after"] == "30"
+        assert rejected.json()["detail"] == "access rate limit exceeded"
+        async with factory() as session:
+            stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+            assert stored is not None
+            assert stored.rate_window_count == 2
+            assert stored.last_used_at is not None
+            assert secret not in stored.token_hash
+
+        async with factory.begin() as session:
+            await session.execute(
+                update(ParticipantAccessToken)
+                .where(ParticipantAccessToken.id == UUID(customer_link["id"]))
+                .values(rate_window_started_at=datetime.now(UTC) - timedelta(seconds=31))
+            )
+        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+        async with factory() as session:
+            stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+            assert stored is not None
+            assert stored.rate_window_count == 1
+    finally:
+        await client.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_redis_counter_limits_requests_without_mutating_database_fallback(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        environment=AppEnvironment.TEST,
+        access_rate_limit_requests=1,
+        access_rate_limit_window_seconds=10,
+    )
+    client, factory, resources = await _access_api_with_settings(tmp_path, settings)
+    application, engine = resources
+    application.state.cache_port = FakeCache()
+    try:
+        created = await _create_job(client)
+        customer_link = created["access_links"][0]
+        url = f"/api/v1/move-jobs/{created['job']['id']}"
+
+        assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 200
+        assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 429
+
+        async with factory() as session:
+            stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+            assert stored is not None
+            assert stored.rate_window_count == 0
+            assert stored.rate_window_started_at is None
+    finally:
+        await client.aclose()
+        await engine.dispose()
+
+
+class UnavailableCache:
+    async def increment_fixed_window(
+        self,
+        *,
+        key: str,
+        window_seconds: int,
+        timeout_seconds: float,
+    ) -> int:
+        raise ProviderError(ProviderErrorKind.UNAVAILABLE, "offline", retryable=True)
+
+
+class MisconfiguredCache:
+    async def increment_fixed_window(
+        self,
+        *,
+        key: str,
+        window_seconds: int,
+        timeout_seconds: float,
+    ) -> int:
+        raise ProviderError(ProviderErrorKind.PERMISSION_DENIED, "denied", retryable=False)
+
+
+@pytest.mark.anyio
+async def test_redis_outage_uses_database_fallback_but_configuration_error_propagates(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(environment=AppEnvironment.TEST, access_rate_limit_requests=1)
+    client, factory, resources = await _access_api_with_settings(tmp_path, settings)
+    application, engine = resources
+    try:
+        created = await _create_job(client)
+        customer_link = created["access_links"][0]
+        url = f"/api/v1/move-jobs/{created['job']['id']}"
+        application.state.cache_port = UnavailableCache()
+
+        assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 200
+        assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 429
+        async with factory() as session:
+            stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+            assert stored is not None
+            assert stored.rate_window_count == 1
+
+        application.state.cache_port = MisconfiguredCache()
+        with pytest.raises(ProviderError) as error_info:
+            await client.get(url, headers=_bearer(customer_link["secret"]))
+        assert error_info.value.kind is ProviderErrorKind.PERMISSION_DENIED
+    finally:
+        await client.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_rejected_business_request_still_commits_access_use_history(
+    access_api: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    client, factory = access_api
+    created = await _create_job(client)
+    customer_link = created["access_links"][0]
+
+    response = await client.get(
+        f"/api/v1/move-jobs/{uuid4()}",
+        headers=_bearer(customer_link["secret"]),
+    )
+
+    assert response.status_code == 404
+    async with factory() as session:
+        stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+        assert stored is not None
+        assert stored.last_used_at is not None
+        assert stored.rate_window_count == 1
+
+
+@pytest.mark.anyio
+async def test_database_fallback_rejects_link_revoked_after_authentication(
+    access_api: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    client, factory = access_api
+    created = await _create_job(client)
+    access_link_id = UUID(created["access_links"][0]["id"])
+    async with factory.begin() as session:
+        await session.execute(
+            update(ParticipantAccessToken)
+            .where(ParticipantAccessToken.id == access_link_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
+
+    async with factory.begin() as session:
+        with pytest.raises(InvalidAccessTokenError):
+            await _increment_database_rate_window(
+                session,
+                access_link_id,
+                now=datetime.now(UTC),
+                window_seconds=60,
+            )

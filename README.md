@@ -111,6 +111,11 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_DATABASE_POOL_SIZE` | `5` | runtime별 기본 connection pool 크기 |
 | `SEQRET_DATABASE_MAX_OVERFLOW` | `10` | pool 크기를 초과해 일시적으로 허용할 connection 수 |
 | `SEQRET_DATABASE_POOL_TIMEOUT_SECONDS` | `30` | pool에서 connection을 기다리는 최대 시간 |
+| `SEQRET_REDIS_URL` | 없음 | `redis://` 또는 TLS `rediss://` 연결 URL. 비설정 또는 일시 장애 시 접근 제한은 PostgreSQL fallback을 사용 |
+| `SEQRET_REDIS_MAX_CONNECTIONS` | `10` | API process가 공유하는 Redis connection pool 상한 |
+| `SEQRET_CACHE_TIMEOUT_SECONDS` | `0.2` | Redis 카운터 호출을 기다리는 최대 시간 |
+| `SEQRET_ACCESS_RATE_LIMIT_REQUESTS` | `120` | 유효한 역할 링크 하나가 고정 구간에서 허용받는 요청 수 |
+| `SEQRET_ACCESS_RATE_LIMIT_WINDOW_SECONDS` | `60` | 역할 링크별 고정 제한 구간 길이 |
 | `SEQRET_PUBSUB_PROJECT_ID` | 없음 | Outbox relay가 발행할 Pub/Sub project. topic과 함께 설정 |
 | `SEQRET_PUBSUB_TOPIC_ID` | 없음 | versioned domain event Pub/Sub topic ID. project와 함께 설정 |
 | `SEQRET_OUTBOX_BATCH_SIZE` | `100` | relay 한 번에 lease하고 동시에 발행할 최대 event 수 |

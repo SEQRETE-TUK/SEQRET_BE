@@ -3,7 +3,17 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.modules.move_job.models import JobParticipant
@@ -17,6 +27,11 @@ class ParticipantAccessToken(Base):
     __table_args__ = (
         CheckConstraint("length(token_hash) = 64", name="token_hash_length"),
         CheckConstraint("expires_at > created_at", name="expiry_after_creation"),
+        CheckConstraint(
+            "(rate_window_started_at IS NULL AND rate_window_count = 0) OR "
+            "(rate_window_started_at IS NOT NULL AND rate_window_count > 0)",
+            name="rate_window_state",
+        ),
         Index(
             "uq_participant_access_token_active_participant",
             "participant_id",
@@ -35,6 +50,13 @@ class ParticipantAccessToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rate_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rate_window_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
