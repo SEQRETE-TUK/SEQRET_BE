@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  ACTIONLINT_VERSION: "1.7.12"
   UV_VERSION: "0.11.21"
 
 jobs:
@@ -48,6 +49,22 @@ jobs:
             echo "Unresolved conflict markers found." >&2
             exit 1
           fi
+
+      - name: Validate GitHub Actions workflows
+        shell: bash
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          SHELLCHECK_OPTS: --severity=warning
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --connect-timeout 5 --max-time 60 --retry 2 --retry-all-errors \
+            --fail --location --silent --show-error \
+            --output "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -shellcheck "$(command -v shellcheck)"
 
   python-quality:
     name: Python quality
@@ -105,6 +122,14 @@ jobs:
 
       - name: Verify the Alembic revision graph
         run: uv run --frozen alembic heads --verbose
+
+      - name: Check ORM and migration head consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SEQRET_DATABASE_URL="${SEQRET_TEST_DATABASE_URL}"
+          uv run --frozen alembic upgrade head
+          uv run --frozen alembic check
 
       - name: Run tests and coverage gates
         run: uv run --frozen pytest
@@ -167,7 +192,7 @@ jobs:
           container_id="$(docker run --detach --publish 127.0.0.1::8080 seqret-backend:test)"
           trap 'docker rm --force "${container_id}" >/dev/null 2>&1 || true' EXIT
           host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}')"
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             if curl --connect-timeout 2 --max-time 5 --fail --silent \
               "http://127.0.0.1:${host_port}/healthz" > health.json \
               && curl --connect-timeout 2 --max-time 5 --fail --silent \

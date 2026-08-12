@@ -90,7 +90,7 @@ jobs:
           rollback_target=""
           generation=""
           observed_generation=""
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             candidate="$(describe_service 2>/dev/null || true)"
             generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
             observed_generation="$(jq -r '.status.observedGeneration // empty' <<< "${candidate}" 2>/dev/null || true)"
@@ -141,7 +141,7 @@ jobs:
           ready=0
           actual=""
           healthy=""
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             actual=""
             candidate="$(describe_service 2>/dev/null || true)"
             generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
@@ -171,7 +171,7 @@ jobs:
               --remove-tags rollback-target --quiet
             consumed=0
             remaining_target=""
-            for attempt in {1..30}; do
+            for _ in {1..30}; do
               candidate="$(describe_service 2>/dev/null || true)"
               generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
               observed_generation="$(jq -r '.status.observedGeneration // empty' <<< "${candidate}" 2>/dev/null || true)"
