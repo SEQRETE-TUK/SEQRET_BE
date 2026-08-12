@@ -57,6 +57,11 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/scope-versions`: 불변 작업범위 버전 생성
 - `GET /move-jobs/{job_id}/scope-versions`: 작업범위 버전 이력 조회
 - `POST /move-jobs/{job_id}/scope-versions/{scope_version_id}/approvals`: 작업범위 버전 확인
+- `POST /move-jobs/{job_id}/change-requests`: 현장 변경요청 생성
+- `GET /move-jobs/{job_id}/change-requests`: 현장 변경요청 이력 조회
+- `POST /move-jobs/{job_id}/change-requests/{change_request_id}/clarification`: 설명 요청
+- `POST /move-jobs/{job_id}/change-requests/{change_request_id}/explanation`: 설명 제출
+- `POST /move-jobs/{job_id}/change-requests/{change_request_id}/decision`: 승인 또는 거절
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
@@ -69,6 +74,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 고객과 회사 관리자가 같은 현재 버전을 각각 확인하면 해당 버전이 잠깁니다. 이미 다음 버전이 있는 과거 버전, 중복 확인, 잠긴 버전의 후속 편집은 거부합니다.
 
 내부 `import_analysis_draft` application command는 공용 `AnalysisResult`를 검증해 새 작업범위 버전으로 변환합니다. AI 제안의 출처 미디어와 구역을 확인하고 모델·프롬프트·confidence·검토 필요 여부를 provenance로 보존하며, 같은 analysis run은 한 번만 가져옵니다. 외부 HTTP에서 raw AI 결과를 직접 등록하는 경로는 제공하지 않습니다.
+
+현장 작업자는 잠긴 현재 범위를 기준으로 자신이 촬영한 `change_evidence` 미디어와 변경안을 제출할 수 있습니다. 고객 또는 회사 관리자는 한 번 설명을 요청한 뒤 승인하거나 사유와 함께 거절합니다. 승인된 요청만 기준 범위의 결과 버전을 만들며, 결과 버전은 다시 양측 확인을 받아야 잠깁니다.
 
 ## 로컬 개발
 

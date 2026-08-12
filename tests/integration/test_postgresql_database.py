@@ -6,7 +6,7 @@ from asyncio import SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -37,21 +37,33 @@ from app.modules.move_job.schemas import (
     RoomZoneCreate,
 )
 from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
-from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
+from app.modules.scope.models import ChangeRequestStatus
+from app.modules.scope.schemas import (
+    ChangeDecisionCreate,
+    ChangeRequestCreate,
+    ScopeContent,
+    ScopeItem,
+    ScopeVersionCreate,
+)
 from app.modules.scope.service import (
+    ChangeRequestConflictError,
     ScopeApprovalConflictError,
     ScopeVersionConflictError,
     approve_scope_version,
+    create_change_request,
     create_scope_version,
+    decide_change_request,
     import_analysis_draft,
+    list_change_requests,
     list_scope_versions,
 )
 from app.platform.db import create_database_engine, create_session_factory, transactional_session
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_05_0001"
-ALEMBIC_HEAD = "a_06_0001"
+ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
+ALEMBIC_PREVIOUS = "a_06_0001"
+ALEMBIC_HEAD = "a_07_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -62,6 +74,8 @@ BUSINESS_TABLES = {
     "room_zone",
     "scope_version",
     "scope_approval",
+    "change_request",
+    "change_request_evidence",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -157,12 +171,8 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
-            scope_columns = {
-                column["name"] for column in inspect(engine).get_columns("scope_version")
-            }
-            assert "source_analysis_run_id" not in scope_columns
-            assert "source_capture_session_id" not in scope_columns
-            assert "analysis_source" not in scope_columns
+            assert "change_request" not in inspect(engine).get_table_names()
+            assert "change_request_evidence" not in inspect(engine).get_table_names()
             assert "scope_approval" in inspect(engine).get_table_names()
             assert "scope_version" in inspect(engine).get_table_names()
             assert "capture_session" in inspect(engine).get_table_names()
@@ -334,7 +344,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
 
         downgraded_engine = create_engine(schema_url)
         try:
-            command.downgrade(_alembic_config(schema_url), ALEMBIC_PREVIOUS)
+            command.downgrade(_alembic_config(schema_url), ALEMBIC_ANALYSIS_PREVIOUS)
             scope_version = Table("scope_version", MetaData(), autoload_with=downgraded_engine)
             with downgraded_engine.connect() as connection:
                 restored_creator = connection.scalar(
@@ -548,5 +558,175 @@ async def test_scope_lock_and_edit_race_allow_one_winner_on_postgresql() -> None
                 assert len(versions) == 2
                 assert versions[0].locked_at is None
                 assert versions[1].parent_version_id == root.id
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_change_request_concurrent_approvals_allow_one_result_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        storage = FakeObjectStorage()
+        job_command = MoveJobCreate(
+            title="Change approval race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                participants = {
+                    participant.role: participant for participant in created.job.participants
+                }
+                customer = participants[ParticipantRole.CUSTOMER]
+                manager = participants[ParticipantRole.COMPANY_MANAGER]
+                worker = participants[ParticipantRole.FIELD_WORKER]
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                root = await create_scope_version(
+                    session,
+                    created.job.id,
+                    customer.id,
+                    ScopeVersionCreate(
+                        content=ScopeContent(
+                            items=(
+                                ScopeItem(
+                                    item_key="sofa",
+                                    room_zone_id=room_zone_id,
+                                    description="Original sofa",
+                                ),
+                            )
+                        )
+                    ),
+                )
+                await approve_scope_version(
+                    session,
+                    created.job.id,
+                    root.id,
+                    customer.id,
+                    ParticipantRole.CUSTOMER,
+                )
+                await approve_scope_version(
+                    session,
+                    created.job.id,
+                    root.id,
+                    manager.id,
+                    ParticipantRole.COMPANY_MANAGER,
+                )
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    worker.id,
+                )
+                upload = await create_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    worker.id,
+                    MediaUploadCreate(
+                        room_zone_id=room_zone_id,
+                        media_purpose=MediaPurpose.CHANGE_EVIDENCE,
+                        content_type="image/jpeg",
+                        content_length=12,
+                    ),
+                )
+
+            object_key = upload.upload_url.removeprefix("https://storage.invalid/upload/")
+            storage.metadata[object_key] = StorageObjectMetadata(
+                object_key=object_key,
+                content_type="image/jpeg",
+                size_bytes=12,
+                sha256_hex="c" * 64,
+            )
+            async with transactional_session(factory) as session:
+                await complete_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    upload.asset.id,
+                    worker.id,
+                )
+                requests = []
+                for suffix in ("A", "B"):
+                    requests.append(
+                        await create_change_request(
+                            session,
+                            created.job.id,
+                            worker.id,
+                            ChangeRequestCreate(
+                                base_scope_version_id=root.id,
+                                description=f"Change request {suffix}",
+                                proposed_content=ScopeContent(
+                                    items=(
+                                        ScopeItem(
+                                            item_key="sofa",
+                                            room_zone_id=room_zone_id,
+                                            description=f"Changed sofa {suffix}",
+                                        ),
+                                    )
+                                ),
+                                evidence_media_asset_ids=(upload.asset.id,),
+                            ),
+                        )
+                    )
+
+            async def approve_change(request_id: UUID, participant_id: UUID) -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await decide_change_request(
+                            session,
+                            created.job.id,
+                            request_id,
+                            participant_id,
+                            ChangeDecisionCreate(decision="approve"),
+                        )
+                    return "approved"
+                except ChangeRequestConflictError:
+                    return "conflict"
+
+            outcomes = await gather(
+                approve_change(requests[0].id, customer.id),
+                approve_change(requests[1].id, manager.id),
+            )
+            async with transactional_session(factory) as session:
+                stored_requests = await list_change_requests(session, created.job.id)
+                versions = await list_scope_versions(session, created.job.id)
+
+            assert sorted(outcomes) == ["approved", "conflict"]
+            assert [request.status for request in stored_requests].count(
+                ChangeRequestStatus.APPROVED
+            ) == 1
+            assert [request.status for request in stored_requests].count(
+                ChangeRequestStatus.PENDING
+            ) == 1
+            assert (
+                sum(request.result_scope_version_id is not None for request in stored_requests) == 1
+            )
+            assert len(versions) == 2
+            assert versions[1].parent_version_id == root.id
         finally:
             await engine.dispose()

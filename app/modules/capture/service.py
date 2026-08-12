@@ -20,7 +20,9 @@ from app.modules.move_job.models import JobParticipant, Location, RoomZone
 
 UPLOAD_URL_TTL_SECONDS = 15 * 60
 STORAGE_TIMEOUT_SECONDS = 5.0
-INITIAL_CAPTURE_PURPOSES = frozenset({MediaPurpose.INVENTORY, MediaPurpose.CONDITION})
+CAPTURE_PURPOSES = frozenset(
+    {MediaPurpose.INVENTORY, MediaPurpose.CONDITION, MediaPurpose.CHANGE_EVIDENCE}
+)
 
 
 class CaptureResourceNotFoundError(LookupError):
@@ -108,7 +110,7 @@ async def create_media_upload(
     command: MediaUploadCreate,
 ) -> MediaUploadResponse:
     await _load_owned_capture_session(session, job_id, capture_session_id, participant_id)
-    if command.media_purpose not in INITIAL_CAPTURE_PURPOSES:
+    if command.media_purpose not in CAPTURE_PURPOSES:
         raise MediaPurposeNotAllowedError(command.media_purpose)
     room_zone = await session.scalar(
         select(RoomZone.id)

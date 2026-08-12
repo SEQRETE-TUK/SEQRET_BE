@@ -12,8 +12,9 @@ from sqlalchemy.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_05_0001"
-ALEMBIC_HEAD = "a_06_0001"
+ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
+ALEMBIC_PREVIOUS = "a_06_0001"
+ALEMBIC_HEAD = "a_07_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -24,6 +25,8 @@ BUSINESS_TABLES = {
     "room_zone",
     "scope_version",
     "scope_approval",
+    "change_request",
+    "change_request_evidence",
 }
 
 
@@ -127,10 +130,8 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
 
         command.downgrade(configuration, ALEMBIC_PREVIOUS)
-        scope_columns = {column["name"] for column in inspect(engine).get_columns("scope_version")}
-        assert "source_analysis_run_id" not in scope_columns
-        assert "source_capture_session_id" not in scope_columns
-        assert "analysis_source" not in scope_columns
+        assert "change_request" not in inspect(engine).get_table_names()
+        assert "change_request_evidence" not in inspect(engine).get_table_names()
         assert "scope_approval" in inspect(engine).get_table_names()
         assert "scope_version" in inspect(engine).get_table_names()
         assert "capture_session" in inspect(engine).get_table_names()
@@ -138,6 +139,15 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert "participant_access_token" in inspect(engine).get_table_names()
         assert "move_job" in inspect(engine).get_table_names()
         assert "existing_schema_probe" in inspect(engine).get_table_names()
+        with engine.connect() as connection:
+            ai_creator = connection.scalar(
+                select(migrated_metadata.tables["scope_version"].c.created_by_participant_id).where(
+                    migrated_metadata.tables["scope_version"].c.id == scope_version_id
+                )
+            )
+        assert ai_creator is None
+
+        command.downgrade(configuration, ALEMBIC_ANALYSIS_PREVIOUS)
         with engine.connect() as connection:
             restored_creator = connection.scalar(
                 select(migrated_metadata.tables["scope_version"].c.created_by_participant_id).where(

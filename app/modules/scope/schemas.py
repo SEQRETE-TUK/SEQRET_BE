@@ -9,6 +9,7 @@ from pydantic import ConfigDict, Field, model_validator
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
 from app.contracts.model import ContractModel
+from app.modules.scope.models import ChangeRequestStatus
 
 
 class ScopeRequestModel(ContractModel):
@@ -63,3 +64,56 @@ class ScopeApprovalResponse(ContractModel):
 class ScopeApprovalResult(ContractModel):
     approval: ScopeApprovalResponse
     version: ScopeVersionResponse
+
+
+class ChangeRequestCreate(ScopeRequestModel):
+    base_scope_version_id: UUID
+    description: Annotated[str, Field(min_length=1, max_length=2000)]
+    proposed_content: ScopeContent
+    evidence_media_asset_ids: Annotated[tuple[UUID, ...], Field(min_length=1, max_length=50)]
+
+    @model_validator(mode="after")
+    def require_unique_evidence(self) -> "ChangeRequestCreate":
+        if len(self.evidence_media_asset_ids) != len(set(self.evidence_media_asset_ids)):
+            raise ValueError("change evidence IDs must be unique")
+        return self
+
+
+class ChangeClarificationCreate(ScopeRequestModel):
+    message: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class ChangeExplanationCreate(ScopeRequestModel):
+    explanation: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class ChangeDecisionCreate(ScopeRequestModel):
+    decision: Literal["approve", "reject"]
+    note: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+
+    @model_validator(mode="after")
+    def require_rejection_note(self) -> "ChangeDecisionCreate":
+        if self.decision == "reject" and self.note is None:
+            raise ValueError("rejection requires a note")
+        return self
+
+
+class ChangeRequestResponse(ContractModel):
+    id: UUID
+    job_id: UUID
+    base_scope_version_id: UUID
+    requested_by_participant_id: UUID
+    description: str
+    proposed_content: ScopeContent
+    evidence_media_asset_ids: tuple[UUID, ...]
+    status: ChangeRequestStatus
+    clarification_requested_by_participant_id: UUID | None
+    clarification_request: str | None
+    clarification_requested_at: datetime | None
+    explanation: str | None
+    explained_at: datetime | None
+    decided_by_participant_id: UUID | None
+    decision_note: str | None
+    decided_at: datetime | None
+    result_scope_version_id: UUID | None
+    created_at: datetime

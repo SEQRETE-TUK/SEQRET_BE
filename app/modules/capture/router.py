@@ -109,7 +109,7 @@ async def create_media_upload_endpoint(
     except MediaPurposeNotAllowedError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="media purpose is not allowed for initial capture",
+            detail="media purpose is not allowed for this capture workflow",
         ) from error
     except ProviderError as error:
         raise _storage_error(error) from error
