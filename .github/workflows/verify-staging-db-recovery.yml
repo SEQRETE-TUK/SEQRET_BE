@@ -1,0 +1,675 @@
+name: Verify staging DB recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_time:
+        description: RFC3339 UTC time after the current migration and marker creation
+        required: true
+        type: string
+      expected_move_job_id:
+        description: Move-job UUID known to exist before the restore time
+        required: true
+        type: string
+      confirm_source_instance:
+        description: Re-enter the configured source instance ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.11.21"
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_DB_RECOVERY_SERVICE_ACCOUNT: ${{ vars.GCP_DB_RECOVERY_SERVICE_ACCOUNT }}
+  DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
+  CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
+  DB_RECOVERY_CONNECTION_MODE: ${{ vars.DB_RECOVERY_CONNECTION_MODE }}
+  DB_RECOVERY_RUNNER: ${{ vars.DB_RECOVERY_RUNNER }}
+  RESTORE_TIME: ${{ inputs.restore_time }}
+  EXPECTED_MOVE_JOB_ID: ${{ inputs.expected_move_job_id }}
+  CONFIRM_SOURCE_INSTANCE: ${{ inputs.confirm_source_instance }}
+  DESTINATION_INSTANCE: seqret-stg-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+  CLOUD_SQL_PROXY_VERSION: "2.23.0"
+  CLOUD_SQL_PROXY_SHA256: cd689d582b826fa5bc82c01ccc14e45a58200c3cefbf923ce96c422825e4e6f6
+
+jobs:
+  recover:
+    name: Clone, verify, and remove staging recovery database
+    runs-on: ${{ vars.DB_RECOVERY_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 300
+    environment: staging
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate recovery inputs
+        id: inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Staging recovery verification must run from main." >&2
+            exit 1
+          fi
+          git fetch --quiet origin main:refs/remotes/origin/main
+          source_sha="$(git rev-parse HEAD)"
+          if [[ "${source_sha}" != "$(git rev-parse origin/main)" ]]; then
+            echo "The checked-out commit must be the current origin/main commit." >&2
+            exit 1
+          fi
+          required_variables=(
+            GCP_PROJECT_ID
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_DB_RECOVERY_SERVICE_ACCOUNT
+            DATABASE_URL_SECRET_ID
+            CLOUD_SQL_SOURCE_INSTANCE
+            DB_RECOVERY_CONNECTION_MODE
+          )
+          for variable_name in "${required_variables[@]}"; do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "Required staging variable ${variable_name} is not configured." >&2
+              exit 1
+            fi
+          done
+          for command_name in curl git jq sha256sum; do
+            if ! command -v "${command_name}" > /dev/null; then
+              echo "The recovery runner is missing ${command_name}." >&2
+              exit 1
+            fi
+          done
+          if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+            echo "The recovery workflow requires a Linux amd64 runner." >&2
+            exit 1
+          fi
+          if [[ ! "${GCP_PROJECT_ID}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+            echo "GCP_PROJECT_ID is invalid." >&2
+            exit 1
+          fi
+          instance_pattern='^[a-z]([a-z0-9-]{0,96}[a-z0-9])?$'
+          if [[ ! "${CLOUD_SQL_SOURCE_INSTANCE}" =~ ${instance_pattern} ]]; then
+            echo "CLOUD_SQL_SOURCE_INSTANCE is invalid." >&2
+            exit 1
+          fi
+          if [[ "${CONFIRM_SOURCE_INSTANCE}" != "${CLOUD_SQL_SOURCE_INSTANCE}" ]]; then
+            echo "The source-instance confirmation does not match the protected setting." >&2
+            exit 1
+          fi
+          expected_destination="seqret-stg-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "${DESTINATION_INSTANCE}" != "${expected_destination}" ]] || \
+            [[ ! "${DESTINATION_INSTANCE}" =~ ^seqret-stg-recovery-[0-9]+-[0-9]+$ ]] || \
+            [[ "${DESTINATION_INSTANCE}" == "${CLOUD_SQL_SOURCE_INSTANCE}" ]]; then
+            echo "The generated recovery destination is unsafe." >&2
+            exit 1
+          fi
+          if [[ ! "${DATABASE_URL_SECRET_ID}" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
+            echo "DATABASE_URL_SECRET_ID is invalid." >&2
+            exit 1
+          fi
+          if [[ ! "${DB_RECOVERY_CONNECTION_MODE}" =~ ^(public|private)$ ]]; then
+            echo "DB_RECOVERY_CONNECTION_MODE must be public or private." >&2
+            exit 1
+          fi
+          if [[ "${DB_RECOVERY_CONNECTION_MODE}" == "private" ]] \
+            && [[ -z "${DB_RECOVERY_RUNNER}" ]]; then
+            echo "DB_RECOVERY_RUNNER is required for a private database path." >&2
+            exit 1
+          fi
+          if [[ ! "${RESTORE_TIME}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+            echo "restore_time must be an RFC3339 UTC timestamp ending in Z." >&2
+            exit 1
+          fi
+          if [[ ! "${EXPECTED_MOVE_JOB_ID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            echo "expected_move_job_id must be a UUID." >&2
+            exit 1
+          fi
+          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "restore_time=${RESTORE_TIME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate recovery identity with OIDC
+        id: cloud-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DB_RECOVERY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the frozen application environment
+        run: |
+          uv python install
+          uv sync --frozen --no-dev
+
+      - name: Verify source and recovery window
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_json="${RUNNER_TEMP}/recovery-source.json"
+          window_json="${RUNNER_TEMP}/recovery-window.json"
+          gcloud sql instances describe "${CLOUD_SQL_SOURCE_INSTANCE}" \
+            --project "${GCP_PROJECT_ID}" --format=json > "${source_json}"
+          jq -e \
+            --arg project "${GCP_PROJECT_ID}" \
+            --arg source "${CLOUD_SQL_SOURCE_INSTANCE}" '
+              .project == $project
+              and .name == $source
+              and .state == "RUNNABLE"
+              and .instanceType == "CLOUD_SQL_INSTANCE"
+              and (.databaseVersion | startswith("POSTGRES_"))
+            ' "${source_json}" > /dev/null || {
+              echo "The configured source is not a runnable PostgreSQL primary instance." >&2
+              exit 1
+            }
+          destinations="$(gcloud sql instances list \
+            --project "${GCP_PROJECT_ID}" \
+            --filter="name=${DESTINATION_INSTANCE}" \
+            --format=json)"
+          if jq -e --arg destination "${DESTINATION_INSTANCE}" \
+            'any(.[]; .name == $destination)' <<< "${destinations}" > /dev/null; then
+            echo "The generated recovery destination already exists." >&2
+            exit 1
+          fi
+          gcloud sql instances get-latest-recovery-time "${CLOUD_SQL_SOURCE_INSTANCE}" \
+            --project "${GCP_PROJECT_ID}" --format=json > "${window_json}"
+          earliest="$(jq -er '.earliestRecoveryTime' "${window_json}")"
+          latest="$(jq -er '.latestRecoveryTime' "${window_json}")"
+          EARLIEST_RECOVERY_TIME="${earliest}" LATEST_RECOVERY_TIME="${latest}" \
+            .venv/bin/python - <<'PY'
+          from datetime import datetime
+          import os
+
+          def parse(name: str) -> datetime:
+              try:
+                  return datetime.fromisoformat(os.environ[name].replace("Z", "+00:00"))
+              except ValueError:
+                  raise SystemExit(f"{name} is not a valid recovery timestamp") from None
+
+          restore = parse("RESTORE_TIME")
+          earliest = parse("EARLIEST_RECOVERY_TIME")
+          latest = parse("LATEST_RECOVERY_TIME")
+          if not earliest <= restore <= latest:
+              raise SystemExit("restore_time is outside the available PITR window")
+          PY
+          echo "earliest=${earliest}" >> "${GITHUB_OUTPUT}"
+          echo "latest=${latest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Start the point-in-time clone
+        id: clone
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          operation="$(gcloud sql instances clone \
+            "${CLOUD_SQL_SOURCE_INSTANCE}" "${DESTINATION_INSTANCE}" \
+            --project "${GCP_PROJECT_ID}" \
+            --point-in-time "${RESTORE_TIME}" \
+            --async --quiet --format='value(name)')"
+          if [[ ! "${operation}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Cloud SQL did not return a valid clone operation ID." >&2
+            exit 1
+          fi
+          echo "operation=${operation}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for and verify the clone
+        id: clone-ready
+        timeout-minutes: 185
+        shell: bash
+        env:
+          CLONE_OPERATION: ${{ steps.clone.outputs.operation }}
+        run: |
+          set -euo pipefail
+          gcloud sql operations wait "${CLONE_OPERATION}" \
+            --project "${GCP_PROJECT_ID}" --timeout=10800
+          operation_json="$(gcloud sql operations describe "${CLONE_OPERATION}" \
+            --project "${GCP_PROJECT_ID}" --format=json)"
+          jq -e \
+            --arg project "${GCP_PROJECT_ID}" \
+            --arg destination "${DESTINATION_INSTANCE}" '
+              .operationType == "CLONE"
+              and .status == "DONE"
+              and .targetProject == $project
+              and .targetId == $destination
+              and ((.error.errors // []) | length == 0)
+            ' <<< "${operation_json}" > /dev/null || {
+              echo "The clone operation did not complete successfully for the exact destination." >&2
+              exit 1
+            }
+          clone_json="$(gcloud sql instances describe "${DESTINATION_INSTANCE}" \
+            --project "${GCP_PROJECT_ID}" --format=json)"
+          jq -e \
+            --arg project "${GCP_PROJECT_ID}" \
+            --arg destination "${DESTINATION_INSTANCE}" '
+              .project == $project
+              and .name == $destination
+              and .state == "RUNNABLE"
+              and .instanceType == "CLOUD_SQL_INSTANCE"
+              and (.databaseVersion | startswith("POSTGRES_"))
+            ' <<< "${clone_json}" > /dev/null || {
+              echo "The exact recovery clone is not a runnable PostgreSQL instance." >&2
+              exit 1
+            }
+          case "${DB_RECOVERY_CONNECTION_MODE}" in
+            public)
+              jq -e 'any(.ipAddresses[]?; .type == "PRIMARY")' \
+                <<< "${clone_json}" > /dev/null
+              ;;
+            private)
+              jq -e 'any(.ipAddresses[]?; .type == "PRIVATE")' \
+                <<< "${clone_json}" > /dev/null
+              ;;
+          esac || {
+            echo "The recovery clone does not support the configured connection mode." >&2
+            exit 1
+          }
+          connection_name="$(jq -er '.connectionName' <<< "${clone_json}")"
+          if [[ ! "${connection_name}" =~ ^${GCP_PROJECT_ID}:[a-z0-9-]+:${DESTINATION_INSTANCE}$ ]]; then
+            echo "The recovery clone returned an unexpected connection name." >&2
+            exit 1
+          fi
+          echo "connection_name=${connection_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify restored schema and marker
+        id: database-check
+        timeout-minutes: 15
+        shell: bash
+        env:
+          CONNECTION_NAME: ${{ steps.clone-ready.outputs.connection_name }}
+        run: |
+          set -euo pipefail
+          umask 077
+          proxy_path="${RUNNER_TEMP}/cloud-sql-proxy"
+          proxy_log="${RUNNER_TEMP}/cloud-sql-proxy.log"
+          database_url_file="${RUNNER_TEMP}/recovery-database-url"
+          proxy_pid=""
+          cleanup_local() {
+            if [[ -n "${proxy_pid}" ]]; then
+              kill "${proxy_pid}" 2>/dev/null || true
+              wait "${proxy_pid}" 2>/dev/null || true
+            fi
+            rm -f "${database_url_file}" "${proxy_path}" "${proxy_log}"
+          }
+          trap cleanup_local EXIT
+
+          source_database_url="$(gcloud secrets versions access latest \
+            --secret "${DATABASE_URL_SECRET_ID}" \
+            --project "${GCP_PROJECT_ID}")"
+          if [[ -z "${source_database_url}" ]] \
+            || [[ "${source_database_url}" == *$'\n'* ]] \
+            || [[ "${source_database_url}" == *$'\r'* ]]; then
+            echo "The recovery database secret must be one non-empty line." >&2
+            exit 1
+          fi
+          echo "::add-mask::${source_database_url}"
+          export SEQRET_RECOVERY_SOURCE_URL="${source_database_url}"
+          DATABASE_URL_FILE="${database_url_file}" .venv/bin/python - <<'PY'
+          import os
+
+          from sqlalchemy import URL, make_url
+          from sqlalchemy.exc import ArgumentError
+
+          try:
+              source = make_url(os.environ["SEQRET_RECOVERY_SOURCE_URL"])
+          except ArgumentError:
+              raise SystemExit("The recovery database secret is invalid") from None
+          if (
+              source.drivername != "postgresql+psycopg"
+              or source.username is None
+              or source.password is None
+              or not source.database
+          ):
+              raise SystemExit("The recovery database secret lacks PostgreSQL credentials")
+          local = URL.create(
+              drivername="postgresql+psycopg",
+              username=source.username,
+              password=source.password,
+              host="127.0.0.1",
+              port=54321,
+              database=source.database,
+              query={
+                  "connect_timeout": "5",
+                  "options": "-c default_transaction_read_only=on",
+                  "sslmode": "disable",
+              },
+          )
+          path = os.environ["DATABASE_URL_FILE"]
+          with open(path, "w", encoding="utf-8") as output:
+              output.write(local.render_as_string(hide_password=False))
+          os.chmod(path, 0o600)
+          PY
+          unset source_database_url SEQRET_RECOVERY_SOURCE_URL
+          database_url="$(< "${database_url_file}")"
+          echo "::add-mask::${database_url}"
+          export SEQRET_DATABASE_URL="${database_url}"
+
+          proxy_url="https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v${CLOUD_SQL_PROXY_VERSION}/cloud-sql-proxy.linux.amd64"
+          curl --proto '=https' --tlsv1.2 --location --retry 3 --fail --silent --show-error \
+            --output "${proxy_path}" "${proxy_url}"
+          echo "${CLOUD_SQL_PROXY_SHA256}  ${proxy_path}" | sha256sum --check --status
+          chmod +x "${proxy_path}"
+          proxy_args=(--address 127.0.0.1 --port 54321 --run-connection-test)
+          if [[ "${DB_RECOVERY_CONNECTION_MODE}" == "private" ]]; then
+            proxy_args+=(--private-ip)
+          fi
+          "${proxy_path}" "${proxy_args[@]}" "${CONNECTION_NAME}" \
+            > "${proxy_log}" 2>&1 &
+          proxy_pid=$!
+          for attempt in {1..30}; do
+            if ! kill -0 "${proxy_pid}" 2>/dev/null; then
+              echo "Cloud SQL Auth Proxy could not reach the recovery clone." >&2
+              exit 1
+            fi
+            if .venv/bin/python - <<'PY'
+          import socket
+
+          try:
+              with socket.create_connection(("127.0.0.1", 54321), timeout=1):
+                  pass
+          except OSError:
+              raise SystemExit(1) from None
+          PY
+            then
+              break
+            fi
+            if (( attempt == 30 )); then
+              echo "Cloud SQL Auth Proxy did not become ready." >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          .venv/bin/python - <<'PY'
+          import asyncio
+          import os
+          from uuid import UUID
+
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          from pydantic import SecretStr
+          from sqlalchemy import text
+
+          from app.config import AppEnvironment, Settings
+          from app.platform.db.session import create_database_engine
+
+          heads = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
+          if len(heads) != 1:
+              raise SystemExit("The repository must contain one Alembic head")
+          expected_head = heads[0]
+          marker_id = UUID(os.environ["EXPECTED_MOVE_JOB_ID"])
+          settings = Settings(
+              environment=AppEnvironment.STAGING,
+              database_url=SecretStr(os.environ["SEQRET_DATABASE_URL"]),
+              database_pool_size=1,
+              database_max_overflow=0,
+              database_pool_timeout_seconds=5,
+          )
+
+          async def verify() -> tuple[str, bool]:
+              engine = create_database_engine(settings)
+              try:
+                  async with engine.connect() as connection:
+                      read_only = await connection.scalar(text("SHOW transaction_read_only"))
+                      versions = tuple(
+                          (await connection.scalars(text("SELECT version_num FROM alembic_version"))).all()
+                      )
+                      marker_present = bool(
+                          await connection.scalar(
+                              text("SELECT EXISTS(SELECT 1 FROM move_job WHERE id = :job_id)"),
+                              {"job_id": marker_id},
+                          )
+                      )
+              finally:
+                  await engine.dispose()
+              if read_only != "on":
+                  raise RuntimeError("The clone connection is not read-only")
+              if versions != (expected_head,):
+                  raise RuntimeError("The clone does not contain the current Alembic head")
+              if not marker_present:
+                  raise RuntimeError("The expected move-job marker is absent")
+              return versions[0], marker_present
+
+          actual_head, marker_present = asyncio.run(verify())
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"expected_head={expected_head}\n")
+              output.write(f"actual_head={actual_head}\n")
+              output.write(f"marker_present={str(marker_present).lower()}\n")
+          PY
+
+      - name: Remove the recovery clone
+        id: cleanup
+        if: always()
+        timeout-minutes: 60
+        shell: bash
+        env:
+          CLONE_OPERATION: ${{ steps.clone.outputs.operation }}
+          CLONE_OUTCOME: ${{ steps.clone.outcome }}
+          CLOUD_AUTH_OUTCOME: ${{ steps.cloud-auth.outcome }}
+        run: |
+          set -euo pipefail
+          echo "outcome=failed" >> "${GITHUB_OUTPUT}"
+          echo "operation=unavailable" >> "${GITHUB_OUTPUT}"
+          expected_destination="seqret-stg-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "${DESTINATION_INSTANCE}" != "${expected_destination}" ]] || \
+            [[ ! "${DESTINATION_INSTANCE}" =~ ^seqret-stg-recovery-[0-9]+-[0-9]+$ ]] || \
+            [[ "${DESTINATION_INSTANCE}" == "${CLOUD_SQL_SOURCE_INSTANCE}" ]]; then
+            echo "Refusing cleanup because the generated destination is unsafe." >&2
+            exit 1
+          fi
+          if [[ "${CLOUD_AUTH_OUTCOME}" != "success" ]]; then
+            echo "outcome=not-created-before-auth" >> "${GITHUB_OUTPUT}"
+            echo "operation=not-created" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ -z "${CLONE_OUTCOME}" || "${CLONE_OUTCOME}" == "skipped" ]]; then
+            echo "outcome=not-created" >> "${GITHUB_OUTPUT}"
+            echo "operation=not-created" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          operation="${CLONE_OPERATION}"
+          if [[ -z "${operation}" ]]; then
+            for attempt in {1..6}; do
+              operations="$(gcloud sql operations list \
+                --instance "${DESTINATION_INSTANCE}" \
+                --project "${GCP_PROJECT_ID}" \
+                --filter='operationType=CLONE' \
+                --sort-by='~insertTime' --limit=10 --format=json)"
+              operation="$(jq -r \
+                --arg project "${GCP_PROJECT_ID}" \
+                --arg destination "${DESTINATION_INSTANCE}" '
+                  [.[] | select(
+                    .operationType == "CLONE"
+                    and .targetProject == $project
+                    and .targetId == $destination
+                  )][0].name // empty
+                ' <<< "${operations}")"
+              if [[ -n "${operation}" ]] || (( attempt == 6 )); then
+                break
+              fi
+              sleep 10
+            done
+          fi
+          echo "operation=${operation:-not-found}" >> "${GITHUB_OUTPUT}"
+          clone_succeeded=false
+          if [[ -n "${operation}" ]]; then
+            operation_json="$(gcloud sql operations describe "${operation}" \
+              --project "${GCP_PROJECT_ID}" --format=json)"
+            jq -e \
+              --arg project "${GCP_PROJECT_ID}" \
+              --arg destination "${DESTINATION_INSTANCE}" '
+                .operationType == "CLONE"
+                and .targetProject == $project
+                and .targetId == $destination
+              ' <<< "${operation_json}" > /dev/null || {
+                echo "Refusing cleanup because the clone operation target is unexpected." >&2
+                exit 1
+              }
+            if [[ "$(jq -r '.status' <<< "${operation_json}")" != "DONE" ]]; then
+              gcloud sql operations cancel "${operation}" \
+                --project "${GCP_PROJECT_ID}" --quiet || true
+              gcloud sql operations wait "${operation}" \
+                --project "${GCP_PROJECT_ID}" --timeout=600 || true
+              operation_json="$(gcloud sql operations describe "${operation}" \
+                --project "${GCP_PROJECT_ID}" --format=json)"
+              if [[ "$(jq -r '.status' <<< "${operation_json}")" != "DONE" ]]; then
+                echo "The clone operation did not stop; manual orphan cleanup is required." >&2
+                exit 1
+              fi
+            fi
+            if [[ "$(jq -r '((.error.errors // []) | length)' \
+              <<< "${operation_json}")" == "0" ]]; then
+              clone_succeeded=true
+            fi
+          fi
+
+          exists=false
+          for attempt in {1..12}; do
+            instances="$(gcloud sql instances list \
+              --project "${GCP_PROJECT_ID}" \
+              --filter="name=${DESTINATION_INSTANCE}" \
+              --format=json)"
+            exists="$(jq -r --arg destination "${DESTINATION_INSTANCE}" \
+              'any(.[]; .name == $destination)' <<< "${instances}")"
+            if [[ "${exists}" == "true" ]] \
+              || [[ -z "${operation}" ]] \
+              || (( attempt == 12 )); then
+              break
+            fi
+            sleep 10
+          done
+          if [[ "${exists}" == "true" && -z "${operation}" ]]; then
+            echo "Refusing to delete an instance without its exact clone operation." >&2
+            exit 1
+          fi
+          if [[ "${clone_succeeded}" == "true" && "${exists}" != "true" ]]; then
+            echo "The successful clone operation has no discoverable target; manual cleanup is required." >&2
+            exit 1
+          fi
+          if [[ "${CLONE_OUTCOME}" != "success" && -z "${operation}" \
+            && "${exists}" != "true" ]]; then
+            echo "outcome=manual-orphan-check-required" >> "${GITHUB_OUTPUT}"
+            echo "Clone submission failed without a discoverable operation; manual orphan verification is required." >&2
+            exit 1
+          fi
+          cleanup_outcome=not-created
+          if [[ "${exists}" == "true" ]]; then
+            cleanup_outcome=deleted
+            clone_json="$(gcloud sql instances describe "${DESTINATION_INSTANCE}" \
+              --project "${GCP_PROJECT_ID}" --format=json)"
+            jq -e \
+              --arg project "${GCP_PROJECT_ID}" \
+              --arg destination "${DESTINATION_INSTANCE}" '
+                .project == $project and .name == $destination
+              ' <<< "${clone_json}" > /dev/null || {
+                echo "Refusing cleanup because the instance identity is unexpected." >&2
+                exit 1
+              }
+            patch_operation="$(gcloud sql instances patch "${DESTINATION_INSTANCE}" \
+              --project "${GCP_PROJECT_ID}" \
+              --no-deletion-protection \
+              --no-retain-backups-on-delete \
+              --no-final-backup \
+              --async --quiet --format='value(name)')"
+            gcloud sql operations wait "${patch_operation}" \
+              --project "${GCP_PROJECT_ID}" --timeout=900
+            patch_json="$(gcloud sql operations describe "${patch_operation}" \
+              --project "${GCP_PROJECT_ID}" --format=json)"
+            jq -e \
+              --arg project "${GCP_PROJECT_ID}" \
+              --arg destination "${DESTINATION_INSTANCE}" '
+                .status == "DONE"
+                and .targetProject == $project
+                and .targetId == $destination
+                and ((.error.errors // []) | length == 0)
+              ' <<< "${patch_json}" > /dev/null || {
+                echo "Recovery-clone retention cleanup did not complete for the exact clone." >&2
+                exit 1
+              }
+            delete_operation="$(gcloud sql instances delete "${DESTINATION_INSTANCE}" \
+              --project "${GCP_PROJECT_ID}" --async --quiet --format='value(name)')"
+            gcloud sql operations wait "${delete_operation}" \
+              --project "${GCP_PROJECT_ID}" --timeout=1200
+            delete_json="$(gcloud sql operations describe "${delete_operation}" \
+              --project "${GCP_PROJECT_ID}" --format=json)"
+            jq -e \
+              --arg project "${GCP_PROJECT_ID}" \
+              --arg destination "${DESTINATION_INSTANCE}" '
+                .operationType == "DELETE"
+                and .status == "DONE"
+                and .targetProject == $project
+                and .targetId == $destination
+                and ((.error.errors // []) | length == 0)
+              ' <<< "${delete_json}" > /dev/null || {
+                echo "The recovery-clone deletion did not complete successfully." >&2
+                exit 1
+              }
+          fi
+
+          for attempt in {1..18}; do
+            instances="$(gcloud sql instances list \
+              --project "${GCP_PROJECT_ID}" \
+              --filter="name=${DESTINATION_INSTANCE}" \
+              --format=json)"
+            if ! jq -e --arg destination "${DESTINATION_INSTANCE}" \
+              'any(.[]; .name == $destination)' <<< "${instances}" > /dev/null; then
+              break
+            fi
+            if (( attempt == 18 )); then
+              echo "The recovery clone still exists after deletion." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "outcome=${cleanup_outcome}" >> "${GITHUB_OUTPUT}"
+
+      - name: Record recovery evidence
+        if: always()
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.inputs.outputs.source_sha }}
+          VALIDATED_RESTORE_TIME: ${{ steps.inputs.outputs.restore_time }}
+          EARLIEST_RECOVERY_TIME: ${{ steps.preflight.outputs.earliest }}
+          LATEST_RECOVERY_TIME: ${{ steps.preflight.outputs.latest }}
+          CLONE_OPERATION: ${{ steps.clone.outputs.operation }}
+          CLEANUP_OPERATION: ${{ steps.cleanup.outputs.operation }}
+          EXPECTED_HEAD: ${{ steps.database-check.outputs.expected_head }}
+          ACTUAL_HEAD: ${{ steps.database-check.outputs.actual_head }}
+          MARKER_PRESENT: ${{ steps.database-check.outputs.marker_present }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outputs.outcome }}
+        run: |
+          evidence_operation="${CLONE_OPERATION:-${CLEANUP_OPERATION:-not-created}}"
+          {
+            echo "## Staging database recovery drill"
+            echo "- Source instance: ${CLOUD_SQL_SOURCE_INSTANCE}"
+            echo "- Recovery clone: ${DESTINATION_INSTANCE}"
+            echo "- Source commit: ${SOURCE_SHA:-unavailable}"
+            echo "- Requested restore time: ${VALIDATED_RESTORE_TIME:-unavailable}"
+            echo "- Available PITR window: ${EARLIEST_RECOVERY_TIME:-unavailable} to ${LATEST_RECOVERY_TIME:-unavailable}"
+            echo "- Clone operation: ${evidence_operation}"
+            echo "- Alembic head: expected ${EXPECTED_HEAD:-unavailable}, restored ${ACTUAL_HEAD:-unavailable}"
+            echo "- Marker present: ${MARKER_PRESENT:-false}"
+            echo "- Cleanup: ${CLEANUP_OUTCOME:-failed}"
+            echo "- Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"

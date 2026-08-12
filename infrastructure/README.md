@@ -30,10 +30,13 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `GCP_REGION` | Cloud Run region, such as `asia-northeast3` |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity Provider name |
 | `GCP_DEPLOY_SERVICE_ACCOUNT` | Deployment identity impersonated through OIDC |
+| `GCP_DB_RECOVERY_SERVICE_ACCOUNT` | Separate identity used only by the guarded recovery workflow |
 | `TF_STATE_BUCKET` | Existing Terraform state bucket |
 | `ARTIFACT_REPOSITORY` | Artifact Registry repository ID |
 | `API_DOMAIN` | Public lowercase API DNS name |
 | `DATABASE_URL_SECRET_ID` | Existing database URL secret ID |
+| `CLOUD_SQL_SOURCE_INSTANCE` | Fixed staging PostgreSQL primary instance ID |
+| `DB_RECOVERY_CONNECTION_MODE` | Cloud SQL Auth Proxy route: `public` or `private` |
 | `MEDIA_RETENTION_DAYS` | Approved whole-number media retention period, from 1 through 3650 days |
 | `REDIS_URL_SECRET_ID` | Optional Redis URL secret ID |
 | `MONITORING_NOTIFICATION_CHANNELS` | Comma-separated full notification-channel names |
@@ -41,6 +44,10 @@ Create the database secret and at least one Cloud Monitoring notification channe
 The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, impersonate the four runtime service accounts, and access the state prefix. Restrict the Workload Identity Provider to this repository and `main`.
 
 `DATABASE_URL_SECRET_ID` must resolve to a database endpoint reachable from Cloud Run. If the staging database uses private IP or the Cloud SQL connector, provision that network path and the deployment-specific client IAM outside this runtime module before deployment.
+
+The database-recovery identity is separate from the deployment identity. Restrict its `roles/iam.workloadIdentityUser` binding to this repository, `main`, and the protected `staging` environment, and grant `secretmanager.versions.access` on `DATABASE_URL_SECRET_ID` only. Its project-level custom role needs `cloudsql.instances.clone`, `cloudsql.instances.get`, `cloudsql.instances.list`, `cloudsql.instances.connect`, `cloudsql.instances.update`, and `cloudsql.instances.delete`; it also needs the Cloud SQL operation access used by `gcloud operations get/list/wait/cancel` and `serviceusage.services.use`. Those Cloud SQL permissions are project-wide rather than instance-scoped, so the protected environment and the workflow's generated-target guards are part of the security boundary; use a dedicated staging project. The source instance, SQL Admin API, PITR retention window, quotas, private-service address capacity, organization policies governing authorized networks, and any CMEK service-agent permissions remain externally managed.
+
+`DB_RECOVERY_RUNNER` is an optional repository variable naming the runner label used by public-IP recovery drills; it defaults to `ubuntu-latest`. A `private` connection requires this variable and a Linux amd64 runner with the corresponding VPC path, a current GitHub Actions runner, outbound HTTPS, Git, `curl`, `jq`, and `sha256sum`. The Cloud SQL Auth Proxy authenticates and encrypts a connection but does not create that network path. Never make the source public just for a drill.
 
 ## Deployment and rollback
 
@@ -58,6 +65,20 @@ The first run has no previous revision, so it creates the edge and API before DN
 The first deployment from a revision without the `readiness_contract=v1` label uses its process-only `/healthz` once and does not retain that legacy revision as an operator rollback target. Every revision created by this module is gated by database-aware `/readyz` thereafter.
 
 For an operator rollback, run `Roll back staging` with the one-time rollback target recorded on the current deployment. The workflow requires database readiness, restores the prior traffic allocation on failure, and consumes the target after success. A second chained rollback and arbitrary older revisions are rejected because their schema compatibility is unknown.
+
+## Database recovery drill
+
+Run `Verify staging DB recovery` from the current `main` after a successful staging migration. Supply:
+
+- an RFC3339 UTC restore time inside the source PITR window and after the current migration;
+- a move-job UUID that existed before that time;
+- the configured source instance ID again as an explicit confirmation.
+
+The workflow serializes with staging deploys, creates only `seqret-stg-recovery-<run-id>-<attempt>`, and never accepts a project, source, or destination override. It verifies the exact clone operation, opens the restored database read-only through a checksum-pinned Cloud SQL Auth Proxy, and checks the single current Alembic head and marker row with the application's database engine. It never changes the staging database Secret or public service. Cleanup verifies the exact operation and instance before disabling deletion protection and backup retention on the clone only, deleting it, and confirming absence.
+
+The run summary is the recovery evidence: source commit, requested and available recovery times, Cloud SQL operation ID, expected and restored migration head, marker result, cleanup result, and run URL. It intentionally excludes database URLs, credentials, addresses, and row contents. Record a successful run at the agreed recovery-drill cadence; workflow code alone does not prove that the external PITR and network path work.
+
+If cancellation or runner loss prevents cleanup, first look up the latest `CLONE` operation for the exact generated `seqret-stg-recovery-<run-id>-<attempt>` target, even when the instance is not visible yet. Verify the operation has the same project and target ID, then wait for or cancel it. On that exact clone only, disable deletion protection, retained backups on delete, and final backup, delete the instance, wait for the delete operation, and confirm the name is absent. Never patch or delete `CLOUD_SQL_SOURCE_INSTANCE`; an unverified recovery instance remains an incident until removed.
 
 ## Observability
 
