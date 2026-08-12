@@ -12,6 +12,7 @@ from app.modules.access.router import router as access_router
 from app.modules.capture.router import router as capture_router
 from app.modules.completion.router import router as completion_router
 from app.modules.move_job.router import router as move_job_router
+from app.modules.notification.router import router as notification_router
 from app.modules.scope.router import router as scope_router
 from app.platform.db import create_database_engine, create_session_factory
 from app.runtime import RuntimeKind, create_runtime_context
@@ -52,4 +53,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(capture_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(scope_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(completion_router, prefix=runtime_context.settings.api_prefix)
+    application.include_router(notification_router, prefix=runtime_context.settings.api_prefix)
     return application

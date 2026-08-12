@@ -15,7 +15,8 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_08_0001"
+ALEMBIC_HEAD = "a_09_0001"
+ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -31,6 +32,9 @@ BUSINESS_TABLES = {
     "completion_confirmation",
     "completion_evidence",
     "audit_event",
+    "outbox_event",
+    "event_consumption",
+    "notification_delivery",
 }
 
 
@@ -132,6 +136,11 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "created_at": created_at,
                 },
             )
+
+        command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
+        assert "outbox_event" not in inspect(engine).get_table_names()
+        assert "event_consumption" not in inspect(engine).get_table_names()
+        assert "notification_delivery" not in inspect(engine).get_table_names()
 
         command.downgrade(configuration, ALEMBIC_PREVIOUS)
         assert "completion_confirmation" not in inspect(engine).get_table_names()

@@ -126,6 +126,7 @@ async def approve_scope_version_endpoint(
             scope_version_id,
             cast(UUID, actor.participant_id),
             cast(ParticipantRole, actor.participant_role),
+            trace_id=actor.trace_id,
         )
     except ScopeResourceNotFoundError as error:
         raise HTTPException(
@@ -158,6 +159,7 @@ async def create_change_request_endpoint(
             job_id,
             cast(UUID, actor.participant_id),
             command,
+            trace_id=actor.trace_id,
         )
     except (
         ScopeResourceNotFoundError,
