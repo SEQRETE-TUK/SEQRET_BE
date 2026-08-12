@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from httpx2 import ASGITransport, AsyncClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -27,6 +27,7 @@ from app.modules.scope.service import (
     ScopeVersionConflictError,
     approve_scope_version,
     create_scope_version,
+    list_scope_versions,
 )
 from app.platform.db import Base, create_session_factory
 
@@ -506,3 +507,64 @@ async def test_scope_approval_service_maps_missing_actor_and_database_race(
             ParticipantRole.CUSTOMER,
         )
     await session.close()
+
+
+@pytest.mark.anyio
+async def test_scope_version_list_uses_two_selects_for_many_versions(tmp_path: Path) -> None:
+    database_path = (tmp_path / "scope-query-count.sqlite3").as_posix()
+    sync_engine = create_engine(f"sqlite+pysqlite:///{database_path}")
+    Base.metadata.create_all(sync_engine)
+    sync_engine.dispose()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
+    factory = create_session_factory(engine)
+    job_id = uuid4()
+    participant_id = uuid4()
+    room_zone_id = uuid4()
+    version_ids = [uuid4() for _ in range(3)]
+    versions = [
+        ScopeVersion(
+            id=version_ids[index - 1],
+            job_id=job_id,
+            parent_version_id=version_ids[index - 2] if index > 1 else None,
+            sequence_number=index,
+            content={
+                "schema_version": 1,
+                "items": [
+                    {
+                        "item_key": f"item-{index}",
+                        "room_zone_id": str(room_zone_id),
+                        "description": f"item {index}",
+                    }
+                ],
+            },
+            content_hash=str(index).zfill(64),
+            created_by_participant_id=participant_id,
+        )
+        for index in range(1, 4)
+    ]
+    async with factory.begin() as session:
+        session.add_all(versions)
+
+    selects = 0
+
+    def count_selects(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        nonlocal selects
+        selects += statement.lstrip().upper().startswith("SELECT")
+
+    event.listen(engine.sync_engine, "before_cursor_execute", count_selects)
+    try:
+        async with factory() as session:
+            responses = await list_scope_versions(session, job_id)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count_selects)
+        await engine.dispose()
+
+    assert [response.sequence_number for response in responses] == [1, 2, 3]
+    assert selects == 2

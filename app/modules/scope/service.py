@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections import defaultdict
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -121,14 +122,16 @@ async def _validate_scope_zones(
 async def _to_response(
     session: AsyncSession,
     version: ScopeVersion,
+    stored_roles: set[ParticipantRole] | None = None,
 ) -> ScopeVersionResponse:
-    stored_roles = set(
-        (
-            await session.scalars(
-                select(ScopeApproval.role).where(ScopeApproval.scope_version_id == version.id)
-            )
-        ).all()
-    )
+    if stored_roles is None:
+        stored_roles = set(
+            (
+                await session.scalars(
+                    select(ScopeApproval.role).where(ScopeApproval.scope_version_id == version.id)
+                )
+            ).all()
+        )
     return ScopeVersionResponse(
         id=version.id,
         job_id=version.job_id,
@@ -262,7 +265,20 @@ async def list_scope_versions(
         .order_by(ScopeVersion.sequence_number)
     )
     versions = (await session.scalars(statement)).all()
-    return tuple([await _to_response(session, version) for version in versions])
+    roles_by_version: defaultdict[UUID, set[ParticipantRole]] = defaultdict(set)
+    if versions:
+        approval_rows = (
+            await session.execute(
+                select(ScopeApproval.scope_version_id, ScopeApproval.role).where(
+                    ScopeApproval.scope_version_id.in_(version.id for version in versions)
+                )
+            )
+        ).tuples()
+        for version_id, role in approval_rows:
+            roles_by_version[version_id].add(role)
+    return tuple(
+        [await _to_response(session, version, roles_by_version[version.id]) for version in versions]
+    )
 
 
 async def approve_scope_version(
@@ -448,14 +464,18 @@ async def import_analysis_draft(
 async def _change_request_response(
     session: AsyncSession,
     request: ChangeRequest,
+    evidence_ids: tuple[UUID, ...] | None = None,
 ) -> ChangeRequestResponse:
-    evidence_ids = (
-        await session.scalars(
-            select(ChangeRequestEvidence.media_asset_id)
-            .where(ChangeRequestEvidence.change_request_id == request.id)
-            .order_by(ChangeRequestEvidence.media_asset_id)
+    if evidence_ids is None:
+        evidence_ids = tuple(
+            (
+                await session.scalars(
+                    select(ChangeRequestEvidence.media_asset_id)
+                    .where(ChangeRequestEvidence.change_request_id == request.id)
+                    .order_by(ChangeRequestEvidence.media_asset_id)
+                )
+            ).all()
         )
-    ).all()
     return ChangeRequestResponse(
         id=request.id,
         job_id=request.job_id,
@@ -607,7 +627,35 @@ async def list_change_requests(
             .order_by(ChangeRequest.created_at, ChangeRequest.id)
         )
     ).all()
-    return tuple([await _change_request_response(session, request) for request in requests])
+    evidence_by_request: defaultdict[UUID, list[UUID]] = defaultdict(list)
+    if requests:
+        evidence_rows = (
+            await session.execute(
+                select(
+                    ChangeRequestEvidence.change_request_id,
+                    ChangeRequestEvidence.media_asset_id,
+                )
+                .where(
+                    ChangeRequestEvidence.change_request_id.in_(request.id for request in requests)
+                )
+                .order_by(
+                    ChangeRequestEvidence.change_request_id,
+                    ChangeRequestEvidence.media_asset_id,
+                )
+            )
+        ).tuples()
+        for request_id, media_asset_id in evidence_rows:
+            evidence_by_request[request_id].append(media_asset_id)
+    return tuple(
+        [
+            await _change_request_response(
+                session,
+                request,
+                tuple(evidence_by_request[request.id]),
+            )
+            for request in requests
+        ]
+    )
 
 
 async def create_change_evidence_read_url(
