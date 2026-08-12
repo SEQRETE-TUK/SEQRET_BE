@@ -3,12 +3,14 @@
 import asyncio
 import sys
 from collections.abc import Coroutine
+from contextlib import nullcontext
 from runpy import run_module
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
 
 from app.config import AppEnvironment, Settings
@@ -17,17 +19,32 @@ from app.platform.event_bus.service import RelayResult
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(("failed", "exit_code"), [(1, 1), (0, 0)])
 async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
     monkeypatch: pytest.MonkeyPatch,
+    failed: int,
+    exit_code: int,
 ) -> None:
     engine = SimpleNamespace(dispose=AsyncMock())
     factory = object()
     bus = SimpleNamespace(close=Mock())
-    relay = AsyncMock(return_value=RelayResult(claimed=1, published=0, failed=1))
+    relay = AsyncMock(return_value=RelayResult(claimed=1, published=int(not failed), failed=failed))
+    span = Mock()
+    observability = SimpleNamespace(
+        tracer=Mock(),
+        logger=Mock(),
+        shutdown=Mock(),
+    )
+    observability.tracer.start_as_current_span.return_value = nullcontext(span)
     monkeypatch.setattr(outbox_relay, "create_database_engine", lambda _: engine)
     monkeypatch.setattr(outbox_relay, "create_session_factory", lambda _: factory)
     monkeypatch.setattr(outbox_relay, "GooglePubSubEventBus", lambda *_: bus)
     monkeypatch.setattr(outbox_relay, "relay_outbox_once", relay)
+    monkeypatch.setattr(
+        outbox_relay,
+        "create_observability",
+        Mock(return_value=observability),
+    )
     settings = Settings(
         environment=AppEnvironment.TEST,
         database_url=SecretStr("postgresql+psycopg://seqret:secret@localhost/seqret"),
@@ -35,7 +52,7 @@ async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
         pubsub_topic_id="domain-events",
     )
 
-    assert await outbox_relay.run(settings) == 1
+    assert await outbox_relay.run(settings) == exit_code
     relay.assert_awaited_once_with(
         factory,
         bus,
@@ -45,6 +62,12 @@ async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
     )
     bus.close.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
+    getattr(observability.logger, "error" if failed else "info").assert_called_once()
+    if failed:
+        assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
+    else:
+        span.set_status.assert_not_called()
+    observability.shutdown.assert_called_once_with()
 
 
 @pytest.mark.anyio

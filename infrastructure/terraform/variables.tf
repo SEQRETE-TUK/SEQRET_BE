@@ -84,6 +84,116 @@ variable "deletion_protection" {
   default     = true
 }
 
+variable "api_domain" {
+  description = "Public DNS name routed to the API load balancer, without scheme or path."
+  type        = string
+
+  validation {
+    condition = (
+      length(var.api_domain) <= 253 &&
+      can(regex(
+        "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+        var.api_domain,
+      ))
+    )
+    error_message = "api_domain must be a lowercase fully-qualified DNS name without scheme or path."
+  }
+}
+
+variable "public_traffic_enabled" {
+  description = "Open general edge traffic only after the deployment readiness gate succeeds."
+  type        = bool
+  default     = false
+}
+
+variable "stable_api_revision" {
+  description = "Existing ready API revision that must retain all traffic until rollout succeeds."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.stable_api_revision == null ||
+      can(regex("^[a-z][a-z0-9-]{0,62}$", var.stable_api_revision))
+    )
+    error_message = "stable_api_revision must be null or a valid Cloud Run revision name."
+  }
+}
+
+variable "artifact_repository_id" {
+  description = "Artifact Registry Docker repository used by the backend pipeline."
+  type        = string
+  default     = "backend"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,61}[a-z0-9]$", var.artifact_repository_id))
+    error_message = "artifact_repository_id must be a lowercase repository identifier."
+  }
+}
+
+variable "database_url_secret_id" {
+  description = "Existing Secret Manager secret ID containing the SQLAlchemy database URL."
+  type        = string
+  default     = "seqret-database-url"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.database_url_secret_id))
+    error_message = "database_url_secret_id must be a Secret Manager secret ID."
+  }
+}
+
+variable "redis_url_secret_id" {
+  description = "Optional existing Secret Manager secret ID containing the Redis URL."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.redis_url_secret_id == null ||
+      can(regex("^[A-Za-z0-9_-]{1,255}$", var.redis_url_secret_id))
+    )
+    error_message = "redis_url_secret_id must be null or a Secret Manager secret ID."
+  }
+}
+
+variable "monitoring_notification_channel_ids" {
+  description = "Existing Cloud Monitoring notification channel resource names."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for channel in var.monitoring_notification_channel_ids :
+      can(regex("^projects/[^/]+/notificationChannels/[0-9]+$", channel))
+    ])
+    error_message = "monitoring_notification_channel_ids must contain full notification channel resource names."
+  }
+}
+
+variable "api_p95_latency_threshold_ms" {
+  description = "API p95 request latency alert threshold in milliseconds."
+  type        = number
+  default     = 2000
+
+  validation {
+    condition     = var.api_p95_latency_threshold_ms > 0
+    error_message = "api_p95_latency_threshold_ms must be positive."
+  }
+}
+
+variable "otel_trace_sample_ratio" {
+  description = "Local probability for application trace export."
+  type        = number
+  default     = 0.1
+
+  validation {
+    condition     = var.otel_trace_sample_ratio >= 0 && var.otel_trace_sample_ratio <= 1
+    error_message = "otel_trace_sample_ratio must be between 0 and 1."
+  }
+}
+
 variable "labels" {
   description = "Additional non-sensitive labels applied to Cloud Run resources."
   type        = map(string)
@@ -105,17 +215,6 @@ variable "labels" {
       ])
     )
     error_message = "labels must contain at most 64 valid GCP label keys and lowercase values."
-  }
-}
-
-variable "container_port" {
-  description = "HTTP port exposed by API and worker containers."
-  type        = number
-  default     = 8080
-
-  validation {
-    condition     = var.container_port >= 1 && var.container_port <= 65535
-    error_message = "container_port must be between 1 and 65535."
   }
 }
 
@@ -153,28 +252,46 @@ variable "api_args" {
   default     = []
 }
 
-variable "worker_command" {
-  description = "Optional private worker container command supplied by its owner."
-  type        = list(string)
-  default     = []
+variable "worker_runtime" {
+  description = "B-owned worker image and entrypoint; null leaves the runtime unprovisioned."
+  type = object({
+    container_image = string
+    command         = list(string)
+    args            = optional(list(string), [])
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition = var.worker_runtime == null || try(
+      length(var.worker_runtime.command) > 0 &&
+      startswith(var.worker_runtime.container_image, "${var.region}-docker.pkg.dev/${var.project_id}/") &&
+      can(regex("@sha256:[0-9a-f]{64}$", var.worker_runtime.container_image)),
+      false,
+    )
+    error_message = "worker_runtime must use an explicit command and immutable same-project Artifact Registry digest."
+  }
 }
 
-variable "worker_args" {
-  description = "Optional private worker container arguments supplied by its owner."
-  type        = list(string)
-  default     = []
-}
+variable "job_runtime" {
+  description = "B-owned media-job image and entrypoint; null leaves the runtime unprovisioned."
+  type = object({
+    container_image = string
+    command         = list(string)
+    args            = optional(list(string), [])
+  })
+  default  = null
+  nullable = true
 
-variable "job_command" {
-  description = "Optional Cloud Run Job container command supplied by its owner."
-  type        = list(string)
-  default     = []
-}
-
-variable "job_args" {
-  description = "Optional Cloud Run Job container arguments supplied by its owner."
-  type        = list(string)
-  default     = []
+  validation {
+    condition = var.job_runtime == null || try(
+      length(var.job_runtime.command) > 0 &&
+      startswith(var.job_runtime.container_image, "${var.region}-docker.pkg.dev/${var.project_id}/") &&
+      can(regex("@sha256:[0-9a-f]{64}$", var.job_runtime.container_image)),
+      false,
+    )
+    error_message = "job_runtime must use an explicit command and immutable same-project Artifact Registry digest."
+  }
 }
 
 variable "job_max_retries" {
@@ -196,5 +313,16 @@ variable "job_timeout" {
   validation {
     condition     = can(regex("^[1-9][0-9]*s$", var.job_timeout))
     error_message = "job_timeout must be a positive duration in seconds such as 3600s."
+  }
+}
+
+variable "migration_timeout" {
+  description = "Deployment migration gate timeout as a duration ending in seconds."
+  type        = string
+  default     = "900s"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*s$", var.migration_timeout))
+    error_message = "migration_timeout must be a positive duration in seconds such as 900s."
   }
 }

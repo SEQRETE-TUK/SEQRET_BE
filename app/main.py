@@ -16,6 +16,8 @@ from app.modules.notification.router import router as notification_router
 from app.modules.scope.router import router as scope_router
 from app.platform.cache import create_redis_cache
 from app.platform.db import create_database_engine, create_session_factory
+from app.platform.http_observability import HttpObservabilityMiddleware
+from app.platform.observability import create_observability
 from app.runtime import RuntimeKind, create_runtime_context
 
 
@@ -23,11 +25,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Build an API application with explicit, testable dependencies."""
 
     runtime_context = create_runtime_context(RuntimeKind.API, settings)
+    observability = create_observability(runtime_context)
     expose_api_docs = runtime_context.settings.environment is not AppEnvironment.PRODUCTION
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with AsyncExitStack() as resources:
+            resources.callback(observability.shutdown)
             if runtime_context.settings.database_url is not None:
                 engine = create_database_engine(runtime_context.settings)
                 resources.push_async_callback(engine.dispose)
@@ -48,7 +52,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.state.runtime_context = runtime_context
+    application.state.observability = observability
     application.state.cache_port = None
+    application.state.database_session_factory = None
     application.include_router(system_router)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(access_router, prefix=runtime_context.settings.api_prefix)
@@ -56,4 +62,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(scope_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(completion_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(notification_router, prefix=runtime_context.settings.api_prefix)
+    application.add_middleware(HttpObservabilityMiddleware, observability=observability)
     return application

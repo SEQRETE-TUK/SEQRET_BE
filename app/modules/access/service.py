@@ -18,6 +18,7 @@ from app.modules.access.schemas import AccessLinkResponse
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant
+from app.platform.observability import current_correlation
 
 ACCESS_TOKEN_TTL = timedelta(days=7)
 ACCESS_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
@@ -220,13 +221,14 @@ async def authenticate_access_token(
         timeout_seconds=cache_timeout_seconds,
     )
     access_link.last_used_at = now
+    correlation = current_correlation()
     return ActorContext(
         actor_kind=ActorKind.PARTICIPANT,
         participant_id=ParticipantId(participant.id),
         participant_role=participant.role,
         job_id=JobId(participant.job_id),
-        request_id=RequestId(uuid4()),
-        trace_id=secrets.token_hex(16),
+        request_id=(correlation.request_id if correlation is not None else RequestId(uuid4())),
+        trace_id=(correlation.trace_id if correlation is not None else secrets.token_hex(16)),
     )
 
 

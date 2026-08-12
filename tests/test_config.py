@@ -160,6 +160,29 @@ def test_settings_reject_invalid_pubsub_and_relay_configuration(
         Settings.model_validate(values)
 
 
+@pytest.mark.parametrize(
+    "values, message",
+    [
+        ({"gcp_project_id": "INVALID"}, "gcp_project_id must be a valid"),
+        ({"otel_enabled": True}, "otel_exporter_otlp_traces_endpoint is required"),
+        (
+            {
+                "environment": AppEnvironment.STAGING,
+                "otel_enabled": True,
+                "otel_exporter_otlp_traces_endpoint": "https://collector.example/v1/traces",
+            },
+            "gcp_project_id is required",
+        ),
+    ],
+)
+def test_settings_reject_invalid_observability_configuration(
+    values: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings.model_validate(values)
+
+
 @pytest.mark.parametrize("runtime_kind", list(RuntimeKind))
 def test_each_runtime_uses_the_same_settings_contract(runtime_kind: RuntimeKind) -> None:
     settings = Settings(environment=AppEnvironment.TEST)

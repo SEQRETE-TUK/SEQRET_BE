@@ -79,3 +79,10 @@ logs/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Terraform local state and plans
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfplan
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.*
+infrastructure/terraform/crash.log

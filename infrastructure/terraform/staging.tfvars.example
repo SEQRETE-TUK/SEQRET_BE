@@ -3,7 +3,14 @@ region              = "asia-northeast3"
 environment         = "staging"
 name_prefix         = "seqret"
 service_name        = "seqret"
+api_domain          = "api.staging.example.com"
 deletion_protection = true
+otel_trace_sample_ratio = 1.0
+
+# Configure at least one real channel before enabling staging apply.
+monitoring_notification_channel_ids = [
+  "projects/PROJECT_ID/notificationChannels/1234567890",
+]
 
 # Replace PROJECT_ID, REPOSITORY and the digest before planning.
 container_image = "asia-northeast3-docker.pkg.dev/PROJECT_ID/REPOSITORY/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
