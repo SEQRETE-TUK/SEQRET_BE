@@ -36,7 +36,9 @@ from app.modules.move_job.schemas import (
 from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
 from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
 from app.modules.scope.service import (
+    ScopeApprovalConflictError,
     ScopeVersionConflictError,
+    approve_scope_version,
     create_scope_version,
     list_scope_versions,
 )
@@ -44,8 +46,8 @@ from app.platform.db import create_database_engine, create_session_factory, tran
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_03_0001"
-ALEMBIC_HEAD = "a_04_0001"
+ALEMBIC_PREVIOUS = "a_04_0001"
+ALEMBIC_HEAD = "a_05_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -55,6 +57,7 @@ BUSINESS_TABLES = {
     "participant_access_token",
     "room_zone",
     "scope_version",
+    "scope_approval",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -150,7 +153,8 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
-            assert "scope_version" not in inspect(engine).get_table_names()
+            assert "scope_approval" not in inspect(engine).get_table_names()
+            assert "scope_version" in inspect(engine).get_table_names()
             assert "capture_session" in inspect(engine).get_table_names()
             assert "media_asset" in inspect(engine).get_table_names()
             assert "participant_access_token" in inspect(engine).get_table_names()
@@ -376,5 +380,128 @@ async def test_scope_version_concurrent_children_allow_one_winner_on_postgresql(
             assert sorted(outcomes) == ["conflict", "created"]
             assert [version.sequence_number for version in versions] == [1, 2]
             assert versions[1].parent_version_id == root.id
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_scope_lock_and_edit_race_allow_one_winner_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        job_command = MoveJobCreate(
+            title="확인과 편집 동시성 테스트",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="관리자",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="출발지",
+                    room_zones=(RoomZoneCreate(name="거실", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                customer = next(
+                    participant
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
+                manager = next(
+                    participant
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.COMPANY_MANAGER
+                )
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                root = await create_scope_version(
+                    session,
+                    created.job.id,
+                    customer.id,
+                    ScopeVersionCreate(
+                        content=ScopeContent(
+                            items=(
+                                ScopeItem(
+                                    item_key="sofa",
+                                    room_zone_id=room_zone_id,
+                                    description="소파 운반",
+                                ),
+                            )
+                        )
+                    ),
+                )
+                await approve_scope_version(
+                    session,
+                    created.job.id,
+                    root.id,
+                    customer.id,
+                    ParticipantRole.CUSTOMER,
+                )
+
+            async def finish_approval() -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await approve_scope_version(
+                            session,
+                            created.job.id,
+                            root.id,
+                            manager.id,
+                            ParticipantRole.COMPANY_MANAGER,
+                        )
+                    return "locked"
+                except ScopeApprovalConflictError:
+                    return "approval_conflict"
+
+            async def append_child() -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await create_scope_version(
+                            session,
+                            created.job.id,
+                            customer.id,
+                            ScopeVersionCreate(
+                                parent_version_id=root.id,
+                                content=ScopeContent(
+                                    items=(
+                                        ScopeItem(
+                                            item_key="sofa",
+                                            room_zone_id=room_zone_id,
+                                            description="소파 포장과 운반",
+                                        ),
+                                    )
+                                ),
+                            ),
+                        )
+                    return "edited"
+                except ScopeVersionConflictError:
+                    return "edit_conflict"
+
+            outcomes = await gather(finish_approval(), append_child())
+            async with transactional_session(factory) as session:
+                versions = await list_scope_versions(session, created.job.id)
+
+            assert sorted(outcomes) in (
+                ["edit_conflict", "locked"],
+                ["approval_conflict", "edited"],
+            )
+            if outcomes[0] == "locked":
+                assert len(versions) == 1
+                assert versions[0].locked_at is not None
+            else:
+                assert len(versions) == 2
+                assert versions[0].locked_at is None
+                assert versions[1].parent_version_id == root.id
         finally:
             await engine.dispose()

@@ -16,11 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
+from app.contracts.actor import ParticipantRole
+from app.contracts.primitives import utc_now
 from app.main import create_app
+from app.modules.scope.models import ScopeVersion
 from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
 from app.modules.scope.service import (
+    ScopeApprovalConflictError,
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
+    approve_scope_version,
     create_scope_version,
 )
 from app.platform.db import Base, create_session_factory
@@ -278,4 +283,178 @@ async def test_scope_service_maps_missing_actor_and_database_race(
     monkeypatch.setattr(session, "flush", fail_flush)
     with pytest.raises(ScopeVersionConflictError):
         await create_scope_version(session, job_id, participant_id, command)
+    await session.close()
+
+
+@pytest.mark.anyio
+async def test_scope_approvals_lock_same_version_and_block_further_edit(
+    scope_client: AsyncClient,
+) -> None:
+    created = await _create_job(scope_client)
+    job_id = created["job"]["id"]
+    customer_secret = _secret(created, "customer")
+    manager_secret = _secret(created, "company_manager")
+    versions_url = f"/api/v1/move-jobs/{job_id}/scope-versions"
+    version = await scope_client.post(
+        versions_url,
+        headers=_headers(customer_secret),
+        json=_scope_payload(created),
+    )
+    assert version.status_code == 201
+    version_id = version.json()["id"]
+    approval_url = f"{versions_url}/{version_id}/approvals"
+
+    customer_approval = await scope_client.post(
+        approval_url,
+        headers=_headers(customer_secret),
+    )
+    assert customer_approval.status_code == 201
+    assert customer_approval.json()["approval"]["role"] == "customer"
+    assert customer_approval.json()["version"]["approval_roles"] == ["customer"]
+    assert customer_approval.json()["version"]["locked_at"] is None
+
+    duplicate = await scope_client.post(
+        approval_url,
+        headers=_headers(customer_secret),
+    )
+    assert duplicate.status_code == 409
+    manager_approval = await scope_client.post(
+        approval_url,
+        headers=_headers(manager_secret),
+    )
+    assert manager_approval.status_code == 201
+    locked = manager_approval.json()["version"]
+    assert locked["approval_roles"] == ["customer", "company_manager"]
+    assert locked["locked_at"] == manager_approval.json()["approval"]["approved_at"]
+
+    after_lock = _scope_payload(created)
+    after_lock["parent_version_id"] = version_id
+    edit = await scope_client.post(
+        versions_url,
+        headers=_headers(customer_secret),
+        json=after_lock,
+    )
+    assert edit.status_code == 409
+    repeated_manager = await scope_client.post(
+        approval_url,
+        headers=_headers(manager_secret),
+    )
+    assert repeated_manager.status_code == 409
+    history = await scope_client.get(versions_url, headers=_headers(customer_secret))
+    assert history.json()[0]["locked_at"] is not None
+    assert history.json()[0]["approval_roles"] == ["customer", "company_manager"]
+
+
+@pytest.mark.anyio
+async def test_scope_approval_rejects_past_version_role_and_cross_job(
+    scope_client: AsyncClient,
+) -> None:
+    first_job = await _create_job(scope_client)
+    second_job = await _create_job(scope_client)
+    job_id = first_job["job"]["id"]
+    customer_secret = _secret(first_job, "customer")
+    manager_secret = _secret(first_job, "company_manager")
+    worker_secret = _secret(first_job, "field_worker")
+    versions_url = f"/api/v1/move-jobs/{job_id}/scope-versions"
+    first = await scope_client.post(
+        versions_url,
+        headers=_headers(customer_secret),
+        json=_scope_payload(first_job),
+    )
+    second_payload = _scope_payload(first_job)
+    second_payload["parent_version_id"] = first.json()["id"]
+    second = await scope_client.post(
+        versions_url,
+        headers=_headers(manager_secret),
+        json=second_payload,
+    )
+    first_approval_url = f"{versions_url}/{first.json()['id']}/approvals"
+
+    past = await scope_client.post(first_approval_url, headers=_headers(customer_secret))
+    denied = await scope_client.post(
+        f"{versions_url}/{second.json()['id']}/approvals",
+        headers=_headers(worker_secret),
+    )
+    cross_job = await scope_client.post(
+        f"/api/v1/move-jobs/{second_job['job']['id']}/scope-versions/"
+        f"{second.json()['id']}/approvals",
+        headers=_headers(_secret(second_job, "customer")),
+    )
+    missing = await scope_client.post(
+        f"{versions_url}/{uuid4()}/approvals",
+        headers=_headers(customer_secret),
+    )
+
+    assert past.status_code == 409
+    assert denied.status_code == 403
+    assert cross_job.status_code == 404
+    assert missing.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_scope_approval_service_maps_missing_actor_and_database_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncSession()
+    job_id = uuid4()
+    version_id = uuid4()
+
+    async def missing_participant(_statement: object) -> None:
+        return None
+
+    monkeypatch.setattr(session, "scalar", missing_participant)
+    with pytest.raises(ScopeResourceNotFoundError):
+        await approve_scope_version(
+            session,
+            job_id,
+            version_id,
+            uuid4(),
+            ParticipantRole.CUSTOMER,
+        )
+
+    participant_id = uuid4()
+    version = ScopeVersion(
+        id=version_id,
+        job_id=job_id,
+        sequence_number=1,
+        content={
+            "schema_version": 1,
+            "items": [
+                {
+                    "item_key": "sofa",
+                    "room_zone_id": str(uuid4()),
+                    "description": "소파 운반",
+                }
+            ],
+        },
+        content_hash="a" * 64,
+        created_by_participant_id=participant_id,
+    )
+    version.created_at = utc_now()
+    scalar_results = iter([participant_id, version, None])
+
+    async def scalar(_statement: object) -> object:
+        return next(scalar_results)
+
+    class EmptyRoles:
+        def all(self) -> tuple[ParticipantRole, ...]:
+            return ()
+
+    async def scalars(_statement: object) -> EmptyRoles:
+        return EmptyRoles()
+
+    async def fail_flush() -> None:
+        raise IntegrityError("duplicate approval", {}, RuntimeError("duplicate"))
+
+    monkeypatch.setattr(session, "scalar", scalar)
+    monkeypatch.setattr(session, "scalars", scalars)
+    monkeypatch.setattr(session, "flush", fail_flush)
+    with pytest.raises(ScopeApprovalConflictError):
+        await approve_scope_version(
+            session,
+            job_id,
+            version_id,
+            participant_id,
+            ParticipantRole.CUSTOMER,
+        )
     await session.close()

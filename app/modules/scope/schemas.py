@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import ConfigDict, Field, model_validator
 
+from app.contracts.actor import ParticipantRole
 from app.contracts.model import ContractModel
 
 
@@ -45,3 +46,18 @@ class ScopeVersionResponse(ContractModel):
     content_hash: str
     created_by_participant_id: UUID
     created_at: datetime
+    approval_roles: tuple[ParticipantRole, ...]
+    locked_at: datetime | None
+
+
+class ScopeApprovalResponse(ContractModel):
+    id: UUID
+    scope_version_id: UUID
+    participant_id: UUID
+    role: ParticipantRole
+    approved_at: datetime
+
+
+class ScopeApprovalResult(ContractModel):
+    approval: ScopeApprovalResponse
+    version: ScopeVersionResponse
