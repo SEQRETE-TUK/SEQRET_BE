@@ -312,7 +312,7 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
 
             now = datetime.now(UTC)
 
-            async def increment() -> int:
+            async def increment() -> tuple[int, datetime]:
                 async with transactional_session(factory) as session:
                     return await _increment_database_rate_window(
                         session,
@@ -322,9 +322,10 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
                         window_seconds=60,
                     )
 
-            counts = await gather(*(increment() for _ in range(20)))
+            rate_windows = await gather(*(increment() for _ in range(20)))
 
-            assert sorted(counts) == list(range(1, 21))
+            assert sorted(count for count, _ in rate_windows) == list(range(1, 21))
+            assert {started_at for _, started_at in rate_windows} == {now}
             async with transactional_session(factory) as session:
                 stored = await session.get(ParticipantAccessToken, access_link_id)
                 assert stored is not None

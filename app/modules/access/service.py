@@ -4,6 +4,7 @@ import hashlib
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from uuid import UUID, uuid4
 
 from sqlalchemy import case, select, update
@@ -149,8 +150,8 @@ async def _increment_database_rate_window(
     expected_token_hash: str,
     now: datetime,
     window_seconds: int,
-) -> int:
-    """Atomically increment the recoverable counter stored with one access link."""
+) -> tuple[int, datetime]:
+    """Atomically increment and return the recoverable fixed-window state."""
 
     window_cutoff = now - timedelta(seconds=window_seconds)
     window_expired = (ParticipantAccessToken.rate_window_started_at.is_(None)) | (
@@ -174,13 +175,18 @@ async def _increment_database_rate_window(
                 else_=ParticipantAccessToken.rate_window_count + 1,
             ),
         )
-        .returning(ParticipantAccessToken.rate_window_count)
+        .returning(
+            ParticipantAccessToken.rate_window_count,
+            ParticipantAccessToken.rate_window_started_at,
+        )
         .execution_options(synchronize_session=False)
     )
-    count = (await session.execute(statement)).scalar_one_or_none()
-    if count is None:
+    rate_window = (await session.execute(statement)).tuples().one_or_none()
+    if rate_window is None:
         raise InvalidAccessTokenError
-    return count
+    count, started_at = rate_window
+    assert started_at is not None
+    return count, started_at
 
 
 async def _enforce_access_rate_limit(
@@ -193,7 +199,7 @@ async def _enforce_access_rate_limit(
     window_seconds: int,
     timeout_seconds: float,
 ) -> None:
-    database_count = await _increment_database_rate_window(
+    database_count, database_window_started_at = await _increment_database_rate_window(
         session,
         access_link.id,
         expected_token_hash=access_link.token_hash,
@@ -201,7 +207,9 @@ async def _enforce_access_rate_limit(
         window_seconds=window_seconds,
     )
     if database_count > request_limit:
-        raise AccessRateLimitExceededError(window_seconds)
+        window_ends_at = _as_utc(database_window_started_at) + timedelta(seconds=window_seconds)
+        retry_after_seconds = max(1, ceil((window_ends_at - now).total_seconds()))
+        raise AccessRateLimitExceededError(retry_after_seconds)
     if cache is not None:
         try:
             cache_count = await cache.increment_fixed_window(

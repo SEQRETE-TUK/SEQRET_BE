@@ -344,6 +344,43 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
 
 
 @pytest.mark.anyio
+async def test_database_fallback_reports_remaining_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = datetime(2026, 8, 13, tzinfo=UTC)
+    monkeypatch.setattr("app.modules.access.service.utc_now", lambda: current)
+    settings = Settings(
+        environment=AppEnvironment.TEST,
+        access_rate_limit_requests=1,
+        access_rate_limit_window_seconds=60,
+    )
+    client, _, resources = await _access_api_with_settings(tmp_path, settings)
+    _, engine = resources
+    try:
+        created = await _create_job(client)
+        secret = created["access_links"][0]["secret"]
+        url = f"/api/v1/move-jobs/{created['job']['id']}"
+
+        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+        current += timedelta(seconds=58, milliseconds=500)
+        rejected = await client.get(url, headers=_bearer(secret))
+        assert rejected.status_code == 429
+        assert rejected.headers["retry-after"] == "2"
+
+        current += timedelta(milliseconds=500)
+        rejected = await client.get(url, headers=_bearer(secret))
+        assert rejected.status_code == 429
+        assert rejected.headers["retry-after"] == "1"
+
+        current += timedelta(seconds=1)
+        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+    finally:
+        await client.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.anyio
 async def test_rotation_preserves_redis_and_database_rate_limits(
     tmp_path: Path,
 ) -> None:
@@ -449,7 +486,11 @@ async def test_redis_outage_uses_database_fallback_but_configuration_error_propa
 
         application.state.cache_port = OverLimitCache()
         manager_link = created["access_links"][1]
-        assert (await client.get(url, headers=_bearer(manager_link["secret"]))).status_code == 429
+        redis_rejected = await client.get(url, headers=_bearer(manager_link["secret"]))
+        assert redis_rejected.status_code == 429
+        assert redis_rejected.headers["retry-after"] == str(
+            settings.access_rate_limit_window_seconds
+        )
 
         application.state.cache_port = MisconfiguredCache()
         with pytest.raises(ProviderError) as error_info:
