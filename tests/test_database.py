@@ -1,8 +1,11 @@
 """Tests for the shared SQLAlchemy engine and transaction boundary."""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from httpx2 import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import Column, Integer, MetaData, String, Table, insert, select
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -15,6 +18,7 @@ from app.platform.db import (
     create_session_factory,
     transactional_session,
 )
+from app.platform.db.dependencies import Session, get_database_session
 
 
 class TransactionFailure(RuntimeError):
@@ -122,6 +126,28 @@ async def test_transactional_session_commits_and_rolls_back(tmp_path: Path) -> N
         assert result.scalars().all() == ["committed"]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_session_dependency_finishes_before_response() -> None:
+    application = FastAPI()
+
+    @application.get("/probe")
+    async def probe(_session: Session) -> dict[str, bool]:
+        return {"ok": True}
+
+    async def fail_on_exit() -> AsyncIterator[None]:
+        yield None
+        raise TransactionFailure("commit failed")
+
+    application.dependency_overrides[get_database_session] = fail_on_exit
+    async with AsyncClient(
+        transport=ASGITransport(app=application, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/probe")
+
+    assert response.status_code == 500
 
 
 def test_base_uses_deterministic_constraint_names() -> None:
