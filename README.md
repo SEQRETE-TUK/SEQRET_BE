@@ -41,4 +41,36 @@
 
 ## 상태
 
-기술 스택 확정 및 프로젝트 초기화 단계입니다.
+`FND-A01` 기준 FastAPI application factory와 API·worker·job이 공유하는 설정 계약을 구성하는 단계입니다.
+
+## 로컬 개발
+
+Python 버전과 dependency는 `uv`로 고정합니다.
+패키지 버전은 `app/__init__.py`의 `__version__`을 단일 원본으로 사용합니다.
+
+```bash
+uv sync --dev
+uv run uvicorn app.entrypoints.api:app --reload
+```
+
+기본 설정은 `SEQRET_` 접두사의 환경변수로 덮어쓸 수 있습니다. 로컬 설정은 `.env.example`을 참고하되 실제 `.env` 파일과 비밀값은 commit하지 않습니다.
+
+| 환경변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `SEQRET_APP_NAME` | `SEQRET Backend` | API 문서와 application에 표시할 이름 |
+| `SEQRET_SERVICE_NAME` | `seqret` | 소문자 DNS label 형식의 runtime 공통 식별자. suffix 제외 최대 42자, 최종 Cloud Run 이름 최대 49자 |
+| `SEQRET_ENVIRONMENT` | `local` | `local`, `test`, `staging`, `production` 중 하나 |
+| `SEQRET_DEBUG` | `false` | FastAPI debug 여부. production에서는 `true`를 거부함 |
+| `SEQRET_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` 중 하나 |
+| `SEQRET_API_PREFIX` | `/api/v1` | 향후 업무 API가 사용할 정규화된 절대 경로 접두사 |
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run mypy
+```
+
+API가 정상적으로 bootstrap됐는지는 `GET /healthz`로 확인합니다.
+
+- health 응답은 중간 cache가 이전 상태를 재사용하지 않도록 `Cache-Control: no-store`를 반환합니다.
+- production 환경에서는 `/docs`, `/redoc`, `/openapi.json` HTTP endpoint를 노출하지 않습니다.
