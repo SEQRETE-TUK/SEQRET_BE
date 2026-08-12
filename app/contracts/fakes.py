@@ -1,14 +1,14 @@
 """Deterministic local fakes for shared port contract tests."""
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import JsonValue
 
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
 from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
-from app.contracts.primitives import IdempotencyKey
+from app.contracts.primitives import IdempotencyKey, utc_now
 
 
 class FakeObjectStorage:
@@ -186,3 +186,33 @@ class FakeEventBus:
                 retryable=False,
             )
         self.published.setdefault(idempotency_key, event)
+
+
+class FakeCache:
+    """In-memory fixed-window counter with injectable time."""
+
+    def __init__(self, now: Callable[[], datetime] = utc_now) -> None:
+        self._now = now
+        self._counters: dict[str, tuple[int, datetime]] = {}
+
+    async def increment_fixed_window(
+        self,
+        *,
+        key: str,
+        window_seconds: int,
+        timeout_seconds: float,
+    ) -> int:
+        if not key:
+            raise ValueError("key must not be empty")
+        if window_seconds <= 0 or timeout_seconds <= 0:
+            raise ValueError("window_seconds and timeout_seconds must be positive")
+        now = self._now()
+        current = self._counters.get(key)
+        if current is None or current[1] <= now:
+            count = 1
+            expires_at = now + timedelta(seconds=window_seconds)
+        else:
+            count = current[0] + 1
+            expires_at = current[1]
+        self._counters[key] = (count, expires_at)
+        return count

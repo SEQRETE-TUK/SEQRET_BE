@@ -7,6 +7,7 @@ from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.media import MediaAssetRef, MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
     AIProviderPort,
+    CachePort,
     EventBusPort,
     ObjectStoragePort,
     ProviderError,
@@ -38,6 +39,7 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResult",
     "AnalysisRunId",
+    "CachePort",
     "CaptureSessionId",
     "DomainEvent",
     "DomainEventType",
