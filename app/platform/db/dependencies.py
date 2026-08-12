@@ -15,4 +15,4 @@ async def get_database_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-Session = Annotated[AsyncSession, Depends(get_database_session)]
+Session = Annotated[AsyncSession, Depends(get_database_session, scope="function")]
