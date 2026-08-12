@@ -40,6 +40,8 @@ from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.service import (
     InvalidAccessTokenError,
     _increment_database_rate_window,
+    load_access_link,
+    revoke_access_link,
     rotate_access_link,
 )
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
@@ -357,6 +359,72 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
                         now=now,
                         window_seconds=60,
                     )
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_concurrent_access_link_revocation_records_one_audit_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        command_data = MoveJobCreate(
+            title="Concurrent access-link revocation",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+                access_link_id = created.access_links[0].id
+                actor_participant_id = created.access_links[0].participant_id
+
+            revoke_barrier = Barrier(2)
+
+            async def revoke() -> None:
+                async with transactional_session(factory) as session:
+                    access_link = await load_access_link(
+                        session,
+                        created.job.id,
+                        access_link_id,
+                    )
+                    assert access_link is not None
+                    await wait_for(revoke_barrier.wait(), timeout=5)
+                    await revoke_access_link(session, access_link, actor_participant_id)
+
+            await wait_for(gather(revoke(), revoke()), timeout=10)
+
+            async with transactional_session(factory) as session:
+                stored = await session.get(ParticipantAccessToken, access_link_id)
+                events = await list_audit_events(session, created.job.id)
+
+            assert stored is not None
+            assert stored.revoked_at is not None
+            assert [event.event_type for event in events].count(
+                AuditEventType.ACCESS_LINK_REVOKED
+            ) == 1
         finally:
             await engine.dispose()
 
