@@ -106,6 +106,36 @@ run "mutable_image_is_rejected" {
   expect_failures = [var.container_image]
 }
 
+run "foreign_registry_image_is_rejected" {
+  command = plan
+
+  variables {
+    container_image = "ghcr.io/seqret/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+
+  expect_failures = [var.container_image]
+}
+
+run "foreign_project_image_is_rejected" {
+  command = plan
+
+  variables {
+    container_image = "asia-northeast3-docker.pkg.dev/other-project/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+
+  expect_failures = [var.container_image]
+}
+
+run "foreign_region_image_is_rejected" {
+  command = plan
+
+  variables {
+    container_image = "us-central1-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+
+  expect_failures = [var.container_image]
+}
+
 run "invalid_label_is_rejected" {
   command = plan
 

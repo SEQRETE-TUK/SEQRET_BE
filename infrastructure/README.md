@@ -12,7 +12,7 @@ Each runtime has its own service account. Terraform does not grant application p
 
 - GitHub Actions authenticates through Workload Identity Federation and never consumes a long-lived service-account key.
 - The OIDC provider must restrict `attribute.repository` to `SEQRETE-TUK/SEQRET_BE` and should also restrict the staging environment or main branch.
-- Container images must be immutable Artifact Registry references ending in `@sha256:<digest>`.
+- Container images must come from Artifact Registry in the configured project and region and end in `@sha256:<digest>`.
 - The API is not granted unauthenticated invocation and only accepts internal or load-balancer ingress.
 - Worker ingress is internal-only. No public IAM binding is created.
 - Runtime service accounts are separate and receive no broad project roles in this foundation.
@@ -48,7 +48,7 @@ No credential is required for formatting, initialization with the backend disabl
 
 ## Staging workflow
 
-Run `Deploy staging infrastructure` manually with an immutable image reference. The default `apply=false` creates a plan only. After reviewing that result, re-run with `apply=true`. The apply run creates a fresh plan from the current remote state and applies exactly the plan file produced in that same run under the GitHub `staging` environment. It does not reuse the binary plan from the earlier plan-only run.
+Run `Deploy staging infrastructure` manually from `main` with an immutable image reference from the configured staging project and region. The default `apply=false` creates a plan only. After reviewing that result, re-run with `apply=true`. The apply run creates a fresh plan from the current remote state and applies exactly the plan file produced in that same run under the GitHub `staging` environment. It does not reuse the binary plan from the earlier plan-only run.
 
 Configure required reviewers on the `staging` environment before enabling apply runs. Keep `apply=false` until the Workload Identity, state bucket and deployment permissions have been verified.
 
