@@ -125,6 +125,55 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         }
 
 
+def test_cors_allows_only_the_configured_browser_origin() -> None:
+    origin = "https://staging.example.com"
+    application = create_app(Settings(environment=AppEnvironment.TEST, frontend_origin=origin))
+
+    with TestClient(application) as client:
+        allowed = client.options(
+            "/api/v1/move-jobs",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type,traceparent",
+            },
+        )
+        rejected = client.options(
+            "/api/v1/move-jobs",
+            headers={
+                "Origin": "https://attacker.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == origin
+    assert allowed.headers.get("access-control-allow-credentials") != "true"
+    assert rejected.status_code == 400
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+def test_cors_is_present_on_unhandled_errors() -> None:
+    origin = "https://staging.example.com"
+    application = create_app(Settings(environment=AppEnvironment.TEST, frontend_origin=origin))
+
+    @application.get("/explode-with-cors")
+    async def explode() -> None:
+        raise RuntimeError("expected")
+
+    with TestClient(application, raise_server_exceptions=False) as client:
+        response = client.get("/explode-with-cors", headers={"Origin": origin})
+
+    assert response.status_code == 500
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+@pytest.mark.parametrize("environment", [AppEnvironment.STAGING, AppEnvironment.PRODUCTION])
+def test_deployed_application_requires_frontend_origin(environment: AppEnvironment) -> None:
+    with pytest.raises(ValueError, match="frontend_origin is required"):
+        create_app(Settings(environment=environment))
+
+
 def test_healthcheck_reports_runtime_without_secrets() -> None:
     settings = Settings(environment=AppEnvironment.TEST)
 
@@ -214,7 +263,10 @@ def test_streaming_error_does_not_start_a_second_response() -> None:
 
 
 def test_production_application_disables_api_documentation_routes() -> None:
-    settings = Settings(environment=AppEnvironment.PRODUCTION)
+    settings = Settings(
+        environment=AppEnvironment.PRODUCTION,
+        frontend_origin="https://app.example.com",
+    )
     application = create_app(settings)
 
     assert application.docs_url is None

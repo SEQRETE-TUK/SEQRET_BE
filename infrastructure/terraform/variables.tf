@@ -100,6 +100,16 @@ variable "api_domain" {
   }
 }
 
+variable "frontend_origin" {
+  description = "Single HTTPS browser origin allowed to call the API."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$", var.frontend_origin))
+    error_message = "frontend_origin must be one canonical HTTPS origin without credentials, a port, or a path."
+  }
+}
+
 variable "public_traffic_enabled" {
   description = "Open general edge traffic only after the deployment readiness gate succeeds."
   type        = bool

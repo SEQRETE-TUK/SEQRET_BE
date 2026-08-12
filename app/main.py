@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.routes.system import router as system_router
@@ -26,6 +27,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Build an API application with explicit, testable dependencies."""
 
     runtime_context = create_runtime_context(RuntimeKind.API, settings)
+    if (
+        runtime_context.settings.environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
+        and runtime_context.settings.frontend_origin is None
+    ):
+        raise ValueError("frontend_origin is required for a deployed API")
     observability = create_observability(runtime_context)
     expose_api_docs = runtime_context.settings.environment is not AppEnvironment.PRODUCTION
 
@@ -65,4 +71,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(notification_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(background_job_router, prefix=runtime_context.settings.api_prefix)
     application.add_middleware(HttpObservabilityMiddleware, observability=observability)
+    if runtime_context.settings.frontend_origin is not None:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=[runtime_context.settings.frontend_origin],
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type", "traceparent"],
+            expose_headers=["Retry-After", "X-Request-ID"],
+        )
     return application

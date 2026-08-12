@@ -42,6 +42,7 @@ locals {
     SEQRET_DATABASE_MAX_OVERFLOW = "1"
     SEQRET_DATABASE_POOL_SIZE    = "2"
     SEQRET_MEDIA_RETENTION_DAYS  = tostring(var.media_retention_days)
+    SEQRET_FRONTEND_ORIGIN       = var.frontend_origin
   })
 
   outbox_relay_environment = merge(local.observed_runtime_environment, {

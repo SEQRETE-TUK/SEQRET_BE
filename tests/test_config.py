@@ -128,6 +128,27 @@ def test_settings_reject_production_debug() -> None:
         Settings(environment=AppEnvironment.PRODUCTION, debug=True)
 
 
+@pytest.mark.parametrize(
+    "frontend_origin",
+    [
+        "*",
+        "http://frontend.example.com",
+        "https://frontend.example.com/",
+        "https://FRONTEND.example.com",
+        "https://frontend.example.com:443",
+        "https://frontend.example.com/path",
+        "https://user@frontend.example.com",
+        "https://frontend.example.com:not-a-port",
+        "https://frontend.example.com:70000",
+        "https://127.1",
+        "https://frontend.123",
+    ],
+)
+def test_settings_reject_invalid_frontend_origin(frontend_origin: str) -> None:
+    with pytest.raises(ValidationError, match="frontend_origin must be one HTTPS origin"):
+        Settings(frontend_origin=frontend_origin)
+
+
 def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
     settings = Settings(
         pubsub_project_id="seqret-test",
