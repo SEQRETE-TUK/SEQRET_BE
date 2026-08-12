@@ -554,7 +554,7 @@ jobs:
       - name: Open general traffic after rollout succeeds
         if: steps.stable.outputs.public_traffic_enabled != 'true'
         shell: bash
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           CONTAINER_IMAGE: ${{ steps.image.outputs.digest }}
           NEW_REVISION: ${{ steps.revision.outputs.revision }}
@@ -581,28 +581,24 @@ jobs:
           }
           trap restore_closed_edge EXIT
           apply_edge true
-          edge_action="$(gcloud compute security-policies rules describe 2147483647 \
-            --security-policy "${SERVICE}-armor" \
-            --project "${GCP_PROJECT_ID}" \
-            --format='value(action)')"
-          if [[ "${edge_action}" != "allow" ]]; then
-            echo "Cloud Armor did not open general public traffic after rollout passed." >&2
-            exit 1
-          fi
           edge_ready=0
-          for attempt in {1..10}; do
+          for attempt in {1..30}; do
+            edge_action="$(gcloud compute security-policies rules describe 2147483647 \
+              --security-policy "${SERVICE}-armor" \
+              --project "${GCP_PROJECT_ID}" \
+              --format='value(action)' 2>/dev/null || true)"
             response="$(curl --connect-timeout 2 --max-time 3 --fail --silent --show-error \
               "https://${API_DOMAIN}/edgez" 2>/dev/null || true)"
             revision="$(jq -r 'select(.status == "ok" and .runtime == "api") | .revision // empty' \
               <<< "${response}" 2>/dev/null || true)"
-            if [[ "${revision}" == "${NEW_REVISION}" ]]; then
+            if [[ "${edge_action}" == "allow" && "${revision}" == "${NEW_REVISION}" ]]; then
               edge_ready=1
               break
             fi
-            sleep 2
+            sleep 10
           done
           if (( edge_ready == 0 )); then
-            echo "General public traffic did not reach the API after Cloud Armor opened." >&2
+            echo "Cloud Armor or the public edge did not expose the promoted API revision (action=${edge_action:-unavailable}, revision=${revision:-unavailable})." >&2
             exit 1
           fi
           trap - EXIT
