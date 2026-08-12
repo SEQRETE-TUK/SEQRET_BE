@@ -57,12 +57,24 @@ variable "service_name" {
 }
 
 variable "container_image" {
-  description = "Immutable container image reference from Artifact Registry."
+  description = "Immutable same-project Artifact Registry image reference."
   type        = string
 
   validation {
-    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.container_image))
-    error_message = "container_image must end with an immutable @sha256:<64 lowercase hex> digest."
+    condition = (
+      startswith(
+        var.container_image,
+        "${var.region}-docker.pkg.dev/${var.project_id}/",
+      ) &&
+      can(regex(
+        "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$",
+        trimprefix(
+          var.container_image,
+          "${var.region}-docker.pkg.dev/${var.project_id}/",
+        ),
+      ))
+    )
+    error_message = "container_image must be a same-region, same-project Artifact Registry path ending in @sha256:<64 lowercase hex>."
   }
 }
 
