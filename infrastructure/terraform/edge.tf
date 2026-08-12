@@ -19,6 +19,46 @@ resource "google_compute_security_policy" "api" {
 
   rule {
     action      = "throttle"
+    priority    = 800
+    description = "Limit public move-job bootstrap requests per client"
+    match {
+      expr {
+        expression = "request.method == 'POST' && request.path == '/api/v1/move-jobs'"
+      }
+    }
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+      rate_limit_threshold {
+        count        = 10
+        interval_sec = 60
+      }
+    }
+  }
+
+  rule {
+    action      = "throttle"
+    priority    = 850
+    description = "Bound public API database amplification per client"
+    match {
+      expr {
+        expression = "request.path.startsWith('/api/v1/')"
+      }
+    }
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+      rate_limit_threshold {
+        count        = 600
+        interval_sec = 60
+      }
+    }
+  }
+
+  rule {
+    action      = "throttle"
     priority    = 900
     description = "Limit health and readiness probes per client"
     match {

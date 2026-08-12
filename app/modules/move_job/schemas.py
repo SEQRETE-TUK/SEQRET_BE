@@ -37,7 +37,10 @@ class LocationCreate(RequestModel):
 
     kind: LocationKind
     label: Annotated[str, Field(min_length=1, max_length=100)]
-    room_zones: Annotated[tuple[RoomZoneCreate, ...], Field(min_length=1)]
+    room_zones: Annotated[
+        tuple[RoomZoneCreate, ...],
+        Field(min_length=1, max_length=100),
+    ]
 
     @model_validator(mode="after")
     def require_unique_room_zones(self) -> "LocationCreate":
