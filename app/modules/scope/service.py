@@ -470,7 +470,9 @@ async def create_change_request(
     *,
     trace_id: str | None = None,
 ) -> ChangeRequestResponse:
-    job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
+    job = await session.scalar(
+        select(MoveJob).where(MoveJob.id == job_id).with_for_update(key_share=True)
+    )
     if job is None:
         raise ScopeResourceNotFoundError(job_id)
     if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:

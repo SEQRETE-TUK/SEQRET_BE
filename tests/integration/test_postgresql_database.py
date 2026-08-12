@@ -2,11 +2,12 @@
 
 import os
 import sys
-from asyncio import Barrier, Event, SelectorEventLoop, gather, wait_for
+from asyncio import Barrier, Event, SelectorEventLoop, create_task, gather, wait_for
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -50,7 +51,7 @@ from app.modules.background_job.service import (
     retry_background_job,
     start_media_deletion,
 )
-from app.modules.capture.models import MediaAsset
+from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import MediaUploadCreate
 from app.modules.capture.service import (
     complete_media_upload,
@@ -73,7 +74,7 @@ from app.modules.move_job.schemas import (
     RoomZoneCreate,
 )
 from app.modules.move_job.service import create_move_job, get_move_job
-from app.modules.scope.models import ChangeRequestStatus, ScopeApproval
+from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeApproval, ScopeVersion
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
     ChangeRequestCreate,
@@ -1433,6 +1434,212 @@ async def test_change_request_concurrent_approvals_allow_one_result_on_postgresq
                 sum(request.result_scope_version_id is not None for request in stored_requests) == 1
             )
             assert len(versions) == 2
+            assert versions[1].parent_version_id == root.id
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_change_request_creation_and_scope_decision_avoid_deadlock_on_postgresql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        job_command = MoveJobCreate(
+            title="Change request lock ordering",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                participants = {
+                    participant.role: participant for participant in created.job.participants
+                }
+                customer = participants[ParticipantRole.CUSTOMER]
+                worker = participants[ParticipantRole.FIELD_WORKER]
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                root_content = ScopeContent(
+                    items=(
+                        ScopeItem(
+                            item_key="sofa",
+                            room_zone_id=room_zone_id,
+                            description="Original sofa",
+                        ),
+                    )
+                )
+                proposed_content = ScopeContent(
+                    items=(
+                        ScopeItem(
+                            item_key="sofa",
+                            room_zone_id=room_zone_id,
+                            description="Replacement sofa",
+                        ),
+                    )
+                )
+                root = ScopeVersion(
+                    id=uuid4(),
+                    job_id=created.job.id,
+                    sequence_number=1,
+                    content=root_content.model_dump(mode="json"),
+                    content_hash="a" * 64,
+                    created_by_participant_id=customer.id,
+                    locked_at=datetime.now(UTC),
+                )
+                capture = CaptureSession(
+                    id=uuid4(),
+                    job_id=created.job.id,
+                    created_by_participant_id=worker.id,
+                )
+                change_asset = MediaAsset(
+                    id=uuid4(),
+                    capture_session_id=capture.id,
+                    room_zone_id=room_zone_id,
+                    media_purpose=MediaPurpose.CHANGE_EVIDENCE,
+                    status=MediaAssetStatus.UPLOADED,
+                    object_key=f"jobs/{created.job.id}/change.jpg",
+                    content_type="image/jpeg",
+                    expected_size_bytes=16,
+                    actual_size_bytes=16,
+                    sha256_hex="c" * 64,
+                    generation="2",
+                    uploaded_at=datetime.now(UTC),
+                )
+                change_request = ChangeRequest(
+                    id=uuid4(),
+                    job_id=created.job.id,
+                    base_scope_version_id=root.id,
+                    requested_by_participant_id=worker.id,
+                    description="Replace the sofa",
+                    proposed_content=proposed_content.model_dump(mode="json"),
+                    status=ChangeRequestStatus.PENDING,
+                )
+                session.add_all((root, capture))
+                await session.flush()
+                session.add_all((change_asset, change_request))
+
+            decision_flush_started = Event()
+            release_decision = Event()
+            change_job_lock_seen = Event()
+            change_scope_lock_attempted = Event()
+            create_command = ChangeRequestCreate(
+                base_scope_version_id=root.id,
+                description="Replace the sofa again",
+                proposed_content=ScopeContent(
+                    items=(
+                        ScopeItem(
+                            item_key="sofa",
+                            room_zone_id=room_zone_id,
+                            description="Another replacement sofa",
+                        ),
+                    )
+                ),
+                evidence_media_asset_ids=(change_asset.id,),
+            )
+
+            async with factory() as decision_session, factory() as create_session:
+                original_decision_flush = decision_session.flush
+                original_create_scalar = create_session.scalar
+
+                async def decision_flush() -> None:
+                    decision_flush_started.set()
+                    await wait_for(release_decision.wait(), timeout=10)
+                    await original_decision_flush()
+
+                async def create_scalar(statement: Any) -> Any:
+                    if "FROM move_job" in str(statement):
+                        compiled = str(statement.compile(dialect=engine.dialect))
+                        if "FOR NO KEY UPDATE" in compiled:
+                            change_job_lock_seen.set()
+                    if "FROM scope_version" in str(statement) and "FOR UPDATE" in str(statement):
+                        change_scope_lock_attempted.set()
+                    return await original_create_scalar(statement)
+
+                monkeypatch.setattr(decision_session, "flush", decision_flush)
+                monkeypatch.setattr(create_session, "scalar", create_scalar)
+
+                async def approve() -> str:
+                    async with decision_session.begin():
+                        await decide_change_request(
+                            decision_session,
+                            created.job.id,
+                            change_request.id,
+                            customer.id,
+                            ChangeDecisionCreate(decision="approve"),
+                        )
+                    return "approved"
+
+                async def request_change() -> str:
+                    try:
+                        async with create_session.begin():
+                            await create_change_request(
+                                create_session,
+                                created.job.id,
+                                worker.id,
+                                create_command,
+                            )
+                        return "created"
+                    except ChangeRequestConflictError:
+                        return "conflict"
+
+                decision_task = create_task(approve())
+                create_task_ = None
+                try:
+                    await wait_for(decision_flush_started.wait(), timeout=5)
+                    create_task_ = create_task(request_change())
+                    await wait_for(change_scope_lock_attempted.wait(), timeout=5)
+                    assert change_job_lock_seen.is_set()
+                except BaseException:
+                    release_decision.set()
+                    tasks = [decision_task]
+                    if create_task_ is not None:
+                        tasks.append(create_task_)
+                    await wait_for(
+                        gather(*tasks, return_exceptions=True),
+                        timeout=10,
+                    )
+                    raise
+                release_decision.set()
+                assert create_task_ is not None
+                outcomes = await wait_for(
+                    gather(decision_task, create_task_),
+                    timeout=10,
+                )
+
+            async with transactional_session(factory) as session:
+                stored_requests = await list_change_requests(session, created.job.id)
+                versions = await list_scope_versions(session, created.job.id)
+                loaded = await get_move_job(session, created.job.id)
+
+            assert tuple(outcomes) == ("approved", "conflict")
+            assert loaded.status is MoveJobStatus.DRAFT
+            assert len(stored_requests) == 1
+            assert stored_requests[0].status is ChangeRequestStatus.APPROVED
+            assert len(versions) == 2
+            assert stored_requests[0].result_scope_version_id == versions[1].id
             assert versions[1].parent_version_id == root.id
         finally:
             await engine.dispose()
