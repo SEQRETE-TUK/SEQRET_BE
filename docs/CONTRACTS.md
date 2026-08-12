@@ -7,7 +7,7 @@
 - 모든 외부 경계 모델은 알 수 없는 필드를 거부하고 생성 후 변경할 수 없다.
 - 식별자는 UUID 기반 nominal type이며, 시각은 timezone-aware 값만 허용한다.
 - `ActorContext`는 인증 계층이 검증한 작업·참여자·역할 capability와 권한 경계를 application command에 전달한다. bearer 링크는 개인 신원을 증명하지 않으며 원문 역할 토큰은 포함하지 않는다.
-- `ErrorResponse.schema_version`과 `DomainEvent.schema_version`의 최초 값은 `1`이다. 기존 event payload를 깨는 변경은 event 이름과 schema version을 새로 추가한다.
+- `DomainEvent.schema_version`의 최초 값은 `1`이다. 기존 event payload를 깨는 변경은 event 이름과 schema version을 새로 추가한다.
 - signed URL, 역할 토큰, 주소 원문과 원본 미디어는 모델 repr이나 로그에 남기지 않는다.
 
 ## Port 소유권과 동작

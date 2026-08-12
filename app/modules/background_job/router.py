@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from app.api.errors import protected_error_responses
 from app.contracts.actor import ParticipantRole
 from app.contracts.primitives import utc_now
 from app.modules.access.auth import CurrentActor, authorize_job_actor
@@ -27,6 +28,12 @@ MAINTENANCE_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER})
     "/{job_id}/background-jobs",
     response_model=BackgroundJobResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     summary="보존기간 미디어 삭제 작업 생성",
 )
 async def create_background_job_endpoint(
@@ -69,6 +76,7 @@ async def create_background_job_endpoint(
 @router.get(
     "/{job_id}/background-jobs",
     response_model=tuple[BackgroundJobResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="백그라운드 작업 조회",
 )
 async def list_background_jobs_endpoint(
@@ -83,6 +91,11 @@ async def list_background_jobs_endpoint(
 @router.post(
     "/{job_id}/background-jobs/{background_job_id}/retry",
     response_model=BackgroundJobResponse,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="실패한 백그라운드 작업 재실행",
 )
 async def retry_background_job_endpoint(

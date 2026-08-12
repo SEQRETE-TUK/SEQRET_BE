@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from app.api.errors import protected_error_responses
 from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.completion.schemas import (
@@ -31,6 +32,12 @@ COMPLETION_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_
     "/{job_id}/completion-confirmations",
     response_model=CompletionResult,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     summary="작업 완료 확인",
 )
 async def confirm_completion_endpoint(
@@ -77,6 +84,7 @@ async def confirm_completion_endpoint(
 @router.get(
     "/{job_id}/completion-confirmations",
     response_model=tuple[CompletionConfirmationResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="작업 완료 확인 이력 조회",
 )
 async def list_completion_confirmations_endpoint(
@@ -91,6 +99,7 @@ async def list_completion_confirmations_endpoint(
 @router.get(
     "/{job_id}/audit-events",
     response_model=tuple[AuditEventResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="작업 감사 이력 조회",
 )
 async def list_audit_events_endpoint(

@@ -37,6 +37,94 @@ def test_application_factory_uses_injected_settings() -> None:
     assert application.state.runtime_context.settings is settings
 
 
+def test_protected_api_openapi_documents_reachable_http_errors() -> None:
+    schema = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
+    job_path = "/api/v1/move-jobs/{job_id}"
+    route_failures = {
+        ("get", job_path): set(),
+        ("post", f"{job_path}/participants/{{participant_id}}/access-links"): {403},
+        ("post", f"{job_path}/access-links/{{access_link_id}}/revoke"): {403},
+        ("post", f"{job_path}/capture-sessions"): {409},
+        (
+            "post",
+            f"{job_path}/capture-sessions/{{capture_session_id}}/media-assets/upload",
+        ): {409, 503},
+        (
+            "post",
+            f"{job_path}/capture-sessions/{{capture_session_id}}/media-assets/"
+            "{media_asset_id}/complete",
+        ): {409, 503},
+        ("post", f"{job_path}/scope-versions"): {403, 409},
+        ("get", f"{job_path}/scope-versions"): set(),
+        ("post", f"{job_path}/scope-versions/{{scope_version_id}}/approvals"): {403, 409},
+        ("post", f"{job_path}/change-requests"): {403, 409},
+        ("get", f"{job_path}/change-requests"): set(),
+        (
+            "get",
+            f"{job_path}/change-requests/{{change_request_id}}/evidence/"
+            "{media_asset_id}/read-url",
+        ): {403, 409, 503},
+        ("post", f"{job_path}/change-requests/{{change_request_id}}/clarification"): {
+            403,
+            409,
+        },
+        ("post", f"{job_path}/change-requests/{{change_request_id}}/explanation"): {
+            403,
+            409,
+        },
+        ("post", f"{job_path}/change-requests/{{change_request_id}}/decision"): {403, 409},
+        ("post", f"{job_path}/completion-confirmations"): {403, 409, 503},
+        ("get", f"{job_path}/completion-confirmations"): set(),
+        ("get", f"{job_path}/audit-events"): set(),
+        ("get", f"{job_path}/notifications"): set(),
+        ("post", f"{job_path}/background-jobs"): {403, 409, 503},
+        ("get", f"{job_path}/background-jobs"): set(),
+        ("post", f"{job_path}/background-jobs/{{background_job_id}}/retry"): {403, 409},
+    }
+    documented_statuses = {401, 403, 404, 409, 429, 503}
+    common_statuses = {401, 404, 429}
+    protected_operations = {
+        (method, path): {
+            int(code)
+            for code in operation["responses"]
+            if code.isdigit() and int(code) in documented_statuses
+        }
+        for path, path_item in schema["paths"].items()
+        for method, operation in path_item.items()
+        if operation.get("security") == [{"HTTPBearer": []}]
+    }
+
+    assert protected_operations == {
+        route: common_statuses | failures for route, failures in route_failures.items()
+    }
+    assert schema["components"]["schemas"]["HttpExceptionResponse"] == {
+        "description": (
+            "The string-detail body emitted by the current FastAPI exception handlers."
+        ),
+        "properties": {"detail": {"title": "Detail", "type": "string"}},
+        "required": ["detail"],
+        "title": "HttpExceptionResponse",
+        "type": "object",
+    }
+    assert "ErrorResponse" not in schema["components"]["schemas"]
+    assert "ErrorDetail" not in schema["components"]["schemas"]
+
+    for method, path in route_failures:
+        responses = schema["paths"][path][method]["responses"]
+        for code in common_statuses | route_failures[(method, path)]:
+            assert responses[str(code)]["content"]["application/json"]["schema"] == {
+                "$ref": "#/components/schemas/HttpExceptionResponse"
+            }
+        assert responses["401"]["headers"]["WWW-Authenticate"]["schema"] == {
+            "type": "string",
+            "example": "Bearer",
+        }
+        assert responses["429"]["headers"]["Retry-After"]["schema"] == {
+            "type": "integer",
+            "minimum": 1,
+        }
+
+
 def test_healthcheck_reports_runtime_without_secrets() -> None:
     settings = Settings(environment=AppEnvironment.TEST)
 

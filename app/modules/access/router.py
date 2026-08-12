@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
+from app.api.errors import protected_error_responses
 from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import BearerSecret, CurrentActor, authorize_job_actor
 from app.modules.access.schemas import AccessLinkResponse
@@ -24,6 +25,10 @@ router = APIRouter(prefix="/move-jobs", tags=["access"])
     "/{job_id}/participants/{participant_id}/access-links",
     response_model=AccessLinkResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ),
     summary="자기 역할 링크 회전",
 )
 async def create_access_link_endpoint(
@@ -60,6 +65,10 @@ async def create_access_link_endpoint(
 @router.post(
     "/{job_id}/access-links/{access_link_id}/revoke",
     status_code=status.HTTP_204_NO_CONTENT,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ),
     summary="참여자 역할 링크 철회",
 )
 async def revoke_access_link_endpoint(

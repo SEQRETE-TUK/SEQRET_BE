@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+from app.api.errors import protected_error_responses
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.capture.schemas import (
@@ -62,6 +63,10 @@ def storage_error(error: ProviderError) -> HTTPException:
     "/{job_id}/capture-sessions",
     response_model=CaptureSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="촬영 세션 생성",
 )
 async def create_capture_session_endpoint(
@@ -88,6 +93,11 @@ async def create_capture_session_endpoint(
     "/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload",
     response_model=MediaUploadResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     summary="미디어 업로드 URL 발급",
 )
 async def create_media_upload_endpoint(
@@ -132,6 +142,11 @@ async def create_media_upload_endpoint(
 @router.post(
     "/{job_id}/capture-sessions/{capture_session_id}/media-assets/{media_asset_id}/complete",
     response_model=MediaAssetResponse,
+    responses=protected_error_responses(
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     summary="미디어 업로드 완료",
 )
 async def complete_media_upload_endpoint(
