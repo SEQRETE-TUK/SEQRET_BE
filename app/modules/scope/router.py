@@ -7,16 +7,24 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import CurrentActor, authorize_job_actor
-from app.modules.scope.schemas import ScopeVersionCreate, ScopeVersionResponse
+from app.modules.scope.schemas import (
+    ScopeApprovalResult,
+    ScopeVersionCreate,
+    ScopeVersionResponse,
+)
 from app.modules.scope.service import (
+    ScopeApprovalConflictError,
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
+    approve_scope_version,
     create_scope_version,
     list_scope_versions,
 )
 from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["scope"])
+
+APPROVER_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER})
 
 
 @router.post(
@@ -34,7 +42,7 @@ async def create_scope_version_endpoint(
     authorize_job_actor(
         actor,
         job_id,
-        frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER}),
+        APPROVER_ROLES,
     )
     try:
         return await create_scope_version(
@@ -67,3 +75,36 @@ async def list_scope_versions_endpoint(
 ) -> tuple[ScopeVersionResponse, ...]:
     authorize_job_actor(actor, job_id)
     return await list_scope_versions(session, job_id)
+
+
+@router.post(
+    "/{job_id}/scope-versions/{scope_version_id}/approvals",
+    response_model=ScopeApprovalResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="작업범위 버전 확인",
+)
+async def approve_scope_version_endpoint(
+    job_id: UUID,
+    scope_version_id: UUID,
+    actor: CurrentActor,
+    session: Session,
+) -> ScopeApprovalResult:
+    authorize_job_actor(actor, job_id, APPROVER_ROLES)
+    try:
+        return await approve_scope_version(
+            session,
+            job_id,
+            scope_version_id,
+            cast(UUID, actor.participant_id),
+            cast(ParticipantRole, actor.participant_role),
+        )
+    except ScopeResourceNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="scope resource not found",
+        ) from error
+    except ScopeApprovalConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="scope version cannot be approved",
+        ) from error
