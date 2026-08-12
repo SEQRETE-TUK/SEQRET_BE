@@ -35,7 +35,7 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `ARTIFACT_REPOSITORY` | Artifact Registry repository ID |
 | `API_DOMAIN` | Public lowercase API DNS name |
 | `DATABASE_URL_SECRET_ID` | Existing database URL secret ID |
-| `CLOUD_SQL_SOURCE_INSTANCE` | Fixed staging PostgreSQL primary instance ID |
+| `CLOUD_SQL_SOURCE_INSTANCE` | Fixed same-project, same-region staging PostgreSQL primary instance ID used by deploy and recovery |
 | `DB_RECOVERY_CONNECTION_MODE` | Cloud SQL Auth Proxy route: `public` or `private` |
 | `MEDIA_RETENTION_DAYS` | Approved whole-number media retention period, from 1 through 3650 days |
 | `REDIS_URL_SECRET_ID` | Optional Redis URL secret ID |
@@ -43,7 +43,7 @@ Create the database secret and at least one Cloud Monitoring notification channe
 
 The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, impersonate the four runtime service accounts, and access the state prefix. Restrict the Workload Identity Provider to this repository and `main`.
 
-`DATABASE_URL_SECRET_ID` must resolve to a database endpoint reachable from Cloud Run. If the staging database uses private IP or the Cloud SQL connector, provision that network path and the deployment-specific client IAM outside this runtime module before deployment.
+The runtime module mounts `CLOUD_SQL_SOURCE_INSTANCE` at `/cloudsql` for the Gen2 API and migration gate and grants only those service accounts `roles/cloudsql.client`. This staging path requires a public IPv4 Cloud SQL instance; the authenticated proxy does not need an authorized network. Store a psycopg Unix-socket URL such as `postgresql+psycopg://USER:PASSWORD@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE` in `DATABASE_URL_SECRET_ID`, percent-encoding the URL components, and do not expose the database through an unrestricted authorized network. Both runtimes reject a secret whose socket path does not exactly match the mounted instance. The staging workflow caps the API service at two instances with three database connections each so canary revisions fit a small Cloud SQL connection budget.
 
 The database-recovery identity is separate from the deployment identity. Restrict its `roles/iam.workloadIdentityUser` binding to this repository, `main`, and the protected `staging` environment, and grant `secretmanager.versions.access` on `DATABASE_URL_SECRET_ID` only. Its project-level custom role needs `cloudsql.instances.clone`, `cloudsql.instances.get`, `cloudsql.instances.list`, `cloudsql.instances.connect`, `cloudsql.instances.update`, and `cloudsql.instances.delete`; it also needs the Cloud SQL operation access used by `gcloud operations get/list/wait/cancel` and `serviceusage.services.use`. Those Cloud SQL permissions are project-wide rather than instance-scoped, so the protected environment and the workflow's generated-target guards are part of the security boundary; use a dedicated staging project. The source instance, SQL Admin API, PITR retention window, quotas, private-service address capacity, organization policies governing authorized networks, and any CMEK service-agent permissions remain externally managed.
 

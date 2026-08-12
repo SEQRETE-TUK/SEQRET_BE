@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from app.config import AppEnvironment, Settings
 from app.entrypoints import migrate
+from app.platform.db import DatabaseConfigurationError
 
 
 def test_migration_gate_upgrades_single_head_and_shuts_down(
@@ -27,15 +28,34 @@ def test_migration_gate_upgrades_single_head_and_shuts_down(
     monkeypatch.setattr("app.entrypoints.migrate.command.upgrade", upgrade)
     settings = Settings(
         environment=AppEnvironment.TEST,
-        database_url=SecretStr("postgresql+psycopg://seqret:p%40ss@localhost/seqret"),
+        database_url=SecretStr(
+            "postgresql+psycopg://seqret:p%40ss@/seqret"
+            "?host=/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db"
+        ),
+        database_socket_path="/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db",
     )
 
     migrate.run(settings)
 
     config, revision = upgrade.call_args.args
-    assert config.get_main_option("sqlalchemy.url").endswith("p%40ss@localhost/seqret")
+    assert config.get_main_option("sqlalchemy.url").endswith(
+        "p%40ss@/seqret?host=/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db"
+    )
     assert revision == "head"
     observability.shutdown.assert_called_once_with()
+
+
+def test_migration_gate_rejects_unexpected_database_socket() -> None:
+    settings = Settings(
+        environment=AppEnvironment.TEST,
+        database_url=SecretStr(
+            "postgresql+psycopg://seqret:secret@/seqret?host=/cloudsql/expected&hostaddr=10.0.0.5"
+        ),
+        database_socket_path="/cloudsql/expected",
+    )
+
+    with pytest.raises(DatabaseConfigurationError, match="DATABASE_SOCKET_PATH"):
+        migrate.run(settings)
 
 
 def test_migration_gate_requires_database_configuration() -> None:

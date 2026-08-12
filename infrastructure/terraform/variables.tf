@@ -143,6 +143,19 @@ variable "database_url_secret_id" {
   }
 }
 
+variable "cloud_sql_instance_id" {
+  description = "Existing same-project, same-region Cloud SQL PostgreSQL instance ID."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z](?:[a-z0-9-]{0,96}[a-z0-9])?$", var.cloud_sql_instance_id)) &&
+      length("/cloudsql/${var.project_id}:${var.region}:${var.cloud_sql_instance_id}/.s.PGSQL.5432") <= 107
+    )
+    error_message = "cloud_sql_instance_id must be valid and keep the Unix socket path at most 107 characters."
+  }
+}
+
 variable "redis_url_secret_id" {
   description = "Optional existing Secret Manager secret ID containing the Redis URL."
   type        = string

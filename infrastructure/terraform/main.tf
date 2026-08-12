@@ -5,6 +5,7 @@ resource "google_project_service" "required" {
     "iam.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
+    "sqladmin.googleapis.com",
   ])
 
   project            = var.project_id
@@ -47,14 +48,15 @@ resource "google_cloud_run_v2_service" "api" {
   default_uri_disabled = true
   launch_stage         = "BETA"
 
-  template {
-    labels          = merge(local.common_labels, { readiness_contract = "v1" })
-    service_account = google_service_account.api.email
+  scaling {
+    max_instance_count = var.api_max_instances
+  }
 
-    scaling {
-      min_instance_count = 0
-      max_instance_count = var.api_max_instances
-    }
+  template {
+    labels                           = merge(local.common_labels, { readiness_contract = "v1" })
+    service_account                  = google_service_account.api.email
+    execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
+    max_instance_request_concurrency = 3
 
     containers {
       name    = "api"
@@ -73,6 +75,11 @@ resource "google_cloud_run_v2_service" "api" {
           name  = env.key
           value = env.value
         }
+      }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
       }
 
       dynamic "env" {
@@ -117,6 +124,13 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
     }
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [local.cloud_sql_instance_connection_name]
+      }
+    }
   }
 
   dynamic "traffic" {
@@ -138,6 +152,7 @@ resource "google_cloud_run_v2_service" "api" {
     google_project_service.observability,
     google_project_iam_member.api_trace_writer,
     google_project_iam_member.api_telemetry_consumer,
+    google_project_iam_member.api_cloud_sql_client,
     google_secret_manager_secret_iam_member.api_database,
     google_secret_manager_secret_iam_member.api_redis,
   ]
@@ -149,6 +164,18 @@ resource "google_service_account" "migration" {
   display_name = "SEQRET ${var.environment} schema migration runtime"
 
   depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "api_cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "migration_cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.migration.email}"
 }
 
 resource "google_artifact_registry_repository" "backend" {
@@ -204,11 +231,23 @@ resource "google_cloud_run_v2_job" "migration" {
           }
         }
 
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+
         resources {
           limits = {
             cpu    = "1"
             memory = "512Mi"
           }
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [local.cloud_sql_instance_connection_name]
         }
       }
     }
@@ -219,6 +258,7 @@ resource "google_cloud_run_v2_job" "migration" {
     google_project_service.observability,
     google_project_iam_member.migration_trace_writer,
     google_project_iam_member.migration_telemetry_consumer,
+    google_project_iam_member.migration_cloud_sql_client,
     google_secret_manager_secret_iam_member.migration_database,
   ]
 }

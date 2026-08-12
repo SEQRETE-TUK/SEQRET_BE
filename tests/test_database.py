@@ -49,8 +49,12 @@ def test_database_engine_rejects_invalid_configuration(
 
 @pytest.mark.anyio
 async def test_database_engine_uses_async_postgresql_without_exposing_password() -> None:
+    socket_path = "/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db"
     settings = Settings(
-        database_url=SecretStr("postgresql+psycopg://seqret:database-secret@localhost/seqret"),
+        database_url=SecretStr(
+            f"postgresql+psycopg://seqret:database-secret@/seqret?host={socket_path}"
+        ),
+        database_socket_path=socket_path,
         database_pool_size=3,
         database_max_overflow=4,
         database_pool_timeout_seconds=12.5,
@@ -60,10 +64,31 @@ async def test_database_engine_uses_async_postgresql_without_exposing_password()
     try:
         assert engine.url.drivername == "postgresql+psycopg"
         assert engine.url.database == "seqret"
+        assert engine.url.query["host"] == socket_path
+        _, connect_args = engine.dialect.create_connect_args(engine.url)
+        assert connect_args["host"] == socket_path
         assert "database-secret" not in str(engine.url)
         assert "database-secret" not in repr(engine)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+psycopg://seqret:secret@/seqret?host=/cloudsql/other",
+        ("postgresql+psycopg://seqret:secret@/seqret?host=/cloudsql/expected&hostaddr=10.0.0.5"),
+        ("postgresql+psycopg://seqret:secret@/seqret?host=/cloudsql/expected&dbname=other"),
+    ],
+)
+def test_database_engine_rejects_unexpected_socket(database_url: str) -> None:
+    settings = Settings(
+        database_url=SecretStr(database_url),
+        database_socket_path="/cloudsql/expected",
+    )
+
+    with pytest.raises(DatabaseConfigurationError, match="DATABASE_SOCKET_PATH"):
+        create_database_engine(settings)
 
 
 @pytest.mark.anyio

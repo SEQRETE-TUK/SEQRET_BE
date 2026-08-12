@@ -9,5 +9,6 @@ htmlcov
 infrastructure
 tests
 *.log
+gha-creds-*.json
 .env*
 !.env.example

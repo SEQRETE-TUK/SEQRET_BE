@@ -4,11 +4,12 @@ locals {
     production = "prd"
   }[var.environment]
 
-  resource_stem  = "${var.name_prefix}-${local.environment_abbreviation}"
-  api_name       = "${local.resource_stem}-api"
-  worker_name    = "${local.resource_stem}-worker"
-  job_name       = "${local.resource_stem}-job"
-  migration_name = "${local.resource_stem}-migrate"
+  resource_stem                      = "${var.name_prefix}-${local.environment_abbreviation}"
+  api_name                           = "${local.resource_stem}-api"
+  worker_name                        = "${local.resource_stem}-worker"
+  job_name                           = "${local.resource_stem}-job"
+  migration_name                     = "${local.resource_stem}-migrate"
+  cloud_sql_instance_connection_name = "${var.project_id}:${var.region}:${var.cloud_sql_instance_id}"
 
   common_labels = merge(
     var.labels,
@@ -27,6 +28,7 @@ locals {
   }
 
   observed_runtime_environment = merge(local.runtime_environment, {
+    SEQRET_DATABASE_SOCKET_PATH               = "/cloudsql/${local.cloud_sql_instance_connection_name}"
     SEQRET_GCP_PROJECT_ID                     = var.project_id
     SEQRET_OTEL_ENABLED                       = "true"
     SEQRET_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://telemetry.googleapis.com:443/v1/traces"
@@ -34,7 +36,9 @@ locals {
   })
 
   api_runtime_environment = merge(local.observed_runtime_environment, {
-    SEQRET_MEDIA_RETENTION_DAYS = tostring(var.media_retention_days)
+    SEQRET_DATABASE_MAX_OVERFLOW = "1"
+    SEQRET_DATABASE_POOL_SIZE    = "2"
+    SEQRET_MEDIA_RETENTION_DAYS  = tostring(var.media_retention_days)
   })
 
   api_secret_environment = merge(
