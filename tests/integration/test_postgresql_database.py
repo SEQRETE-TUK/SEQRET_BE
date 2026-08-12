@@ -69,7 +69,7 @@ from app.modules.move_job.schemas import (
     RoomZoneCreate,
 )
 from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
-from app.modules.scope.models import ChangeRequestStatus
+from app.modules.scope.models import ChangeRequestStatus, ScopeApproval
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
     ChangeRequestCreate,
@@ -1043,6 +1043,23 @@ async def test_scope_lock_and_edit_race_allow_one_winner_on_postgresql() -> None
             outcomes = await gather(finish_approval(), append_child())
             async with transactional_session(factory) as session:
                 versions = await list_scope_versions(session, created.job.id)
+                approval_roles = set(
+                    (
+                        await session.scalars(
+                            select(ScopeApproval.role).where(
+                                ScopeApproval.scope_version_id == root.id
+                            )
+                        )
+                    ).all()
+                )
+                lock_events = (
+                    await session.scalars(
+                        select(OutboxEvent).where(
+                            OutboxEvent.aggregate_id == created.job.id,
+                            OutboxEvent.event_type == DomainEventType.SCOPE_LOCKED_V1,
+                        )
+                    )
+                ).all()
 
             assert sorted(outcomes) in (
                 ["edit_conflict", "locked"],
@@ -1051,10 +1068,17 @@ async def test_scope_lock_and_edit_race_allow_one_winner_on_postgresql() -> None
             if outcomes[0] == "locked":
                 assert len(versions) == 1
                 assert versions[0].locked_at is not None
+                assert approval_roles == {
+                    ParticipantRole.CUSTOMER,
+                    ParticipantRole.COMPANY_MANAGER,
+                }
+                assert len(lock_events) == 1
             else:
                 assert len(versions) == 2
                 assert versions[0].locked_at is None
                 assert versions[1].parent_version_id == root.id
+                assert approval_roles == {ParticipantRole.CUSTOMER}
+                assert lock_events == []
         finally:
             await engine.dispose()
 

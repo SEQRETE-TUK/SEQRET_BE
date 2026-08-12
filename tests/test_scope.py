@@ -346,6 +346,54 @@ async def test_scope_approvals_lock_same_version_and_block_further_edit(
 
 
 @pytest.mark.anyio
+async def test_scope_approvals_do_not_combine_across_versions(
+    scope_client: AsyncClient,
+) -> None:
+    created = await _create_job(scope_client)
+    job_id = created["job"]["id"]
+    customer_secret = _secret(created, "customer")
+    manager_secret = _secret(created, "company_manager")
+    versions_url = f"/api/v1/move-jobs/{job_id}/scope-versions"
+    first = await scope_client.post(
+        versions_url,
+        headers=_headers(customer_secret),
+        json=_scope_payload(created),
+    )
+    first_approval_url = f"{versions_url}/{first.json()['id']}/approvals"
+    assert (
+        await scope_client.post(first_approval_url, headers=_headers(customer_secret))
+    ).status_code == 201
+
+    second_payload = _scope_payload(created)
+    second_payload["parent_version_id"] = first.json()["id"]
+    second = await scope_client.post(
+        versions_url,
+        headers=_headers(manager_secret),
+        json=second_payload,
+    )
+    second_approval_url = f"{versions_url}/{second.json()['id']}/approvals"
+    manager_approval = await scope_client.post(
+        second_approval_url,
+        headers=_headers(manager_secret),
+    )
+
+    assert manager_approval.status_code == 201
+    assert manager_approval.json()["version"]["approval_roles"] == ["company_manager"]
+    assert manager_approval.json()["version"]["locked_at"] is None
+
+    customer_approval = await scope_client.post(
+        second_approval_url,
+        headers=_headers(customer_secret),
+    )
+    assert customer_approval.status_code == 201
+    assert customer_approval.json()["version"]["approval_roles"] == [
+        "customer",
+        "company_manager",
+    ]
+    assert customer_approval.json()["version"]["locked_at"] is not None
+
+
+@pytest.mark.anyio
 async def test_scope_approval_rejects_past_version_role_and_cross_job(
     scope_client: AsyncClient,
 ) -> None:
