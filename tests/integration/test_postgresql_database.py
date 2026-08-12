@@ -29,7 +29,15 @@ from app.modules.capture.service import (
     create_capture_session,
     create_media_upload,
 )
-from app.modules.move_job.models import LocationKind
+from app.modules.completion.models import AuditEventType
+from app.modules.completion.schemas import CompletionConfirmationCreate
+from app.modules.completion.service import (
+    CompletionConflictError,
+    confirm_completion,
+    list_audit_events,
+    list_completion_confirmations,
+)
+from app.modules.move_job.models import LocationKind, MoveJobStatus
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
@@ -62,8 +70,9 @@ from app.platform.db import create_database_engine, create_session_factory, tran
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
-ALEMBIC_PREVIOUS = "a_06_0001"
-ALEMBIC_HEAD = "a_07_0001"
+ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
+ALEMBIC_PREVIOUS = "a_07_0001"
+ALEMBIC_HEAD = "a_08_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -76,6 +85,9 @@ BUSINESS_TABLES = {
     "scope_approval",
     "change_request",
     "change_request_evidence",
+    "completion_confirmation",
+    "completion_evidence",
+    "audit_event",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -171,6 +183,14 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
+            assert "completion_confirmation" not in inspect(engine).get_table_names()
+            assert "completion_evidence" not in inspect(engine).get_table_names()
+            assert "audit_event" not in inspect(engine).get_table_names()
+            assert "completed_at" not in {
+                column["name"] for column in inspect(engine).get_columns("move_job")
+            }
+
+            command.downgrade(configuration, ALEMBIC_CHANGE_PREVIOUS)
             assert "change_request" not in inspect(engine).get_table_names()
             assert "change_request_evidence" not in inspect(engine).get_table_names()
             assert "scope_approval" in inspect(engine).get_table_names()
@@ -249,6 +269,155 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 ParticipantRole.CUSTOMER,
                 ParticipantRole.FIELD_WORKER,
             ]
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_completion_confirmations_serialize_and_complete_once_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        storage = FakeObjectStorage()
+        job_command = MoveJobCreate(
+            title="Completion race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                participants = {
+                    participant.role: participant for participant in created.job.participants
+                }
+                customer = participants[ParticipantRole.CUSTOMER]
+                manager = participants[ParticipantRole.COMPANY_MANAGER]
+                worker = participants[ParticipantRole.FIELD_WORKER]
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                root = await create_scope_version(
+                    session,
+                    created.job.id,
+                    customer.id,
+                    ScopeVersionCreate(
+                        content=ScopeContent(
+                            items=(
+                                ScopeItem(
+                                    item_key="sofa",
+                                    room_zone_id=room_zone_id,
+                                    description="Original sofa",
+                                ),
+                            )
+                        )
+                    ),
+                )
+                for participant, role in (
+                    (customer, ParticipantRole.CUSTOMER),
+                    (manager, ParticipantRole.COMPANY_MANAGER),
+                ):
+                    await approve_scope_version(
+                        session,
+                        created.job.id,
+                        root.id,
+                        participant.id,
+                        role,
+                    )
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    worker.id,
+                )
+                upload = await create_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    worker.id,
+                    MediaUploadCreate(
+                        room_zone_id=room_zone_id,
+                        media_purpose=MediaPurpose.COMPLETION,
+                        content_type="image/jpeg",
+                        content_length=16,
+                    ),
+                )
+
+            object_key = upload.upload_url.removeprefix("https://storage.invalid/upload/")
+            storage.metadata[object_key] = StorageObjectMetadata(
+                object_key=object_key,
+                content_type="image/jpeg",
+                size_bytes=16,
+                sha256_hex="f" * 64,
+            )
+            async with transactional_session(factory) as session:
+                await complete_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    upload.asset.id,
+                    worker.id,
+                )
+
+            completion = CompletionConfirmationCreate(
+                scope_version_id=root.id,
+                evidence_media_asset_ids=(upload.asset.id,),
+            )
+
+            async def confirm(participant_id: UUID, role: ParticipantRole) -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await confirm_completion(
+                            session,
+                            created.job.id,
+                            participant_id,
+                            role,
+                            completion,
+                        )
+                    return "confirmed"
+                except CompletionConflictError:
+                    return "conflict"
+
+            outcomes = await gather(
+                confirm(customer.id, ParticipantRole.CUSTOMER),
+                confirm(manager.id, ParticipantRole.COMPANY_MANAGER),
+            )
+            async with transactional_session(factory) as session:
+                confirmations = await list_completion_confirmations(
+                    session,
+                    created.job.id,
+                )
+                events = await list_audit_events(session, created.job.id)
+                loaded = await get_move_job(session, created.job.id)
+
+            assert tuple(outcomes) == ("confirmed", "confirmed")
+            assert {confirmation.role for confirmation in confirmations} == {
+                ParticipantRole.CUSTOMER,
+                ParticipantRole.COMPANY_MANAGER,
+            }
+            assert loaded.status is MoveJobStatus.COMPLETED
+            assert loaded.completed_at is not None
+            assert [event.event_type for event in events].count(AuditEventType.JOB_COMPLETED) == 1
         finally:
             await engine.dispose()
 

@@ -45,6 +45,10 @@ class MoveJob(Base):
             "status IN ('DRAFT', 'ACTIVE', 'COMPLETED', 'CANCELED')",
             name="move_job_status",
         ),
+        CheckConstraint(
+            "(status = 'COMPLETED') = (completed_at IS NOT NULL)",
+            name="move_job_completion",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -70,6 +74,7 @@ class MoveJob(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     participants: Mapped[list["JobParticipant"]] = relationship(
         back_populates="job",

@@ -16,12 +16,19 @@ from app.modules.capture.schemas import (
     MediaUploadCreate,
     MediaUploadResponse,
 )
+from app.modules.completion.models import AuditEventType
+from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, RoomZone
 
 UPLOAD_URL_TTL_SECONDS = 15 * 60
 STORAGE_TIMEOUT_SECONDS = 5.0
 CAPTURE_PURPOSES = frozenset(
-    {MediaPurpose.INVENTORY, MediaPurpose.CONDITION, MediaPurpose.CHANGE_EVIDENCE}
+    {
+        MediaPurpose.INVENTORY,
+        MediaPurpose.CONDITION,
+        MediaPurpose.CHANGE_EVIDENCE,
+        MediaPurpose.COMPLETION,
+    }
 )
 
 
@@ -188,5 +195,17 @@ async def complete_media_upload(
     asset.sha256_hex = metadata.sha256_hex
     asset.generation = metadata.generation
     asset.uploaded_at = utc_now()
+    if asset.media_purpose is MediaPurpose.COMPLETION:
+        add_audit_event(
+            session,
+            job_id,
+            AuditEventType.COMPLETION_MEDIA_UPLOADED,
+            actor_participant_id=participant_id,
+            payload={
+                "capture_session_id": str(capture_session_id),
+                "media_asset_id": str(asset.id),
+                "room_zone_id": str(asset.room_zone_id),
+            },
+        )
     await session.flush()
     return _asset_response(asset)
