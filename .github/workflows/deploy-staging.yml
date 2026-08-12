@@ -47,6 +47,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Staging deployments must run from the main branch." >&2
+            exit 1
+          fi
           required_variables=(
             GCP_PROJECT_ID
             GCP_REGION
@@ -60,8 +64,10 @@ jobs:
               exit 1
             fi
           done
-          if [[ ! "${CONTAINER_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]]; then
-            echo "container_image must be pinned by sha256 digest." >&2
+          expected_image_prefix="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/"
+          if [[ "${CONTAINER_IMAGE}" != "${expected_image_prefix}"* ]] ||
+             [[ ! "${CONTAINER_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "container_image must be a same-project Artifact Registry image pinned by sha256 digest." >&2
             exit 1
           fi
 
