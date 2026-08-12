@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from app.config import (
     CLOUD_RUN_SERVICE_NAME_MAX_LENGTH,
@@ -43,6 +43,16 @@ def test_settings_reject_non_string_log_level() -> None:
 
 def test_get_settings_caches_one_immutable_instance() -> None:
     assert get_settings() is get_settings()
+
+
+def test_database_url_is_hidden_from_settings_representation() -> None:
+    settings = Settings(
+        database_url=SecretStr("postgresql+psycopg://seqret:database-secret@localhost/seqret")
+    )
+
+    assert settings.database_url is not None
+    assert settings.database_url.get_secret_value().endswith("@localhost/seqret")
+    assert "database-secret" not in repr(settings)
 
 
 def test_settings_strip_human_readable_names() -> None:
