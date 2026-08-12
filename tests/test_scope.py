@@ -19,7 +19,7 @@ from app.config import AppEnvironment, Settings
 from app.contracts.actor import ParticipantRole
 from app.contracts.primitives import utc_now
 from app.main import create_app
-from app.modules.scope.models import ScopeVersion
+from app.modules.scope.models import ScopeApproval, ScopeVersion
 from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
 from app.modules.scope.service import (
     ScopeApprovalConflictError,
@@ -542,8 +542,20 @@ async def test_scope_version_list_uses_two_selects_for_many_versions(tmp_path: P
         )
         for index in range(1, 4)
     ]
+    approvals = [
+        ScopeApproval(
+            scope_version_id=version_ids[0],
+            participant_id=uuid4(),
+            role=ParticipantRole.CUSTOMER,
+        ),
+        ScopeApproval(
+            scope_version_id=version_ids[1],
+            participant_id=uuid4(),
+            role=ParticipantRole.COMPANY_MANAGER,
+        ),
+    ]
     async with factory.begin() as session:
-        session.add_all(versions)
+        session.add_all([*versions, *approvals])
 
     selects = 0
 
@@ -561,10 +573,21 @@ async def test_scope_version_list_uses_two_selects_for_many_versions(tmp_path: P
     event.listen(engine.sync_engine, "before_cursor_execute", count_selects)
     try:
         async with factory() as session:
+            empty_responses = await list_scope_versions(session, uuid4())
+            empty_selects = selects
+            selects = 0
             responses = await list_scope_versions(session, job_id)
+            populated_selects = selects
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", count_selects)
         await engine.dispose()
 
+    assert empty_responses == ()
+    assert empty_selects == 1
     assert [response.sequence_number for response in responses] == [1, 2, 3]
-    assert selects == 2
+    assert [response.approval_roles for response in responses] == [
+        (ParticipantRole.CUSTOMER,),
+        (ParticipantRole.COMPANY_MANAGER,),
+        (),
+    ]
+    assert populated_selects == 2
