@@ -16,10 +16,21 @@ from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
-from app.platform.db import create_database_engine
+from app.contracts.actor import ParticipantRole
+from app.modules.move_job.models import LocationKind
+from app.modules.move_job.schemas import (
+    LocationCreate,
+    MoveJobCreate,
+    ParticipantCreate,
+    RoomZoneCreate,
+)
+from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
+from app.platform.db import create_database_engine, create_session_factory, transactional_session
 
 ROOT = Path(__file__).resolve().parents[2]
-ALEMBIC_HEAD = "fnd_a02_0001"
+ALEMBIC_BASELINE = "fnd_a02_0001"
+ALEMBIC_HEAD = "a_01_0001"
+BUSINESS_TABLES = {"job_participant", "location", "move_job", "room_zone"}
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
 
@@ -101,17 +112,22 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
 
             command.upgrade(configuration, "head")
             assert _current_revision(engine) == ALEMBIC_HEAD
+            assert set(inspect(engine).get_table_names()) >= BUSINESS_TABLES
 
             command.downgrade(configuration, "base")
             assert _current_revision(engine) is None
 
+            command.upgrade(configuration, ALEMBIC_BASELINE)
             probe.create(engine)
             command.upgrade(configuration, "head")
 
             assert _current_revision(engine) == ALEMBIC_HEAD
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
-            command.downgrade(configuration, "base")
+            command.downgrade(configuration, ALEMBIC_BASELINE)
+            assert BUSINESS_TABLES.isdisjoint(inspect(engine).get_table_names())
+            assert "existing_schema_probe" in inspect(engine).get_table_names()
+
             command.upgrade(configuration, "head")
             assert _current_revision(engine) == ALEMBIC_HEAD
         finally:
@@ -129,3 +145,52 @@ async def test_async_postgresql_engine_connects() -> None:
             assert await connection.scalar(text("SELECT 1")) == 1
     finally:
         await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_move_job_commands_round_trip_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        configuration = _alembic_config(schema_url)
+        command.upgrade(configuration, "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        command_data = MoveJobCreate(
+            title="강남 이사",
+            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="출발지",
+                    room_zones=(RoomZoneCreate(name="거실", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+
+            async with transactional_session(factory) as session:
+                connected = await connect_participant(
+                    session,
+                    created.id,
+                    ParticipantCreate(
+                        role=ParticipantRole.FIELD_WORKER,
+                        display_name="현장 담당",
+                    ),
+                )
+
+            async with transactional_session(factory) as session:
+                loaded = await get_move_job(session, created.id)
+
+            assert connected == loaded
+            assert [participant.role for participant in loaded.participants] == [
+                ParticipantRole.CUSTOMER,
+                ParticipantRole.FIELD_WORKER,
+            ]
+        finally:
+            await engine.dispose()

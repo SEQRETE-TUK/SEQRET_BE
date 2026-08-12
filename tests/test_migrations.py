@@ -9,7 +9,9 @@ from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect,
 from sqlalchemy.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
-ALEMBIC_HEAD = "fnd_a02_0001"
+ALEMBIC_BASELINE = "fnd_a02_0001"
+ALEMBIC_HEAD = "a_01_0001"
+BUSINESS_TABLES = {"job_participant", "location", "move_job", "room_zone"}
 
 
 def _alembic_config(database_url: str | None = None) -> Config:
@@ -43,17 +45,22 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
     try:
         command.upgrade(configuration, "head")
         assert _current_revision(engine) == ALEMBIC_HEAD
+        assert set(inspect(engine).get_table_names()) >= BUSINESS_TABLES
 
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
 
+        command.upgrade(configuration, ALEMBIC_BASELINE)
         probe_metadata.create_all(engine)
         command.upgrade(configuration, "head")
 
         assert _current_revision(engine) == ALEMBIC_HEAD
         assert "existing_schema_probe" in inspect(engine).get_table_names()
 
-        command.downgrade(configuration, "base")
+        command.downgrade(configuration, ALEMBIC_BASELINE)
+        assert BUSINESS_TABLES.isdisjoint(inspect(engine).get_table_names())
+        assert "existing_schema_probe" in inspect(engine).get_table_names()
+
         command.upgrade(configuration, "head")
         assert _current_revision(engine) == ALEMBIC_HEAD
     finally:
