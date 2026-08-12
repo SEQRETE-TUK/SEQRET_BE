@@ -44,7 +44,7 @@ async def run(settings: Settings | None = None) -> int:
                 lease_seconds=resolved.outbox_lease_seconds,
                 publish_timeout_seconds=resolved.event_publish_timeout_seconds,
             )
-            failed = result.failed > 0
+            failed = result.failed > 0 or result.claimed != result.published + result.failed
             if failed:
                 span.set_status(Status(StatusCode.ERROR))
             log = observability.logger.error if failed else observability.logger.info
@@ -55,7 +55,7 @@ async def run(settings: Settings | None = None) -> int:
                     "outcome": "error" if failed else "success",
                 },
             )
-    return int(result.failed > 0)
+    return int(failed)
 
 
 def main() -> None:
