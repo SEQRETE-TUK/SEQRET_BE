@@ -103,10 +103,14 @@ resource "google_compute_url_map" "api" {
 
 resource "google_compute_managed_ssl_certificate" "api" {
   project = var.project_id
-  name    = "${local.api_name}-certificate"
+  name    = "${local.api_name}-cert-${substr(sha256(var.api_domain), 0, 8)}"
 
   managed {
     domains = [var.api_domain]
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   depends_on = [google_project_service.required]
@@ -172,8 +176,11 @@ resource "google_monitoring_uptime_check_config" "api" {
 
   user_labels = local.common_labels
 
+  lifecycle {
+    create_before_destroy = true
+  }
+
   depends_on = [
-    google_compute_global_forwarding_rule.api_https,
     google_project_service.observability,
   ]
 }
