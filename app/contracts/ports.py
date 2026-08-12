@@ -4,14 +4,13 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Protocol, Self, runtime_checkable
 
-from pydantic import Field, JsonValue, StringConstraints, model_validator
+from pydantic import ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
 from app.contracts.model import ContractModel
 from app.contracts.primitives import IdempotencyKey
 
-CREATE_ONLY_UPLOAD_HEADER = ("x-goog-if-generation-match", "0")
 StorageObjectGeneration = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
@@ -19,17 +18,18 @@ StorageObjectGeneration = Annotated[
 
 
 class StorageUploadTarget(ContractModel):
-    """Signed upload URL and every header the client must send unchanged."""
+    """Opaque upload URL and every provider header the client must send unchanged."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
 
     url: Annotated[str, Field(min_length=1, repr=False)]
     headers: Annotated[tuple[tuple[str, str], ...], Field(min_length=1, repr=False)]
 
     @model_validator(mode="after")
-    def require_create_only_upload(self) -> Self:
-        name, value = CREATE_ONLY_UPLOAD_HEADER
-        headers = {header_name.lower(): header_value for header_name, header_value in self.headers}
-        if len(headers) != len(self.headers) or headers.get(name) != value:
-            raise ValueError("upload headers must enforce create-only object creation")
+    def require_distinct_header_names(self) -> Self:
+        names = [name.lower() for name, _ in self.headers]
+        if any(not name for name in names) or len(set(names)) != len(names):
+            raise ValueError("upload header names must be nonempty and unique")
         return self
 
 
@@ -83,7 +83,9 @@ class StoragePort(Protocol):
         content_length: int,
         expires_in_seconds: int,
         timeout_seconds: float,
-    ) -> StorageUploadTarget: ...
+    ) -> StorageUploadTarget:
+        """Return a provider-specific request that only creates an absent object."""
+        ...
 
     async def create_read_url(
         self,

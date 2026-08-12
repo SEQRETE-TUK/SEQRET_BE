@@ -19,7 +19,7 @@
 - 역할값은 `customer`, `company_manager`, `field_worker`다. access link는 개인 신원을 증명하는 로그인 계정이 아니라 한 작업과 역할에 묶인 capability다.
 - `POST /move-jobs`는 공개 bootstrap route다. 정확히 세 역할의 capability secret을 한 번만 반환하며, 호출자는 이를 각 참여자에게 전달할 신뢰 주체여야 한다. 신뢰 bootstrap과 전달 채널이 정해지기 전에는 일반 FE 연동 대상으로 취급하지 않는다.
 - 다른 작업의 resource는 `404`, 역할 부족은 `403`, 유효한 access link의 제한 초과는 `429`와 `Retry-After`로 응답한다. 현재 오류 body는 FastAPI의 `detail` 기반이며 별도 machine error code는 계약하지 않았다.
-- upload/read signed URL은 **opaque 문자열**이다. decode, 재직렬화, query 정렬, host 소문자화, 기본 port 제거를 하지 말고 받은 문자열을 그대로 사용한다. upload 응답의 `upload_headers`도 그대로 PUT에 적용해야 하며 `x-goog-if-generation-match: 0`을 빼면 안 된다.
+- upload/read signed URL은 **opaque 문자열**이다. decode, 재직렬화, query 정렬, host 소문자화, 기본 port 제거를 하지 말고 받은 문자열을 그대로 사용한다. upload 응답의 `upload_headers`도 key·value를 정규화하지 않고 모두 PUT에 적용한다. GCS target에는 요청 MIME type의 `Content-Type`과 `x-goog-if-generation-match: 0`이 포함돼야 하며 어느 쪽도 빼면 안 된다.
 - secret 또는 signed URL을 담는 응답은 `Cache-Control: no-store`다. PWA cache, 브라우저 영구 저장소, 로그와 analytics에 남기지 않는다.
 - upload 완료 요청에 object generation을 보내지 않는다. FE는 발급받은 URL과 `upload_headers`로 PUT하고, BE가 storage metadata의 object key, MIME type, 크기와 generation을 검증한다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
@@ -42,7 +42,7 @@
 | [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35) | AI 분석 실행·초안 저장 | 최신 `main` rebase, 단일 Alembic head와 full CI 확인 후 A 승인 |
 | [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36) | 미디어 삭제 handler | 최신 `main` rebase와 full CI 후 독립 병합 가능; runtime 활성화 전 B-01/B-02 배선 확인 |
 
-Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막아야 한다. 저장된 object generation은 read/delete까지 그대로 전달하며, B handler가 A 상태를 우회 갱신하면 안 된다. FND-A03 계약 PR을 먼저 병합한 뒤 B Storage adapter PR을 rebase하며, 그 전 반환형은 호환되지 않는다.
+Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막아야 한다. 저장된 object generation은 read/delete까지 그대로 전달하며, B handler가 A 상태를 우회 갱신하면 안 된다. 공용 `StorageUploadTarget`은 provider header를 해석하지 않으므로, B의 GCS adapter가 `Content-Type`과 `x-goog-if-generation-match: 0`을 V4 서명에 포함하고 같은 값을 target으로 반환하는 adapter contract test를 통과한 뒤 병합한다.
 
 ## staging 운영 증적
 

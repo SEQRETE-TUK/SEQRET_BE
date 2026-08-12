@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.contracts import (
-    CREATE_ONLY_UPLOAD_HEADER,
     AIProviderPort,
     AnalysisRequest,
     AnalysisResult,
@@ -63,7 +62,10 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
         timeout_seconds=2,
     )
     assert upload.url == "https://storage.invalid/upload/jobs/1/photo.jpg"
-    assert upload.headers == (CREATE_ONLY_UPLOAD_HEADER,)
+    assert upload.headers == (
+        ("Content-Type", "image/jpeg"),
+        ("x-goog-if-generation-match", "0"),
+    )
     assert (
         await storage.create_read_url(
             object_key="jobs/1/photo.jpg",
@@ -122,17 +124,22 @@ async def test_storage_fake_preserves_a_different_generation_and_accepts_missing
     assert storage.deleted_keys == set()
 
 
-@pytest.mark.parametrize(
-    "headers",
-    [
-        (("content-type", "x"),),
-        (CREATE_ONLY_UPLOAD_HEADER, ("X-Goog-If-Generation-Match", "1")),
-    ],
-)
-def test_storage_upload_target_requires_create_only_header(
+def test_storage_upload_target_preserves_provider_opaque_values() -> None:
+    url = "  https://storage.invalid/upload/%2F?X-Signature=A%2B  "
+    headers = (("If-None-Match", "*"), ("X-Signed-Exact", "  keep both spaces  "))
+
+    target = StorageUploadTarget(url=url, headers=headers)
+
+    assert target.url == url
+    assert target.headers == headers
+    assert "X-Signature" not in repr(target)
+
+
+@pytest.mark.parametrize("headers", [(("", "x"),), (("X-Signed", "1"), ("x-signed", "2"))])
+def test_storage_upload_target_rejects_invalid_header_names(
     headers: tuple[tuple[str, str], ...],
 ) -> None:
-    with pytest.raises(ValueError, match="create-only"):
+    with pytest.raises(ValueError, match="nonempty and unique"):
         StorageUploadTarget(
             url="https://storage.invalid/upload",
             headers=headers,

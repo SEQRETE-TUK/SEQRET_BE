@@ -22,10 +22,10 @@
 
 로컬 fake는 실제 adapter와 같은 Protocol을 만족하고 멱등 동작을 contract test로 검증한다.
 
-- `StoragePort.create_upload_url`은 immutable `StorageUploadTarget`을 반환한다. `headers`에는 `x-goog-if-generation-match: 0`이 반드시 있고, API는 URL 원문과 함께 이를 `upload_headers`로 전달한다. 클라이언트는 모든 header를 변경 없이 PUT에 보내 객체가 없을 때만 생성되게 한다.
+- `StoragePort.create_upload_url`은 객체가 없을 때만 생성하는 immutable `StorageUploadTarget`을 반환한다. 공용 모델은 provider별 URL과 header를 해석하거나 정규화하지 않는 opaque bag이며, API는 그 값을 `upload_url`과 `upload_headers`로 정확히 전달한다. 각 adapter가 provider별 create-only 조건을 서명하고 서명에 필요한 모든 header를 target에 넣는다. 현재 GCS adapter는 요청 `Content-Type`과 `x-goog-if-generation-match: 0`을 함께 서명·반환해야 한다.
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
 - `StoragePort.delete_object`의 generation은 1~255자의 필수 snapshot이다. snapshot generation이 이미 없으면 멱등 성공하고, 같은 key의 다른 generation 객체는 보존한다.
-- 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하지 않고 원문 그대로 전달한다.
+- 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하거나 문자열을 정규화하지 않고 원문 그대로 전달한다.
 - `AnalysisRequest.source_media_asset_ids[n]`과 `object_keys[n]`은 같은 미디어를 가리킨다. 두 배열은 길이가 같고 각 배열 안에서 중복이 없어야 한다.
 - merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.
 
@@ -47,7 +47,7 @@
 - `completion_media_submitted.v1`
 - `media_deleted.v1`
 
-현재 A 업무 command가 생성하는 event payload는 다음 최소 식별자만 포함한다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
+현재 A 업무 command가 생성하는 event payload는 아래 key만 정확히 포함한다. 모든 ID는 canonical UUID 문자열이고 `content_hash`는 64자 소문자 16진수다. 증거 ID 배열은 비어 있지 않고 중복이 없다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
 
 - `scope_locked.v1`: 문자열 `scope_version_id`, 문자열 `content_hash`
 - `change_requested.v1`: 문자열 `change_request_id`, 문자열 `base_scope_version_id`, 문자열 배열 `evidence_media_asset_ids`

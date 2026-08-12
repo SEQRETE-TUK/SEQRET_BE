@@ -72,7 +72,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 작업 생성 응답은 최초 발급부터 7일 동안 유효한 초기 역할 링크의 비밀값을 한 번만 반환합니다. 이 공개 bootstrap 호출자는 모든 초기 역할 capability를 각 참여자에게 안전하게 전달하는 신뢰 주체이며, bearer 링크 자체는 개인 신원을 증명하지 않습니다. 고객·회사 관리자·현장 작업자 세 역할은 작업 생성 시 모두 연결하며, 검증된 별도 전달 채널이 없는 현재 public API에서는 이후 참여자를 추가하지 않습니다. 이후 작업 API는 비밀값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 각 참여자는 자기 링크만 회전할 수 있고, 회전은 같은 링크의 비밀값만 교체하므로 최초 절대 만료와 rate-limit 구간을 연장하거나 초기화하지 않습니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
 
-촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 cache, 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
+촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
 
 작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 
