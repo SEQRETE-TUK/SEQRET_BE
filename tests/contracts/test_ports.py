@@ -65,10 +65,11 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
     assert (
         await storage.create_read_url(
             object_key="jobs/1/photo.jpg",
+            generation="7&latest=false",
             expires_in_seconds=60,
             timeout_seconds=2,
         )
-        == "https://storage.invalid/read/jobs/1/photo.jpg"
+        == "https://storage.invalid/read/jobs/1/photo.jpg?generation=7%26latest%3Dfalse"
     )
     assert (
         await storage.get_metadata(object_key="jobs/1/photo.jpg", timeout_seconds=2)
@@ -88,6 +89,17 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
     )
 
     assert storage.deleted_keys == {"jobs/1/photo.jpg"}
+
+
+@pytest.mark.parametrize("generation", ["", " ", "x" * 256])
+def test_storage_metadata_rejects_invalid_generation(generation: str) -> None:
+    with pytest.raises(ValueError):
+        StorageObjectMetadata(
+            object_key="jobs/1/photo.jpg",
+            content_type="image/jpeg",
+            size_bytes=10,
+            generation=generation,
+        )
 
 
 @pytest.mark.anyio
@@ -341,7 +353,15 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
     with pytest.raises(ValueError, match="expires_in_seconds must be positive"):
         await storage.create_read_url(
             object_key="object",
+            generation="7",
             expires_in_seconds=0,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ValueError, match="generation must be"):
+        await storage.create_read_url(
+            object_key="object",
+            generation="",
+            expires_in_seconds=60,
             timeout_seconds=2,
         )
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):

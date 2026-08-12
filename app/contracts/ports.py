@@ -27,7 +27,10 @@ class StorageObjectMetadata(ContractModel):
         ]
         | None
     ) = None
-    generation: str | None = None
+    generation: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+        | None
+    ) = None
 
 
 class ProviderErrorKind(StrEnum):
@@ -68,6 +71,7 @@ class StoragePort(Protocol):
         self,
         *,
         object_key: str,
+        generation: str,
         expires_in_seconds: int,
         timeout_seconds: float,
     ) -> str: ...
