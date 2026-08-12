@@ -8,6 +8,7 @@ from sqlalchemy import Connection, engine_from_config, pool
 
 from app.config import Settings
 from app.modules.access.models import ParticipantAccessToken
+from app.modules.analysis.models import AiAnalysisRun, Detection
 from app.modules.background_job.models import BackgroundJob
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
@@ -22,6 +23,8 @@ if config.config_file_name is not None:
 
 _REGISTERED_MODELS = (
     ParticipantAccessToken,
+    AiAnalysisRun,
+    Detection,
     BackgroundJob,
     MediaAsset,
     ScopeApproval,
