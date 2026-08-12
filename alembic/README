@@ -1,0 +1,5 @@
+SEQRET uses one linear Alembic history coordinated by track A.
+
+Every revision must include its work ID in the revision identifier and file name.
+Before merge, verify one head, empty-database upgrade, previous-schema upgrade,
+and a downgrade/re-upgrade round trip when the migration is reversible.

@@ -41,7 +41,7 @@
 
 ## 상태
 
-`FND-A01` 기준 FastAPI application factory와 API·worker·job이 공유하는 설정 계약을 구성하는 단계입니다.
+FastAPI 공통 실행 기반과 PostgreSQL용 SQLAlchemy·Alembic 기반을 구성하는 단계입니다.
 
 ## 로컬 개발
 
@@ -63,12 +63,18 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_DEBUG` | `false` | FastAPI debug 여부. production에서는 `true`를 거부함 |
 | `SEQRET_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` 중 하나 |
 | `SEQRET_API_PREFIX` | `/api/v1` | 향후 업무 API가 사용할 정규화된 절대 경로 접두사 |
+| `SEQRET_DATABASE_URL` | 없음 | `postgresql+psycopg` 형식의 비밀 연결 URL. 엔진 생성과 migration 실행 시 필수 |
+| `SEQRET_DATABASE_POOL_SIZE` | `5` | runtime별 기본 connection pool 크기 |
+| `SEQRET_DATABASE_MAX_OVERFLOW` | `10` | pool 크기를 초과해 일시적으로 허용할 connection 수 |
+| `SEQRET_DATABASE_POOL_TIMEOUT_SECONDS` | `30` | pool에서 connection을 기다리는 최대 시간 |
 
 ```bash
 uv run pytest
 uv run ruff check .
 uv run mypy
 ```
+
+DB migration과 테스트 DB 운영 방법은 [데이터베이스 개발 가이드](docs/DATABASE.md)를 따릅니다.
 
 API가 정상적으로 bootstrap됐는지는 `GET /healthz`로 확인합니다.
 

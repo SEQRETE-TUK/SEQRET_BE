@@ -52,7 +52,23 @@ jobs:
   python-quality:
     name: Python quality
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_DB: seqret_test
+          POSTGRES_PASSWORD: seqret_test_password
+          POSTGRES_USER: seqret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seqret -d seqret_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SEQRET_TEST_DATABASE_URL: postgresql+psycopg://seqret:seqret_test_password@127.0.0.1:5432/seqret_test
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,6 +118,10 @@ jobs:
       - name: Run strict type checks
         if: steps.python-project.outputs.present == 'true'
         run: uv run --frozen mypy
+
+      - name: Verify the Alembic revision graph
+        if: steps.python-project.outputs.present == 'true'
+        run: uv run --frozen alembic heads --verbose
 
       - name: Run tests and coverage gates
         if: steps.python-project.outputs.present == 'true'

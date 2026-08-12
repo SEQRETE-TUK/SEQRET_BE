@@ -5,7 +5,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: LogLevel = "INFO"
     api_prefix: str = "/api/v1"
+    database_url: SecretStr | None = Field(default=None, repr=False)
+    database_pool_size: int = Field(default=5, ge=1, le=50)
+    database_max_overflow: int = Field(default=10, ge=0, le=100)
+    database_pool_timeout_seconds: float = Field(default=30.0, gt=0, le=300.0)
 
     @field_validator("service_name")
     @classmethod
