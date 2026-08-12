@@ -52,3 +52,34 @@ class DomainEvent(ContractModel):
             msg = "schema_version must match the event_type version suffix"
             raise ValueError(msg)
         return self
+
+    @model_validator(mode="after")
+    def require_documented_payload(self) -> "DomainEvent":
+        """Validate the minimum fields consumed from current A-owned v1 events."""
+
+        payload = self.payload
+        valid = True
+        if self.event_type is DomainEventType.SCOPE_LOCKED_V1:
+            valid = isinstance(payload.get("scope_version_id"), str) and isinstance(
+                payload.get("content_hash"), str
+            )
+        elif self.event_type is DomainEventType.CHANGE_REQUESTED_V1:
+            evidence_ids = payload.get("evidence_media_asset_ids")
+            valid = (
+                isinstance(payload.get("change_request_id"), str)
+                and isinstance(payload.get("base_scope_version_id"), str)
+                and isinstance(evidence_ids, list)
+                and all(isinstance(media_asset_id, str) for media_asset_id in evidence_ids)
+            )
+        elif self.event_type is DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1:
+            valid = all(
+                isinstance(payload.get(key), str)
+                for key in ("capture_session_id", "media_asset_id", "room_zone_id")
+            )
+        elif self.event_type is DomainEventType.MEDIA_DELETED_V1:
+            valid = all(
+                isinstance(payload.get(key), str) for key in ("background_job_id", "media_asset_id")
+            )
+        if not valid:
+            raise ValueError(f"payload does not match {self.event_type} minimum contract")
+        return self

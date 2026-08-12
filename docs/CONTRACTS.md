@@ -14,7 +14,7 @@
 
 | Port | adapter 소유자 | 입력·출력 | 멱등성 | timeout | 오류 계약 |
 | --- | --- | --- | --- | --- | --- |
-| `StoragePort` (`ObjectStoragePort` 호환 별칭) | B | object key와 제약 → signed URL, metadata 또는 삭제 완료 | 삭제는 `idempotency_key`로 중복 효과를 막는다 | 모든 provider 호출에 초 단위 명시 | provider 오류를 adapter 예외로 매핑하며 A ORM을 갱신하지 않는다 |
+| `StoragePort` (`ObjectStoragePort` 호환 별칭) | B | object key와 제약 → signed upload target, read URL, metadata 또는 삭제 완료 | 삭제는 `idempotency_key`로 중복 효과를 막는다 | 모든 provider 호출에 초 단위 명시 | provider 오류를 adapter 예외로 매핑하며 A ORM을 갱신하지 않는다 |
 | `TaskQueuePort` | B | queue, handler, JSON payload → provider task ID | 같은 key는 한 task만 반환한다 | enqueue 호출에 초 단위 명시 | 재시도 가능 여부를 provider 외부 타입으로 노출하지 않는다 |
 | `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, object key, model/prompt version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
 | `EventBusPort` | A | `DomainEvent` → 발행 완료 | event ID 기반 key로 중복 발행 효과를 막는다 | 발행 호출에 초 단위 명시 | Outbox 상태와 retry 정책은 A가 관리한다 |
@@ -22,9 +22,12 @@
 
 로컬 fake는 실제 adapter와 같은 Protocol을 만족하고 멱등 동작을 contract test로 검증한다.
 
+- `StoragePort.create_upload_url`은 immutable `StorageUploadTarget`을 반환한다. `headers`에는 `x-goog-if-generation-match: 0`이 반드시 있고, API는 URL 원문과 함께 이를 `upload_headers`로 전달한다. 클라이언트는 모든 header를 변경 없이 PUT에 보내 객체가 없을 때만 생성되게 한다.
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
-- 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, 업로드 URL은 provider가 반환한 HTTPS 원문을 cache하지 않고 전달한다.
-- merge 순서는 이 계약과 fake → A의 열람 오케스트레이션 → B의 Storage adapter → 실제 provider 통합 검증이다. 호출자를 도입하기 전에 breaking signature를 먼저 고정하며, 기존 upload·metadata·delete 계약과 event schema는 바뀌지 않는다.
+- `StoragePort.delete_object`의 generation은 1~255자의 필수 snapshot이다. snapshot generation이 이미 없으면 멱등 성공하고, 같은 key의 다른 generation 객체는 보존한다.
+- 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하지 않고 원문 그대로 전달한다.
+- `AnalysisRequest.source_media_asset_ids[n]`과 `object_keys[n]`은 같은 미디어를 가리킨다. 두 배열은 길이가 같고 각 배열 안에서 중복이 없어야 한다.
+- merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.
 
 ## 미디어 열람
 
@@ -46,10 +49,10 @@
 
 현재 A 업무 command가 생성하는 event payload는 다음 최소 식별자만 포함한다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
 
-- `scope_locked.v1`: `scope_version_id`, `content_hash`
-- `change_requested.v1`: `change_request_id`, `base_scope_version_id`, `evidence_media_asset_ids`
-- `completion_media_submitted.v1`: `capture_session_id`, `media_asset_id`, `room_zone_id`
-- `media_deleted.v1`: `background_job_id`, `media_asset_id`
+- `scope_locked.v1`: 문자열 `scope_version_id`, 문자열 `content_hash`
+- `change_requested.v1`: 문자열 `change_request_id`, 문자열 `base_scope_version_id`, 문자열 배열 `evidence_media_asset_ids`
+- `completion_media_submitted.v1`: 문자열 `capture_session_id`, 문자열 `media_asset_id`, 문자열 `room_zone_id`
+- `media_deleted.v1`: 문자열 `background_job_id`, 문자열 `media_asset_id`
 
 ## 미디어 보존 작업
 

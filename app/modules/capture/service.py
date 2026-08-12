@@ -178,14 +178,14 @@ async def create_media_upload(
         expected_size_bytes=command.content_length,
     )
     expires_at = utc_now() + timedelta(seconds=UPLOAD_URL_TTL_SECONDS)
-    upload_url = await storage.create_upload_url(
+    upload_target = await storage.create_upload_url(
         object_key=object_key,
         content_type=command.content_type,
         content_length=command.content_length,
         expires_in_seconds=UPLOAD_URL_TTL_SECONDS,
         timeout_seconds=STORAGE_TIMEOUT_SECONDS,
     )
-    upload_url = _validated_upload_url(upload_url)
+    upload_url = _validated_upload_url(upload_target.url)
 
     await _lock_mutable_job(session, job_id)
     session.add(asset)
@@ -193,6 +193,7 @@ async def create_media_upload(
     return MediaUploadResponse(
         asset=_asset_response(asset),
         upload_url=upload_url,
+        upload_headers=dict(upload_target.headers),
         expires_at=expires_at,
     )
 

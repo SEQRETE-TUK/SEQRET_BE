@@ -8,7 +8,14 @@ from pydantic import JsonValue
 
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
-from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
+from app.contracts.ports import (
+    CREATE_ONLY_UPLOAD_HEADER,
+    ProviderError,
+    ProviderErrorKind,
+    StorageObjectGeneration,
+    StorageObjectMetadata,
+    StorageUploadTarget,
+)
 from app.contracts.primitives import IdempotencyKey, utc_now
 
 
@@ -18,13 +25,18 @@ class FakeObjectStorage:
     def __init__(self) -> None:
         self.metadata: dict[str, StorageObjectMetadata] = {}
         self.deleted_keys: set[str] = set()
-        self._delete_requests: dict[IdempotencyKey, tuple[str, str | None]] = {}
+        self._delete_requests: dict[IdempotencyKey, tuple[str, str]] = {}
 
     @staticmethod
     def _require_positive(value: int | float, name: str) -> None:
         if value <= 0:
             msg = f"{name} must be positive"
             raise ValueError(msg)
+
+    @staticmethod
+    def _require_generation(value: str) -> None:
+        if value != value.strip() or not value or len(value) > 255:
+            raise ValueError("generation must be 1..255 non-whitespace characters")
 
     async def create_upload_url(
         self,
@@ -34,23 +46,24 @@ class FakeObjectStorage:
         content_length: int,
         expires_in_seconds: int,
         timeout_seconds: float,
-    ) -> str:
+    ) -> StorageUploadTarget:
         self._require_positive(content_length, "content_length")
         self._require_positive(expires_in_seconds, "expires_in_seconds")
         self._require_positive(timeout_seconds, "timeout_seconds")
-        return f"https://storage.invalid/upload/{object_key}"
+        return StorageUploadTarget(
+            url=f"https://storage.invalid/upload/{object_key}",
+            headers=(CREATE_ONLY_UPLOAD_HEADER,),
+        )
 
     async def create_read_url(
         self,
         *,
         object_key: str,
-        generation: str,
+        generation: StorageObjectGeneration,
         expires_in_seconds: int,
         timeout_seconds: float,
     ) -> str:
-        if not generation.strip() or len(generation) > 255:
-            msg = "generation must be 1..255 characters"
-            raise ValueError(msg)
+        self._require_generation(generation)
         self._require_positive(expires_in_seconds, "expires_in_seconds")
         self._require_positive(timeout_seconds, "timeout_seconds")
         return f"https://storage.invalid/read/{object_key}?{urlencode({'generation': generation})}"
@@ -75,11 +88,12 @@ class FakeObjectStorage:
         self,
         *,
         object_key: str,
-        generation: str | None,
+        generation: StorageObjectGeneration,
         idempotency_key: IdempotencyKey,
         timeout_seconds: float,
     ) -> None:
         self._require_positive(timeout_seconds, "timeout_seconds")
+        self._require_generation(generation)
         request = (object_key, generation)
         previous = self._delete_requests.get(idempotency_key)
         if previous is not None:
@@ -90,8 +104,12 @@ class FakeObjectStorage:
                     retryable=False,
                 )
             return
-        self.deleted_keys.add(object_key)
         self._delete_requests[idempotency_key] = request
+        metadata = self.metadata.get(object_key)
+        if metadata is None or metadata.generation != generation:
+            return
+        del self.metadata[object_key]
+        self.deleted_keys.add(object_key)
 
 
 class FakeTaskQueue:

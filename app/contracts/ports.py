@@ -2,14 +2,35 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Annotated, Protocol, Self, runtime_checkable
 
-from pydantic import Field, JsonValue, StringConstraints
+from pydantic import Field, JsonValue, StringConstraints, model_validator
 
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
 from app.contracts.model import ContractModel
 from app.contracts.primitives import IdempotencyKey
+
+CREATE_ONLY_UPLOAD_HEADER = ("x-goog-if-generation-match", "0")
+StorageObjectGeneration = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+]
+
+
+class StorageUploadTarget(ContractModel):
+    """Signed upload URL and every header the client must send unchanged."""
+
+    url: Annotated[str, Field(min_length=1, repr=False)]
+    headers: Annotated[tuple[tuple[str, str], ...], Field(min_length=1, repr=False)]
+
+    @model_validator(mode="after")
+    def require_create_only_upload(self) -> Self:
+        name, value = CREATE_ONLY_UPLOAD_HEADER
+        headers = {header_name.lower(): header_value for header_name, header_value in self.headers}
+        if len(headers) != len(self.headers) or headers.get(name) != value:
+            raise ValueError("upload headers must enforce create-only object creation")
+        return self
 
 
 class StorageObjectMetadata(ContractModel):
@@ -27,10 +48,7 @@ class StorageObjectMetadata(ContractModel):
         ]
         | None
     ) = None
-    generation: (
-        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
-        | None
-    ) = None
+    generation: StorageObjectGeneration | None = None
 
 
 class ProviderErrorKind(StrEnum):
@@ -65,13 +83,13 @@ class StoragePort(Protocol):
         content_length: int,
         expires_in_seconds: int,
         timeout_seconds: float,
-    ) -> str: ...
+    ) -> StorageUploadTarget: ...
 
     async def create_read_url(
         self,
         *,
         object_key: str,
-        generation: str,
+        generation: StorageObjectGeneration,
         expires_in_seconds: int,
         timeout_seconds: float,
     ) -> str: ...
@@ -87,7 +105,7 @@ class StoragePort(Protocol):
         self,
         *,
         object_key: str,
-        generation: str | None,
+        generation: StorageObjectGeneration,
         idempotency_key: IdempotencyKey,
         timeout_seconds: float,
     ) -> None: ...
