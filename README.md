@@ -54,12 +54,16 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/capture-sessions`: 참여자 소유 촬영 세션 생성
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload`: 업로드 URL 발급
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/{media_asset_id}/complete`: 업로드 메타데이터 확인
+- `POST /move-jobs/{job_id}/scope-versions`: 불변 작업범위 버전 생성
+- `GET /move-jobs/{job_id}/scope-versions`: 작업범위 버전 이력 조회
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
 작업 생성과 참여자 연결 응답은 7일 동안 유효한 역할 링크의 비밀값을 한 번만 반환합니다. 이후 작업 API는 이 값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 고객과 회사 관리자는 참여자를 연결할 수 있고, 현장 작업자는 작업 조회만 할 수 있습니다. 링크를 재발급하면 기존 링크는 즉시 철회됩니다.
 
 촬영 미디어는 작업에 속한 구역과 `inventory` 또는 `condition` 목적으로만 최초 등록할 수 있습니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type과 정확한 크기를 다시 확인합니다. 비공개 객체의 signed URL은 응답으로만 전달하고 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
+
+작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 
 ## 로컬 개발
 

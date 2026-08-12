@@ -2,7 +2,7 @@
 
 import os
 import sys
-from asyncio import SelectorEventLoop
+from asyncio import SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -34,12 +34,18 @@ from app.modules.move_job.schemas import (
     RoomZoneCreate,
 )
 from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
+from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
+from app.modules.scope.service import (
+    ScopeVersionConflictError,
+    create_scope_version,
+    list_scope_versions,
+)
 from app.platform.db import create_database_engine, create_session_factory, transactional_session
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_02_0001"
-ALEMBIC_HEAD = "a_03_0001"
+ALEMBIC_PREVIOUS = "a_03_0001"
+ALEMBIC_HEAD = "a_04_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -48,6 +54,7 @@ BUSINESS_TABLES = {
     "move_job",
     "participant_access_token",
     "room_zone",
+    "scope_version",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -143,8 +150,9 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
-            assert "capture_session" not in inspect(engine).get_table_names()
-            assert "media_asset" not in inspect(engine).get_table_names()
+            assert "scope_version" not in inspect(engine).get_table_names()
+            assert "capture_session" in inspect(engine).get_table_names()
+            assert "media_asset" in inspect(engine).get_table_names()
             assert "participant_access_token" in inspect(engine).get_table_names()
             assert "move_job" in inspect(engine).get_table_names()
             assert "existing_schema_probe" in inspect(engine).get_table_names()
@@ -286,5 +294,87 @@ async def test_capture_upload_commands_round_trip_on_postgresql() -> None:
             assert completed.status is MediaAssetStatus.UPLOADED
             assert completed.actual_size_bytes == 10
             assert completed.sha256_hex == "b" * 64
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_scope_version_concurrent_children_allow_one_winner_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        job_command = MoveJobCreate(
+            title="작업범위 동시성 테스트",
+            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="출발지",
+                    room_zones=(RoomZoneCreate(name="거실", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                participant_id = created.job.participants[0].id
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                root = await create_scope_version(
+                    session,
+                    created.job.id,
+                    participant_id,
+                    ScopeVersionCreate(
+                        content=ScopeContent(
+                            items=(
+                                ScopeItem(
+                                    item_key="sofa",
+                                    room_zone_id=room_zone_id,
+                                    description="소파 운반",
+                                ),
+                            )
+                        )
+                    ),
+                )
+
+            async def append_child(description: str) -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await create_scope_version(
+                            session,
+                            created.job.id,
+                            participant_id,
+                            ScopeVersionCreate(
+                                parent_version_id=root.id,
+                                content=ScopeContent(
+                                    items=(
+                                        ScopeItem(
+                                            item_key="sofa",
+                                            room_zone_id=room_zone_id,
+                                            description=description,
+                                        ),
+                                    )
+                                ),
+                            ),
+                        )
+                    return "created"
+                except ScopeVersionConflictError:
+                    return "conflict"
+
+            outcomes = await gather(
+                append_child("소파 포장과 운반"),
+                append_child("소파 분해와 운반"),
+            )
+            async with transactional_session(factory) as session:
+                versions = await list_scope_versions(session, created.job.id)
+
+            assert sorted(outcomes) == ["conflict", "created"]
+            assert [version.sequence_number for version in versions] == [1, 2]
+            assert versions[1].parent_version_id == root.id
         finally:
             await engine.dispose()
