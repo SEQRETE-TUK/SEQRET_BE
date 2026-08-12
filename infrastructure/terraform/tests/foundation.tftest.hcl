@@ -1,11 +1,12 @@
 mock_provider "google" {}
 
 variables {
-  project_id      = "seqret-staging"
-  region          = "asia-northeast3"
-  environment     = "staging"
-  api_domain      = "api.staging.example.com"
-  container_image = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  project_id           = "seqret-staging"
+  region               = "asia-northeast3"
+  environment          = "staging"
+  api_domain           = "api.staging.example.com"
+  container_image      = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  media_retention_days = 30
 }
 
 run "staging_runtime_isolation" {
@@ -14,6 +15,14 @@ run "staging_runtime_isolation" {
   assert {
     condition     = google_cloud_run_v2_service.api.name == "seqret-stg-api"
     error_message = "The staging API name must remain deterministic."
+  }
+
+  assert {
+    condition = one([
+      for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+      if env.name == "SEQRET_MEDIA_RETENTION_DAYS"
+    ]) == "30"
+    error_message = "The API must receive the approved media-retention policy."
   }
 
   assert {
@@ -299,8 +308,16 @@ run "integration_runtimes_require_explicit_contracts" {
       google_cloud_run_v2_job.job[0].template[0].template[0].containers[0].image == var.job_runtime.container_image,
       google_cloud_run_v2_service.worker[0].deletion_protection,
       google_cloud_run_v2_job.job[0].deletion_protection,
+      length([
+        for env in google_cloud_run_v2_service.worker[0].template[0].containers[0].env : env
+        if env.name == "SEQRET_MEDIA_RETENTION_DAYS"
+      ]) == 0,
+      length([
+        for env in google_cloud_run_v2_job.job[0].template[0].template[0].containers[0].env : env
+        if env.name == "SEQRET_MEDIA_RETENTION_DAYS"
+      ]) == 0,
     ])
-    error_message = "B-owned runtimes must use their explicit immutable images and safe platform defaults."
+    error_message = "B-owned runtimes must keep their explicit images and exclude A-owned settings."
   }
 }
 
@@ -360,4 +377,14 @@ run "invalid_notification_channel_is_rejected" {
   }
 
   expect_failures = [var.monitoring_notification_channel_ids]
+}
+
+run "invalid_media_retention_is_rejected" {
+  command = plan
+
+  variables {
+    media_retention_days = 0
+  }
+
+  expect_failures = [var.media_retention_days]
 }

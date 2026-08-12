@@ -5,7 +5,7 @@ import sys
 from asyncio import Event, SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -22,11 +22,31 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.events import DomainEventType
 from app.contracts.fakes import FakeObjectStorage
+from app.contracts.maintenance import (
+    MediaDeletionOutcome,
+    MediaDeletionResultV1,
+    MediaDeletionTaskV1,
+)
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StorageObjectMetadata
-from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
+from app.contracts.primitives import (
+    AnalysisRunId,
+    BackgroundJobId,
+    CaptureSessionId,
+    MediaAssetId,
+)
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.service import _increment_database_rate_window
+from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
+from app.modules.background_job.service import (
+    BackgroundJobConflictError,
+    claim_background_jobs,
+    complete_media_deletion,
+    create_retention_background_job,
+    retry_background_job,
+    start_media_deletion,
+)
+from app.modules.capture.models import MediaAsset
 from app.modules.capture.schemas import MediaUploadCreate
 from app.modules.capture.service import (
     complete_media_upload,
@@ -41,7 +61,7 @@ from app.modules.completion.service import (
     list_audit_events,
     list_completion_confirmations,
 )
-from app.modules.move_job.models import LocationKind, MoveJobStatus
+from app.modules.move_job.models import LocationKind, MoveJob, MoveJobStatus
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
@@ -78,10 +98,12 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_10_0001"
+ALEMBIC_HEAD = "a_12_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
+ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
+    "background_job",
     "capture_session",
     "job_participant",
     "location",
@@ -199,6 +221,10 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             }
             assert "rate_window_started_at" not in access_columns
             assert "rate_window_count" not in access_columns
+            command.upgrade(configuration, "head")
+
+            command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
+            assert "background_job" not in inspect(engine).get_table_names()
             command.upgrade(configuration, "head")
 
             command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
@@ -336,6 +362,179 @@ async def test_outbox_claims_are_exclusive_on_postgresql() -> None:
                 assert row is not None
                 assert row.attempt_count == 1
                 assert row.lock_token is not None
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        operation_time = datetime.now(UTC)
+        command_data = MoveJobCreate(
+            title="Background job race",
+            participants=(
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+                participant_id = created.job.participants[0].id
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    participant_id,
+                )
+                move_job = await session.get(MoveJob, created.job.id)
+                assert move_job is not None
+                move_job.status = MoveJobStatus.COMPLETED
+                move_job.completed_at = operation_time - timedelta(days=31)
+                asset = MediaAsset(
+                    capture_session_id=capture.id,
+                    room_zone_id=created.job.locations[0].room_zones[0].id,
+                    media_purpose=MediaPurpose.COMPLETION,
+                    status=MediaAssetStatus.UPLOADED,
+                    object_key=f"jobs/{created.job.id}/retention/{uuid4()}",
+                    content_type="image/jpeg",
+                    expected_size_bytes=10,
+                    actual_size_bytes=10,
+                    generation="7",
+                    uploaded_at=operation_time - timedelta(days=31),
+                )
+                session.add(asset)
+                await session.flush()
+                asset_id = asset.id
+
+            async def create() -> UUID:
+                async with transactional_session(factory) as session:
+                    response = await create_retention_background_job(
+                        session,
+                        created.job.id,
+                        asset_id,
+                        participant_id,
+                        retention_cutoff=operation_time - timedelta(days=30),
+                        trace_id="0123456789abcdef0123456789abcdef",
+                        now=operation_time,
+                    )
+                    return response.id
+
+            first_id, second_id = await gather(create(), create())
+            assert first_id == second_id
+
+            ready = Event()
+            release = Event()
+
+            async def claim(hold_lock: bool) -> tuple[UUID, ...]:
+                async with factory.begin() as session:
+                    claims = await claim_background_jobs(session, now=operation_time, limit=1)
+                    if hold_lock:
+                        ready.set()
+                        await release.wait()
+                    return tuple(UUID(str(item.task.background_job_id)) for item in claims)
+
+            first_claim = claim(True)
+
+            async def second_claim() -> tuple[UUID, ...]:
+                await ready.wait()
+                try:
+                    return await claim(False)
+                finally:
+                    release.set()
+
+            claimed, skipped = await gather(first_claim, second_claim())
+            assert claimed == (first_id,)
+            assert skipped == ()
+            async with factory() as session:
+                rows = (await session.scalars(select(BackgroundJob))).all()
+                assert len(rows) == 1
+                assert rows[0].attempt_count == 1
+
+            task = MediaDeletionTaskV1(
+                background_job_id=BackgroundJobId(first_id),
+                attempt_count=1,
+                trace_id="0123456789abcdef0123456789abcdef",
+            )
+            async with transactional_session(factory) as session:
+                await start_media_deletion(
+                    session,
+                    task,
+                    now=operation_time - timedelta(minutes=16),
+                )
+
+            async def retry_expired() -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        await retry_background_job(
+                            session,
+                            created.job.id,
+                            first_id,
+                            now=operation_time,
+                        )
+                except BackgroundJobConflictError:
+                    return "conflict"
+                return "retried"
+
+            async def complete_expired() -> str:
+                result = MediaDeletionResultV1(
+                    background_job_id=BackgroundJobId(first_id),
+                    attempt_count=1,
+                    outcome=MediaDeletionOutcome.SUCCEEDED,
+                )
+                try:
+                    async with transactional_session(factory) as session:
+                        await complete_media_deletion(
+                            session,
+                            result,
+                            completed_at=operation_time,
+                        )
+                except BackgroundJobConflictError:
+                    return "conflict"
+                return "completed"
+
+            terminal_outcomes = await gather(retry_expired(), complete_expired())
+            assert terminal_outcomes.count("conflict") == 1
+            assert set(terminal_outcomes) in (
+                {"conflict", "retried"},
+                {"completed", "conflict"},
+            )
+            async with factory() as session:
+                row = await session.get(BackgroundJob, first_id)
+                stored_asset = await session.get(MediaAsset, asset_id)
+                events = (
+                    await session.scalars(
+                        select(OutboxEvent).where(
+                            OutboxEvent.aggregate_id == created.job.id,
+                            OutboxEvent.event_type == DomainEventType.MEDIA_DELETED_V1,
+                        )
+                    )
+                ).all()
+                assert row is not None and stored_asset is not None
+                if "completed" in terminal_outcomes:
+                    assert row.status is BackgroundJobStatus.SUCCEEDED
+                    assert stored_asset.status is MediaAssetStatus.DELETED
+                    assert len(events) == 1
+                else:
+                    assert row.status is BackgroundJobStatus.PENDING
+                    assert stored_asset.status is MediaAssetStatus.UPLOADED
+                    assert events == []
         finally:
             await engine.dispose()
 

@@ -4,21 +4,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_10_0001"
+ALEMBIC_HEAD = "a_12_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
+ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
+    "background_job",
     "capture_session",
     "job_participant",
     "location",
@@ -71,6 +75,23 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         command.upgrade(configuration, "head")
         assert _current_revision(engine) == ALEMBIC_HEAD
         assert set(inspect(engine).get_table_names()) >= BUSINESS_TABLES
+        background_checks = {
+            check["name"] for check in inspect(engine).get_check_constraints("background_job")
+        }
+        assert {
+            "background_job_dispatch_lease",
+            "background_job_execution_deadline",
+            "background_job_generation_present",
+            "background_job_status",
+        } <= background_checks
+        background_indexes = {
+            index["name"] for index in inspect(engine).get_indexes("background_job")
+        }
+        assert {
+            "ix_background_job_dispatch",
+            "ix_background_job_dispatch_lease",
+            "ix_background_job_move_job_created",
+        } <= background_indexes
 
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
@@ -90,14 +111,30 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert "rate_window_count" not in access_columns
         command.upgrade(configuration, "head")
 
+        command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
+        assert "background_job" not in inspect(engine).get_table_names()
+        command.upgrade(configuration, "head")
+
         migrated_metadata = MetaData()
         migrated_metadata.reflect(
             engine,
-            only=("move_job", "job_participant", "capture_session", "scope_version"),
+            only=(
+                "move_job",
+                "job_participant",
+                "location",
+                "room_zone",
+                "capture_session",
+                "media_asset",
+                "scope_version",
+                "background_job",
+            ),
         )
         job_id = uuid4().hex
         participant_id = uuid4().hex
         capture_id = uuid4().hex
+        location_id = uuid4().hex
+        room_zone_id = uuid4().hex
+        media_asset_id = uuid4().hex
         scope_version_id = uuid4().hex
         created_at = datetime.now(UTC)
         with engine.begin() as connection:
@@ -122,12 +159,48 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 },
             )
             connection.execute(
+                migrated_metadata.tables["location"].insert(),
+                {
+                    "id": location_id,
+                    "job_id": job_id,
+                    "kind": "ORIGIN",
+                    "label": "migration probe",
+                    "created_at": created_at,
+                },
+            )
+            connection.execute(
+                migrated_metadata.tables["room_zone"].insert(),
+                {
+                    "id": room_zone_id,
+                    "location_id": location_id,
+                    "name": "migration probe",
+                    "sort_order": 0,
+                    "created_at": created_at,
+                },
+            )
+            connection.execute(
                 migrated_metadata.tables["capture_session"].insert(),
                 {
                     "id": capture_id,
                     "job_id": job_id,
                     "created_by_participant_id": participant_id,
                     "created_at": created_at,
+                },
+            )
+            connection.execute(
+                migrated_metadata.tables["media_asset"].insert(),
+                {
+                    "id": media_asset_id,
+                    "capture_session_id": capture_id,
+                    "room_zone_id": room_zone_id,
+                    "media_purpose": "COMPLETION",
+                    "status": "UPLOADED",
+                    "object_key": f"migration/{media_asset_id}",
+                    "content_type": "image/jpeg",
+                    "expected_size_bytes": 10,
+                    "actual_size_bytes": 10,
+                    "created_at": created_at,
+                    "uploaded_at": created_at,
                 },
             )
             connection.execute(
@@ -145,6 +218,38 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "created_at": created_at,
                 },
             )
+
+        invalid_background_job = {
+            "id": uuid4().hex,
+            "move_job_id": job_id,
+            "media_asset_id": media_asset_id,
+            "job_type": "MEDIA_RETENTION_DELETE",
+            "status": "PENDING",
+            "target_object_key": f"migration/{media_asset_id}",
+            "target_generation": "7",
+            "trace_id": "0" * 32,
+            "scheduled_at": created_at,
+            "attempt_count": 0,
+            "dispatch_token": uuid4().hex,
+            "created_at": created_at,
+        }
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["background_job"].insert(),
+                invalid_background_job,
+            )
+
+        valid_background_job = invalid_background_job | {"dispatch_token": None}
+        with engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["background_job"].insert(),
+                valid_background_job,
+            )
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.begin() as connection:
+            connection.execute(migrated_metadata.tables["background_job"].delete())
 
         command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
         assert "outbox_event" not in inspect(engine).get_table_names()

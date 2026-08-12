@@ -68,7 +68,7 @@ resource "google_cloud_run_v2_service" "api" {
       }
 
       dynamic "env" {
-        for_each = local.observed_runtime_environment
+        for_each = local.api_runtime_environment
         content {
           name  = env.key
           value = env.value

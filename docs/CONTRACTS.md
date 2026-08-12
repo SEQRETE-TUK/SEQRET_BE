@@ -41,6 +41,21 @@
 - `scope_locked.v1`: `scope_version_id`, `content_hash`
 - `change_requested.v1`: `change_request_id`, `base_scope_version_id`, `evidence_media_asset_ids`
 - `completion_media_submitted.v1`: `capture_session_id`, `media_asset_id`, `room_zone_id`
+- `media_deleted.v1`: `background_job_id`, `media_asset_id`
+
+## 미디어 보존 작업
+
+- 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 삭제 작업 생성 API는 fail-closed로 동작한다.
+- 완료된 작업의 보존기간이 지난 `UPLOADED`, `READY`, `FAILED` 미디어 중 generation이 확인된 객체만 삭제 대상으로 고정한다. 실행 중이거나 업로드·generation이 확인되지 않은 미디어는 대상에 넣지 않는다.
+- `MediaDeletionTaskV1` queue payload는 `background_job_id`, `job_type`, `attempt_count`, `schema_version`, `trace_id`만 포함한다. object key와 generation은 B handler가 `start_media_deletion` application query로 얻는다.
+- enqueue는 DB intent commit 뒤 lease dispatcher가 수행하고 `background-job:{id}:attempt:{n}` key로 중복 생성을 막는다.
+- B handler는 `app.modules.background_job.service.start_media_deletion(session, task)`를 먼저 호출한다. 현재 attempt·trace가 아니면 `BackgroundJobNotFoundError`, 실행할 수 없는 상태면 `BackgroundJobConflictError`, 이미 같은 attempt가 실행 중이면 같은 immutable work를 반환하고, terminal이면 `None`을 반환한다. work의 object key·generation은 provider 호출과 로그 밖으로 복제하지 않는다.
+- B handler의 `StoragePort.delete_object` key는 attempt와 무관한 `media-delete:{background_job_id}`다. snapshot generation이 이미 없으면 성공으로 처리하고, 다른 generation의 객체는 삭제하지 않는다. B-07 adapter 계약 테스트는 서로 다른 두 attempt가 같은 삭제 효과로 끝나는지 검증한다.
+- 실행 lease 기본값은 15분이다. lease가 지난 `RUNNING` 작업만 manager 재실행 API가 새 attempt로 돌릴 수 있으며, 살아 있는 실행과 중복시키는 조기 재실행은 `409`로 막는다.
+- B는 실제 삭제를 시도한 `RUNNING` attempt의 `MediaDeletionResultV1`을 `complete_media_deletion` command에 반환한다. 같은 결과 replay는 no-op이고 stale·상충 result는 `BackgroundJobConflictError`다. 성공 시 A가 미디어 상태와 `media_deleted.v1` Outbox를 한 transaction에서 반영한다. 작업 생성자·시도 횟수·마지막 오류·terminal 상태는 `background_job`에 보존한다.
+- 물리 객체 목록이 필요한 고아 탐지는 B의 listing 계약이 생기기 전까지 추정하지 않는다. Outbox 정합성 재시도는 기존 relay를 사용한다.
+- background job row가 생성된 뒤에는 운영 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다. 기존 감사 enum을 확장하지 않아 직전 application revision도 기존 감사 이력을 계속 읽을 수 있다.
+- 실제 queue adapter와 private handler runtime은 B-02/B-07 소유다. A가 제공하는 `dispatch_background_jobs_once` 호출은 그 adapter가 병합될 때 scheduled runtime에 연결하며, 그 전에는 durable `PENDING` intent를 잃지 않는다.
 
 ## Outbox와 소비 멱등성
 

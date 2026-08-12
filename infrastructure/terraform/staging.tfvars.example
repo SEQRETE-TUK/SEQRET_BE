@@ -6,6 +6,8 @@ service_name        = "seqret"
 api_domain          = "api.staging.example.com"
 deletion_protection = true
 otel_trace_sample_ratio = 1.0
+# Replace with the approved business retention period.
+media_retention_days = 30
 
 # Configure at least one real channel before enabling staging apply.
 monitoring_notification_channel_ids = [
