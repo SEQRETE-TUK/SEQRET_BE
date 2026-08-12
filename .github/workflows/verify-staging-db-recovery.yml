@@ -376,7 +376,7 @@ jobs:
           "${proxy_path}" "${proxy_args[@]}" "${CONNECTION_NAME}" \
             > "${proxy_log}" 2>&1 &
           proxy_pid=$!
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             if ! kill -0 "${proxy_pid}" 2>/dev/null; then
               echo "Cloud SQL Auth Proxy could not reach the recovery clone." >&2
               exit 1
@@ -490,7 +490,7 @@ jobs:
 
           operation="${CLONE_OPERATION}"
           if [[ -z "${operation}" ]]; then
-            for attempt in {1..6}; do
+            for _ in {1..6}; do
               operations="$(gcloud sql operations list \
                 --instance "${DESTINATION_INSTANCE}" \
                 --project "${GCP_PROJECT_ID}" \
@@ -545,7 +545,7 @@ jobs:
           fi
 
           exists=false
-          for attempt in {1..12}; do
+          for _ in {1..12}; do
             instances="$(gcloud sql instances list \
               --project "${GCP_PROJECT_ID}" \
               --filter="name=${DESTINATION_INSTANCE}" \
@@ -627,7 +627,7 @@ jobs:
               }
           fi
 
-          for attempt in {1..18}; do
+          for _ in {1..18}; do
             instances="$(gcloud sql instances list \
               --project "${GCP_PROJECT_ID}" \
               --filter="name=${DESTINATION_INSTANCE}" \

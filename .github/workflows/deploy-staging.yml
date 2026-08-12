@@ -506,7 +506,7 @@ jobs:
             echo "- DNS target: ${load_balancer_ip}"
           } >> "${GITHUB_STEP_SUMMARY}"
           ready=0
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             certificate_status="$(gcloud compute ssl-certificates describe "${certificate_name}" \
               --project "${GCP_PROJECT_ID}" --global \
               --format='value(managed.status)' 2>/dev/null || true)"
@@ -568,7 +568,7 @@ jobs:
             "${rollback_tag_args[@]}" \
             --quiet
           canary_successes=0
-          for attempt in {1..150}; do
+          for _ in {1..150}; do
             response="$(curl --connect-timeout 2 --max-time 3 --fail --silent --show-error \
               "https://${API_DOMAIN}/readyz" 2>/dev/null || true)"
             revision="$(jq -r 'select(.status == "ok" and .runtime == "api") | .revision // empty' \
@@ -599,7 +599,7 @@ jobs:
             exit 1
           fi
           promoted_healthy=0
-          for attempt in {1..20}; do
+          for _ in {1..20}; do
             response="$(curl --connect-timeout 2 --max-time 3 --fail --silent --show-error \
               "https://${API_DOMAIN}/readyz" 2>/dev/null || true)"
             promoted_revision="$(jq -r 'select(.status == "ok" and .runtime == "api") | .revision // empty' \
@@ -658,7 +658,7 @@ jobs:
           trap restore_closed_edge EXIT
           apply_edge true
           edge_ready=0
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             edge_action="$(gcloud compute security-policies rules describe 2147483647 \
               --security-policy "${SERVICE}-armor" \
               --project "${GCP_PROJECT_ID}" \
