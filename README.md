@@ -38,6 +38,7 @@
 - [백엔드 2인 작업 분할](docs/BACKEND_WORK_SPLIT.md)
 - [동시 개발 및 main 머지 충돌 방지 가이드](docs/CONCURRENT_DEVELOPMENT_GUIDE.md)
 - [공통 타입·Port·event 계약](docs/CONTRACTS.md)
+- [현재 main 팀·FE 인계](docs/TEAM_HANDOFF.md)
 - [AI 작업 지침](AGENTS.md)
 
 ## 상태
