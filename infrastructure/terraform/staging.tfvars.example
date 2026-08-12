@@ -1,0 +1,9 @@
+project_id          = "seqret-staging"
+region              = "asia-northeast3"
+environment         = "staging"
+name_prefix         = "seqret"
+service_name        = "seqret"
+deletion_protection = true
+
+# Replace PROJECT_ID, REPOSITORY and the digest before planning.
+container_image = "asia-northeast3-docker.pkg.dev/PROJECT_ID/REPOSITORY/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
