@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, ConfigDict, Field, UrlConstraints, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
@@ -122,8 +122,7 @@ class ChangeRequestResponse(ContractModel):
 class ChangeEvidenceReadResponse(ContractModel):
     media_asset_id: UUID
     read_url: Annotated[
-        AnyHttpUrl,
-        UrlConstraints(allowed_schemes=["https"]),
-        Field(repr=False),
+        str,
+        Field(min_length=1, repr=False, json_schema_extra={"format": "uri"}),
     ]
     expires_at: datetime

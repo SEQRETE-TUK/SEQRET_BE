@@ -247,6 +247,9 @@ async def test_change_request_clarification_approval_and_result_confirmation(
 
     read_requests: list[tuple[str, str, int, float]] = []
     original_create_read_url = storage.create_read_url
+    signed_read_url = (
+        "https://STORAGE.INVALID:443/read/jobs/%2F?X-Goog-Signature=A%2B&X-Goog-Credential=jobs%2F1"
+    )
 
     async def record_read_url(
         *,
@@ -256,12 +259,13 @@ async def test_change_request_clarification_approval_and_result_confirmation(
         timeout_seconds: float,
     ) -> str:
         read_requests.append((object_key, generation, expires_in_seconds, timeout_seconds))
-        return await original_create_read_url(
+        await original_create_read_url(
             object_key=object_key,
             generation=generation,
             expires_in_seconds=expires_in_seconds,
             timeout_seconds=timeout_seconds,
         )
+        return signed_read_url
 
     monkeypatch.setattr(storage, "create_read_url", record_read_url)
     evidence_url = f"{changes_url}/{change_id}/evidence/{evidence_id}/read-url"
@@ -273,11 +277,11 @@ async def test_change_request_clarification_approval_and_result_confirmation(
         readable = await client.get(evidence_url, headers=headers)
         assert readable.status_code == 200
         assert readable.json()["media_asset_id"] == evidence_id
-        assert readable.json()["read_url"].startswith("https://storage.invalid/read/jobs/")
+        assert readable.json()["read_url"] == signed_read_url
         assert readable.json()["expires_at"] is not None
         assert readable.headers["cache-control"] == "no-store"
         parsed = ChangeEvidenceReadResponse.model_validate(readable.json(), strict=False)
-        assert "storage.invalid" not in repr(parsed)
+        assert "read_url=" not in repr(parsed)
         assert 290 <= (parsed.expires_at - datetime.now(UTC)).total_seconds() <= 300
     assert [
         (generation, expires, timeout) for _, generation, expires, timeout in read_requests
@@ -285,12 +289,15 @@ async def test_change_request_clarification_approval_and_result_confirmation(
         ("7", 300, 5.0),
         ("7", 300, 5.0),
     ]
-    route_responses = (await client.get("/openapi.json")).json()["paths"][
+    openapi = (await client.get("/openapi.json")).json()
+    route_responses = openapi["paths"][
         evidence_url.replace(job_id, "{job_id}")
         .replace(change_id, "{change_request_id}")
         .replace(evidence_id, "{media_asset_id}")
     ]["get"]["responses"]
     assert {"200", "401", "403", "404", "409", "503"} <= set(route_responses)
+    read_url_schema = openapi["components"]["schemas"]["ChangeEvidenceReadResponse"]
+    assert read_url_schema["properties"]["read_url"]["format"] == "uri"
     assert (await client.get(evidence_url, headers=worker_headers)).status_code == 403
 
     listed = await client.get(changes_url, headers=customer_headers)
@@ -622,13 +629,24 @@ async def test_change_evidence_read_url_hides_resources_and_rejects_unreadable_m
     assert provider_failure.status_code == 503
     assert provider_failure.json()["detail"] == "storage is unavailable"
 
-    async def invalid_url(**_kwargs: object) -> str:
-        return "http://storage.invalid/read?signature=must-not-leak"
+    for invalid_read_url in (
+        "http://storage.invalid/read?signature=must-not-leak",
+        "https:///read?signature=must-not-leak",
+        " https://storage.invalid/read?signature=must-not-leak ",
+        "https://storage.invalid:not-a-port/read?signature=must-not-leak",
+        "https://storage.invalid:70000/read?signature=must-not-leak",
+    ):
 
-    monkeypatch.setattr(storage, "create_read_url", invalid_url)
-    invalid_provider_url = await client.get(read_url, headers=customer_headers)
-    assert invalid_provider_url.status_code == 503
-    assert "must-not-leak" not in invalid_provider_url.text
+        async def invalid_url(
+            returned_url: str = invalid_read_url,
+            **_kwargs: object,
+        ) -> str:
+            return returned_url
+
+        monkeypatch.setattr(storage, "create_read_url", invalid_url)
+        invalid_provider_url = await client.get(read_url, headers=customer_headers)
+        assert invalid_provider_url.status_code == 503
+        assert "must-not-leak" not in invalid_provider_url.text
 
     def missing_storage(*_args: object) -> None:
         raise HTTPException(status_code=503, detail="storage is unavailable")
