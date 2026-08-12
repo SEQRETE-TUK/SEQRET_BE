@@ -1,7 +1,7 @@
 """FastAPI application factory."""
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -14,6 +14,7 @@ from app.modules.completion.router import router as completion_router
 from app.modules.move_job.router import router as move_job_router
 from app.modules.notification.router import router as notification_router
 from app.modules.scope.router import router as scope_router
+from app.platform.cache import create_redis_cache
 from app.platform.db import create_database_engine, create_session_factory
 from app.runtime import RuntimeKind, create_runtime_context
 
@@ -26,16 +27,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if runtime_context.settings.database_url is None:
+        async with AsyncExitStack() as resources:
+            if runtime_context.settings.database_url is not None:
+                engine = create_database_engine(runtime_context.settings)
+                resources.push_async_callback(engine.dispose)
+                app.state.database_session_factory = create_session_factory(engine)
+            if runtime_context.settings.redis_url is not None:
+                cache = create_redis_cache(runtime_context.settings)
+                resources.push_async_callback(cache.close)
+                app.state.cache_port = cache
             yield
-            return
-
-        engine = create_database_engine(runtime_context.settings)
-        app.state.database_session_factory = create_session_factory(engine)
-        try:
-            yield
-        finally:
-            await engine.dispose()
 
     application = FastAPI(
         title=runtime_context.settings.app_name,
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.state.runtime_context = runtime_context
+    application.state.cache_port = None
     application.include_router(system_router)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(access_router, prefix=runtime_context.settings.api_prefix)

@@ -15,8 +15,9 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_09_0001"
+ALEMBIC_HEAD = "a_10_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
+ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -80,6 +81,14 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
 
         assert _current_revision(engine) == ALEMBIC_HEAD
         assert "existing_schema_probe" in inspect(engine).get_table_names()
+
+        command.downgrade(configuration, ALEMBIC_RATE_LIMIT_PREVIOUS)
+        access_columns = {
+            column["name"] for column in inspect(engine).get_columns("participant_access_token")
+        }
+        assert "rate_window_started_at" not in access_columns
+        assert "rate_window_count" not in access_columns
+        command.upgrade(configuration, "head")
 
         migrated_metadata = MetaData()
         migrated_metadata.reflect(

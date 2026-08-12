@@ -1,5 +1,8 @@
 """Tests for the FastAPI application factory."""
 
+from unittest.mock import AsyncMock
+
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -71,3 +74,21 @@ def test_application_lifespan_configures_database_sessions() -> None:
 
     with TestClient(application):
         assert application.state.database_session_factory is not None
+
+
+def test_application_lifespan_reuses_and_closes_redis_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = AsyncMock()
+    settings = Settings(
+        environment=AppEnvironment.TEST,
+        redis_url=SecretStr("redis://cache.internal:6379/0"),
+    )
+    application = create_app(settings)
+
+    monkeypatch.setattr("app.main.create_redis_cache", lambda configured: cache)
+
+    with TestClient(application):
+        assert application.state.cache_port is cache
+
+    cache.close.assert_awaited_once_with()

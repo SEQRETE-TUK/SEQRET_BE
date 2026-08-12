@@ -3,20 +3,25 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.contracts.actor import ActorContext, ParticipantRole
+from app.contracts.ports import CachePort
 from app.contracts.primitives import JobId
-from app.modules.access.service import InvalidAccessTokenError, authenticate_access_token
-from app.platform.db.dependencies import Session
+from app.modules.access.service import (
+    AccessRateLimitExceededError,
+    InvalidAccessTokenError,
+    authenticate_access_token,
+)
+from app.platform.db.session import transactional_session
 
 bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_actor(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    session: Session,
+    request: Request,
 ) -> ActorContext:
     if credentials is None:
         raise HTTPException(
@@ -25,12 +30,28 @@ async def get_current_actor(
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        return await authenticate_access_token(session, credentials.credentials)
+        settings = request.app.state.runtime_context.settings
+        cache: CachePort | None = request.app.state.cache_port
+        async with transactional_session(request.app.state.database_session_factory) as session:
+            return await authenticate_access_token(
+                session,
+                credentials.credentials,
+                cache=cache,
+                rate_limit_requests=settings.access_rate_limit_requests,
+                rate_limit_window_seconds=settings.access_rate_limit_window_seconds,
+                cache_timeout_seconds=settings.cache_timeout_seconds,
+            )
     except InvalidAccessTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid access token",
             headers={"WWW-Authenticate": "Bearer"},
+        ) from error
+    except AccessRateLimitExceededError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="access rate limit exceeded",
+            headers={"Retry-After": str(error.retry_after_seconds)},
         ) from error
 
 
