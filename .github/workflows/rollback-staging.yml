@@ -1,0 +1,150 @@
+name: Roll back staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Current revision or the recorded one-time rollback target
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+  API_DOMAIN: ${{ vars.API_DOMAIN }}
+  SERVICE: seqret-stg-api
+  REVISION: ${{ inputs.revision }}
+
+jobs:
+  rollback:
+    name: Restore one ready revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Validate rollback target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Staging rollback must run from main." >&2
+            exit 1
+          fi
+          for variable_name in GCP_PROJECT_ID GCP_REGION GCP_WORKLOAD_IDENTITY_PROVIDER GCP_DEPLOY_SERVICE_ACCOUNT API_DOMAIN; do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "Required staging variable ${variable_name} is not configured." >&2
+              exit 1
+            fi
+          done
+          if [[ ! "${REVISION}" =~ ^seqret-stg-api-[0-9]{5}-[a-z0-9]{3}$ ]]; then
+            echo "revision must belong to seqret-stg-api." >&2
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with OIDC
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Verify target is ready and restore traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready="$(gcloud run revisions describe "${REVISION}" \
+            --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+            --format=json \
+            | jq -r '[.status.conditions[] | select(.type == "Ready") | .status][0] // empty')"
+          if [[ "${ready}" != "True" ]]; then
+            echo "Rollback target is not ready." >&2
+            exit 1
+          fi
+          service_json="$(gcloud run services describe "${SERVICE}" \
+            --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" --format=json)"
+          previous_traffic="$(jq -r '[.status.traffic[]
+            | select(.revisionName != null and (.percent // 0) > 0)]
+            | group_by(.revisionName)
+            | map("\(.[0].revisionName)=\(map(.percent // 0) | add)")
+            | join(",")' <<< "${service_json}")"
+          if [[ -z "${previous_traffic}" ]]; then
+            echo "The current traffic allocation cannot be restored safely." >&2
+            exit 1
+          fi
+          current="$(jq -r '.status.traffic[]
+            | select(.percent == 100) | .revisionName // empty' <<< "${service_json}" | head -n 1)"
+          rollback_target="$(jq -r '[.status.traffic[]
+            | select(.tag == "rollback-target") | .revisionName][0] // empty'
+            <<< "${service_json}")"
+          if [[ "${current}" != "${REVISION}" && "${rollback_target}" != "${REVISION}" ]]; then
+            echo "Only the rollback target recorded by the current deployment can be restored." >&2
+            exit 1
+          fi
+          restore_previous() {
+            gcloud run services update-traffic "${SERVICE}" \
+              --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+              --to-revisions "${previous_traffic}" \
+              --update-tags "rollback-target=${rollback_target}" --quiet \
+              || echo "Failed to restore the previous traffic allocation." >&2
+          }
+          changed=0
+          if [[ "${current}" != "${REVISION}" ]]; then
+            changed=1
+            trap restore_previous EXIT
+            gcloud run services update-traffic "${SERVICE}" \
+              --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+              --to-revisions "${REVISION}=100" --quiet
+          fi
+          actual="$(gcloud run services describe "${SERVICE}" \
+            --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+            --format='value(status.traffic[percent=100].revisionName)' | head -n 1)"
+          if [[ "${actual}" != "${REVISION}" ]]; then
+            echo "Cloud Run did not confirm the requested rollback target." >&2
+            exit 1
+          fi
+          ready=0
+          for attempt in {1..20}; do
+            response="$(curl --connect-timeout 2 --max-time 3 --fail --silent --show-error \
+              "https://${API_DOMAIN}/readyz" 2>/dev/null || true)"
+            healthy="$(jq -r 'select(.status == "ok" and .runtime == "api") | .revision // empty' \
+              <<< "${response}" 2>/dev/null || true)"
+            if [[ "${healthy}" == "${REVISION}" ]]; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if (( ready == 0 )); then
+            echo "The rollback target failed its public health check." >&2
+            exit 1
+          fi
+          if (( changed == 1 )); then
+            gcloud run services update-traffic "${SERVICE}" \
+              --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+              --remove-tags rollback-target --quiet
+            remaining_target="$(gcloud run services describe "${SERVICE}" \
+              --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" --format=json \
+              | jq -r '[.status.traffic[] | select(.tag == "rollback-target") | .revisionName][0] // empty')"
+            if [[ -n "${remaining_target}" ]]; then
+              echo "Cloud Run did not consume the rollback target." >&2
+              exit 1
+            fi
+          fi
+          trap - EXIT
+          echo "Staging traffic restored to ${REVISION}." >> "${GITHUB_STEP_SUMMARY}"

@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     outbox_batch_size: int = Field(default=100, ge=1, le=100)
     outbox_lease_seconds: int = Field(default=60, ge=1, le=600)
     event_publish_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
+    otel_enabled: bool = False
+    otel_exporter_otlp_traces_endpoint: AnyHttpUrl | None = None
+    otel_trace_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+    gcp_project_id: str | None = None
 
     @field_validator("service_name")
     @classmethod
@@ -134,6 +138,22 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.pubsub_topic_id is not None and self.pubsub_topic_id.lower().startswith("goog"):
             msg = "pubsub_topic_id must not start with goog"
+            raise ValueError(msg)
+        if (
+            self.gcp_project_id is not None
+            and GCP_PROJECT_ID_PATTERN.fullmatch(self.gcp_project_id) is None
+        ):
+            msg = "gcp_project_id must be a valid GCP project ID"
+            raise ValueError(msg)
+        if self.otel_enabled and self.otel_exporter_otlp_traces_endpoint is None:
+            msg = "otel_exporter_otlp_traces_endpoint is required when OTel is enabled"
+            raise ValueError(msg)
+        if (
+            self.environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
+            and self.otel_enabled
+            and self.gcp_project_id is None
+        ):
+            msg = "gcp_project_id is required for deployed OTel correlation"
             raise ValueError(msg)
         if self.outbox_lease_seconds <= self.event_publish_timeout_seconds:
             msg = "outbox_lease_seconds must exceed event_publish_timeout_seconds"

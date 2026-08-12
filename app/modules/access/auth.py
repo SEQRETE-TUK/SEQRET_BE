@@ -15,6 +15,7 @@ from app.modules.access.service import (
     authenticate_access_token,
 )
 from app.platform.db.session import transactional_session
+from app.platform.observability import set_correlation_job
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -33,7 +34,7 @@ async def get_current_actor(
         settings = request.app.state.runtime_context.settings
         cache: CachePort | None = request.app.state.cache_port
         async with transactional_session(request.app.state.database_session_factory) as session:
-            return await authenticate_access_token(
+            actor = await authenticate_access_token(
                 session,
                 credentials.credentials,
                 cache=cache,
@@ -41,6 +42,9 @@ async def get_current_actor(
                 rate_limit_window_seconds=settings.access_rate_limit_window_seconds,
                 cache_timeout_seconds=settings.cache_timeout_seconds,
             )
+            assert actor.job_id is not None
+            set_correlation_job(actor.job_id)
+            return actor
     except InvalidAccessTokenError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
