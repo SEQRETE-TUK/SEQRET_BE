@@ -14,16 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
-from app.contracts.actor import ParticipantRole
+from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
+from app.contracts.primitives import JobId, ParticipantId, RequestId
 from app.main import create_app
 from app.modules.move_job.models import LocationKind, MoveJob
+from app.modules.move_job.router import connect_participant_endpoint, get_move_job_endpoint
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
     ParticipantCreate,
     RoomZoneCreate,
 )
-from app.modules.move_job.service import ParticipantRoleConflictError, connect_participant
+from app.modules.move_job.service import (
+    MoveJobNotFoundError,
+    ParticipantRoleConflictError,
+    connect_participant,
+    get_move_job,
+)
 from app.platform.db import Base, create_session_factory
 
 
@@ -73,27 +80,31 @@ async def test_move_job_api_creates_reads_and_connects_participant(
 
     assert created.status_code == 201
     created_body = created.json()
-    assert created_body["status"] == "draft"
-    assert [location["kind"] for location in created_body["locations"]] == [
+    job = created_body["job"]
+    customer_secret = created_body["access_links"][0]["secret"]
+    headers = {"Authorization": f"Bearer {customer_secret}"}
+    assert job["status"] == "draft"
+    assert [location["kind"] for location in job["locations"]] == [
         "destination",
         "origin",
     ]
-    assert [zone["sort_order"] for zone in created_body["locations"][1]["room_zones"]] == [
+    assert [zone["sort_order"] for zone in job["locations"][1]["room_zones"]] == [
         0,
         1,
     ]
 
-    job_id = created_body["id"]
-    loaded = await move_job_client.get(f"/api/v1/move-jobs/{job_id}")
+    job_id = job["id"]
+    loaded = await move_job_client.get(f"/api/v1/move-jobs/{job_id}", headers=headers)
     assert loaded.status_code == 200
-    assert loaded.json() == created_body
+    assert loaded.json() == job
 
     connected = await move_job_client.post(
         f"/api/v1/move-jobs/{job_id}/participants",
         json={"role": "field_worker", "display_name": "현장 담당"},
+        headers=headers,
     )
     assert connected.status_code == 201
-    assert [participant["role"] for participant in connected.json()["participants"]] == [
+    assert [participant["role"] for participant in connected.json()["job"]["participants"]] == [
         "customer",
         "field_worker",
     ]
@@ -101,6 +112,7 @@ async def test_move_job_api_creates_reads_and_connects_participant(
     conflict = await move_job_client.post(
         f"/api/v1/move-jobs/{job_id}/participants",
         json={"role": "customer", "display_name": "다른 고객"},
+        headers=headers,
     )
     assert conflict.status_code == 409
     assert conflict.json() == {"detail": "participant role already exists"}
@@ -116,8 +128,8 @@ async def test_move_job_api_reports_missing_jobs(move_job_client: AsyncClient) -
         json={"role": "customer", "display_name": "고객"},
     )
 
-    assert loaded.status_code == 404
-    assert connected.status_code == 404
+    assert loaded.status_code == 401
+    assert connected.status_code == 401
 
 
 def test_move_job_command_rejects_duplicate_roles_locations_and_naive_time() -> None:
@@ -220,4 +232,44 @@ async def test_participant_connection_maps_database_race_to_conflict(
             job.id,
             ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
         )
+    await session.close()
+
+
+@pytest.mark.anyio
+async def test_move_job_service_and_endpoints_map_disappeared_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = uuid4()
+    participant_id = uuid4()
+    session = AsyncSession()
+    actor = ActorContext(
+        actor_kind=ActorKind.PARTICIPANT,
+        participant_id=ParticipantId(participant_id),
+        participant_role=ParticipantRole.CUSTOMER,
+        job_id=JobId(job_id),
+        request_id=RequestId(uuid4()),
+        trace_id="a" * 32,
+    )
+    command = ParticipantCreate(role=ParticipantRole.FIELD_WORKER, display_name="현장 담당")
+
+    async def load_missing(_session: AsyncSession, _job_id: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.modules.move_job.service._load_move_job", load_missing)
+    with pytest.raises(MoveJobNotFoundError):
+        await get_move_job(session, job_id)
+    with pytest.raises(MoveJobNotFoundError):
+        await connect_participant(session, job_id, command)
+
+    async def raise_missing(*_args: object) -> None:
+        raise MoveJobNotFoundError(job_id)
+
+    monkeypatch.setattr("app.modules.move_job.router.get_move_job", raise_missing)
+    monkeypatch.setattr("app.modules.move_job.router.connect_participant", raise_missing)
+    with pytest.raises(Exception) as get_error:
+        await get_move_job_endpoint(job_id, actor, session)
+    with pytest.raises(Exception) as connect_error:
+        await connect_participant_endpoint(job_id, command, actor, session)
+    assert getattr(get_error.value, "status_code", None) == 404
+    assert getattr(connect_error.value, "status_code", None) == 404
     await session.close()

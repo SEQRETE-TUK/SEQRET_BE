@@ -7,11 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.access.service import issue_access_link
 from app.modules.move_job.models import JobParticipant, Location, MoveJob, RoomZone
 from app.modules.move_job.schemas import (
     LocationResponse,
     MoveJobCreate,
+    MoveJobCreatedResponse,
     MoveJobResponse,
+    ParticipantConnectedResponse,
     ParticipantCreate,
     ParticipantResponse,
     RoomZoneResponse,
@@ -72,7 +75,7 @@ def _to_response(job: MoveJob) -> MoveJobResponse:
     )
 
 
-async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> MoveJobResponse:
+async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> MoveJobCreatedResponse:
     """Create the job, participants, locations, and zones atomically."""
 
     job = MoveJob(title=command.title, scheduled_at=command.scheduled_at)
@@ -92,7 +95,10 @@ async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> Move
     ]
     session.add(job)
     await session.flush()
-    return _to_response(job)
+    access_links = tuple(
+        [await issue_access_link(session, participant) for participant in job.participants]
+    )
+    return MoveJobCreatedResponse(job=_to_response(job), access_links=access_links)
 
 
 async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
@@ -108,7 +114,7 @@ async def connect_participant(
     session: AsyncSession,
     job_id: UUID,
     command: ParticipantCreate,
-) -> MoveJobResponse:
+) -> ParticipantConnectedResponse:
     """Connect one missing business role to an existing job."""
 
     job = await _load_move_job(session, job_id)
@@ -117,9 +123,11 @@ async def connect_participant(
     if any(participant.role is command.role for participant in job.participants):
         raise ParticipantRoleConflictError(command.role)
 
-    job.participants.append(JobParticipant(role=command.role, display_name=command.display_name))
+    participant = JobParticipant(role=command.role, display_name=command.display_name)
+    job.participants.append(participant)
     try:
         await session.flush()
     except IntegrityError as error:
         raise ParticipantRoleConflictError(command.role) from error
-    return _to_response(job)
+    access_link = await issue_access_link(session, participant)
+    return ParticipantConnectedResponse(job=_to_response(job), access_link=access_link)

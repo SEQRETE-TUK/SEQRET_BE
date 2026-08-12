@@ -49,8 +49,12 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs`: 작업과 초기 참여자·위치·구역 생성
 - `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
 - `POST /move-jobs/{job_id}/participants`: 작업 역할 참여자 연결
+- `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 역할 링크 재발급
+- `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
+
+작업 생성과 참여자 연결 응답은 7일 동안 유효한 역할 링크의 비밀값을 한 번만 반환합니다. 이후 작업 API는 이 값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 고객과 회사 관리자는 참여자를 연결할 수 있고, 현장 작업자는 작업 조회만 할 수 있습니다. 링크를 재발급하면 기존 링크는 즉시 철회됩니다.
 
 ## 로컬 개발
 

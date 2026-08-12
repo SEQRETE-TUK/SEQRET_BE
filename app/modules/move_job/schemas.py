@@ -8,6 +8,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.model import ContractModel
+from app.modules.access.schemas import AccessLinkResponse
 from app.modules.move_job.models import LocationKind, MoveJobStatus
 
 
@@ -97,3 +98,13 @@ class MoveJobResponse(ContractModel):
     created_at: datetime
     participants: tuple[ParticipantResponse, ...]
     locations: tuple[LocationResponse, ...]
+
+
+class MoveJobCreatedResponse(ContractModel):
+    job: MoveJobResponse
+    access_links: tuple[AccessLinkResponse, ...]
+
+
+class ParticipantConnectedResponse(ContractModel):
+    job: MoveJobResponse
+    access_link: AccessLinkResponse

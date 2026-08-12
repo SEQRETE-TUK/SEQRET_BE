@@ -10,8 +10,15 @@ from sqlalchemy.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_HEAD = "a_01_0001"
-BUSINESS_TABLES = {"job_participant", "location", "move_job", "room_zone"}
+ALEMBIC_PREVIOUS = "a_01_0001"
+ALEMBIC_HEAD = "a_02_0001"
+BUSINESS_TABLES = {
+    "job_participant",
+    "location",
+    "move_job",
+    "participant_access_token",
+    "room_zone",
+}
 
 
 def _alembic_config(database_url: str | None = None) -> Config:
@@ -55,6 +62,11 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         command.upgrade(configuration, "head")
 
         assert _current_revision(engine) == ALEMBIC_HEAD
+        assert "existing_schema_probe" in inspect(engine).get_table_names()
+
+        command.downgrade(configuration, ALEMBIC_PREVIOUS)
+        assert "participant_access_token" not in inspect(engine).get_table_names()
+        assert "move_job" in inspect(engine).get_table_names()
         assert "existing_schema_probe" in inspect(engine).get_table_names()
 
         command.downgrade(configuration, ALEMBIC_BASELINE)
