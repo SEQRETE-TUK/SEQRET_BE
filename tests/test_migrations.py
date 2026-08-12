@@ -13,8 +13,9 @@ from sqlalchemy.engine import Engine
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
-ALEMBIC_PREVIOUS = "a_06_0001"
-ALEMBIC_HEAD = "a_07_0001"
+ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
+ALEMBIC_PREVIOUS = "a_07_0001"
+ALEMBIC_HEAD = "a_08_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -27,6 +28,9 @@ BUSINESS_TABLES = {
     "scope_approval",
     "change_request",
     "change_request_evidence",
+    "completion_confirmation",
+    "completion_evidence",
+    "audit_event",
 }
 
 
@@ -130,6 +134,14 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
 
         command.downgrade(configuration, ALEMBIC_PREVIOUS)
+        assert "completion_confirmation" not in inspect(engine).get_table_names()
+        assert "completion_evidence" not in inspect(engine).get_table_names()
+        assert "audit_event" not in inspect(engine).get_table_names()
+        assert "completed_at" not in {
+            column["name"] for column in inspect(engine).get_columns("move_job")
+        }
+
+        command.downgrade(configuration, ALEMBIC_CHANGE_PREVIOUS)
         assert "change_request" not in inspect(engine).get_table_names()
         assert "change_request_evidence" not in inspect(engine).get_table_names()
         assert "scope_approval" in inspect(engine).get_table_names()

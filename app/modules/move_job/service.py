@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.access.service import issue_access_link
+from app.modules.completion.models import AuditEventType
+from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, MoveJob, RoomZone
 from app.modules.move_job.schemas import (
     LocationResponse,
@@ -48,6 +50,7 @@ def _to_response(job: MoveJob) -> MoveJobResponse:
         status=job.status,
         scheduled_at=job.scheduled_at,
         created_at=job.created_at,
+        completed_at=job.completed_at,
         participants=tuple(
             ParticipantResponse(
                 id=participant.id,
@@ -95,6 +98,15 @@ async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> Move
     ]
     session.add(job)
     await session.flush()
+    add_audit_event(
+        session,
+        job.id,
+        AuditEventType.JOB_CREATED,
+        payload={
+            "participant_roles": sorted(participant.role.value for participant in job.participants),
+            "location_kinds": sorted(location.kind.value for location in job.locations),
+        },
+    )
     access_links = tuple(
         [await issue_access_link(session, participant) for participant in job.participants]
     )
@@ -114,6 +126,7 @@ async def connect_participant(
     session: AsyncSession,
     job_id: UUID,
     command: ParticipantCreate,
+    actor_participant_id: UUID | None = None,
 ) -> ParticipantConnectedResponse:
     """Connect one missing business role to an existing job."""
 
@@ -129,5 +142,16 @@ async def connect_participant(
         await session.flush()
     except IntegrityError as error:
         raise ParticipantRoleConflictError(command.role) from error
-    access_link = await issue_access_link(session, participant)
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.PARTICIPANT_CONNECTED,
+        actor_participant_id=actor_participant_id,
+        payload={"participant_id": str(participant.id), "role": participant.role.value},
+    )
+    access_link = await issue_access_link(
+        session,
+        participant,
+        actor_participant_id=actor_participant_id,
+    )
     return ParticipantConnectedResponse(job=_to_response(job), access_link=access_link)

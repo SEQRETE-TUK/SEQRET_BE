@@ -1,5 +1,6 @@
 """Access-link rotation and revocation API."""
 
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -39,7 +40,11 @@ async def create_access_link_endpoint(
         and actor.participant_id != participant.id
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
-    return await issue_access_link(session, participant)
+    return await issue_access_link(
+        session,
+        participant,
+        actor_participant_id=cast(UUID, actor.participant_id),
+    )
 
 
 @router.post(
@@ -62,4 +67,4 @@ async def revoke_access_link_endpoint(
         and actor.participant_id != access_link.participant.id
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
-    await revoke_access_link(session, access_link)
+    await revoke_access_link(session, access_link, cast(UUID, actor.participant_id))

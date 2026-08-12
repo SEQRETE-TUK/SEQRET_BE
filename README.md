@@ -62,12 +62,15 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/clarification`: 설명 요청
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/explanation`: 설명 제출
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/decision`: 승인 또는 거절
+- `POST /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인
+- `GET /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인 이력 조회
+- `GET /move-jobs/{job_id}/audit-events`: 작업 감사 이력 조회
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
 작업 생성과 참여자 연결 응답은 7일 동안 유효한 역할 링크의 비밀값을 한 번만 반환합니다. 이후 작업 API는 이 값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 고객과 회사 관리자는 참여자를 연결할 수 있고, 현장 작업자는 작업 조회만 할 수 있습니다. 링크를 재발급하면 기존 링크는 즉시 철회됩니다.
 
-촬영 미디어는 작업에 속한 구역과 `inventory` 또는 `condition` 목적으로만 최초 등록할 수 있습니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type과 정확한 크기를 다시 확인합니다. 비공개 객체의 signed URL은 응답으로만 전달하고 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
+촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type과 정확한 크기를 다시 확인합니다. 비공개 객체의 signed URL은 응답으로만 반환하고 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
 
 작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 
@@ -76,6 +79,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 내부 `import_analysis_draft` application command는 공용 `AnalysisResult`를 검증해 새 작업범위 버전으로 변환합니다. AI 제안의 출처 미디어와 구역을 확인하고 모델·프롬프트·confidence·검토 필요 여부를 provenance로 보존하며, 같은 analysis run은 한 번만 가져옵니다. 외부 HTTP에서 raw AI 결과를 직접 등록하는 경로는 제공하지 않습니다.
 
 현장 작업자는 잠긴 현재 범위를 기준으로 자신이 촬영한 `change_evidence` 미디어와 변경안을 제출할 수 있습니다. 고객 또는 회사 관리자는 한 번 설명을 요청한 뒤 승인하거나 사유와 함께 거절합니다. 승인된 요청만 기준 범위의 결과 버전을 만들며, 결과 버전은 다시 양측 확인을 받아야 잠깁니다.
+
+현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
 
 ## 로컬 개발
 

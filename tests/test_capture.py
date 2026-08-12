@@ -14,12 +14,22 @@ from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
 from app.contracts.fakes import FakeObjectStorage
-from app.contracts.media import MediaAssetStatus
+from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
 from app.main import create_app
 from app.modules.capture.models import MediaAsset
-from app.modules.capture.schemas import MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, MediaUploadResponse
-from app.modules.capture.service import CaptureResourceNotFoundError, create_capture_session
+from app.modules.capture.schemas import (
+    MAX_IMAGE_BYTES,
+    MAX_VIDEO_BYTES,
+    MediaUploadCreate,
+    MediaUploadResponse,
+)
+from app.modules.capture.service import (
+    CaptureResourceNotFoundError,
+    MediaPurposeNotAllowedError,
+    create_capture_session,
+    create_media_upload,
+)
 from app.platform.db import Base, create_session_factory
 
 CaptureApi = tuple[
@@ -190,12 +200,12 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
         json=valid_payload,
     )
     assert not_owner.status_code == 404
-    later_purpose = await client.post(
+    completion_upload = await client.post(
         upload_url,
         headers=_headers(customer_secret),
         json={**valid_payload, "media_purpose": "completion"},
     )
-    assert later_purpose.status_code == 422
+    assert completion_upload.status_code == 201
     foreign_zone = await client.post(
         upload_url,
         headers=_headers(customer_secret),
@@ -249,6 +259,40 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
         headers=_headers(customer_secret),
     )
     assert service_missing.status_code == 404
+
+    async with factory() as session:
+        monkeypatch.setattr("app.modules.capture.service.CAPTURE_PURPOSES", frozenset())
+        with pytest.raises(MediaPurposeNotAllowedError):
+            await create_media_upload(
+                session,
+                storage,
+                UUID(job["id"]),
+                UUID(capture["id"]),
+                UUID(
+                    next(
+                        participant["id"]
+                        for participant in job["participants"]
+                        if participant["role"] == "customer"
+                    )
+                ),
+                MediaUploadCreate(
+                    room_zone_id=UUID(job["locations"][0]["room_zones"][0]["id"]),
+                    media_purpose=MediaPurpose.INVENTORY,
+                    content_type="image/jpeg",
+                    content_length=1,
+                ),
+            )
+
+    async def reject_purpose(*_args: object) -> None:
+        raise MediaPurposeNotAllowedError(MediaPurpose.INVENTORY)
+
+    monkeypatch.setattr("app.modules.capture.router.create_media_upload", reject_purpose)
+    purpose_error = await client.post(
+        upload_url,
+        headers=_headers(customer_secret),
+        json=valid_payload,
+    )
+    assert purpose_error.status_code == 422
 
 
 @pytest.mark.anyio

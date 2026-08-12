@@ -14,7 +14,9 @@ from app.contracts.ai import AnalysisResult
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
-from app.modules.move_job.models import JobParticipant, Location, RoomZone
+from app.modules.completion.models import AuditEventType, CompletionConfirmation
+from app.modules.completion.service import add_audit_event
+from app.modules.move_job.models import JobParticipant, Location, MoveJob, MoveJobStatus, RoomZone
 from app.modules.scope.models import (
     ChangeRequest,
     ChangeRequestEvidence,
@@ -206,6 +208,21 @@ async def create_scope_version(
         await session.flush()
     except IntegrityError as error:
         raise ScopeVersionConflictError(command.parent_version_id or job_id) from error
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.SCOPE_VERSION_CREATED,
+        actor_participant_id=participant_id,
+        payload={
+            "scope_version_id": str(version.id),
+            "parent_version_id": (
+                str(version.parent_version_id) if version.parent_version_id else None
+            ),
+            "sequence_number": version.sequence_number,
+            "content_hash": version.content_hash,
+            "origin": "analysis" if analysis_source else "participant",
+        },
+    )
     return await _to_response(session, version)
 
 
@@ -275,8 +292,27 @@ async def approve_scope_version(
         approved_at=utc_now(),
     )
     session.add(approval)
-    if existing_roles | {role} == set(REQUIRED_APPROVAL_ROLES):
+    locked_now = existing_roles | {role} == set(REQUIRED_APPROVAL_ROLES)
+    if locked_now:
         version.locked_at = approval.approved_at
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.SCOPE_VERSION_APPROVED,
+        actor_participant_id=participant_id,
+        payload={"scope_version_id": str(scope_version_id), "role": role.value},
+    )
+    if locked_now:
+        add_audit_event(
+            session,
+            job_id,
+            AuditEventType.SCOPE_VERSION_LOCKED,
+            actor_participant_id=participant_id,
+            payload={
+                "scope_version_id": str(scope_version_id),
+                "content_hash": version.content_hash,
+            },
+        )
     try:
         await session.flush()
     except IntegrityError as error:
@@ -411,6 +447,11 @@ async def create_change_request(
     participant_id: UUID,
     command: ChangeRequestCreate,
 ) -> ChangeRequestResponse:
+    job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
+    if job is None:
+        raise ScopeResourceNotFoundError(job_id)
+    if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise ChangeRequestConflictError(job_id)
     participant = await session.scalar(
         select(JobParticipant.id).where(
             JobParticipant.id == participant_id,
@@ -420,6 +461,13 @@ async def create_change_request(
     )
     if participant is None:
         raise ScopeResourceNotFoundError(job_id)
+    if (
+        await session.scalar(
+            select(CompletionConfirmation.id).where(CompletionConfirmation.job_id == job_id)
+        )
+        is not None
+    ):
+        raise ChangeRequestConflictError(job_id)
     base_version = await session.scalar(
         select(ScopeVersion)
         .where(
@@ -472,6 +520,19 @@ async def create_change_request(
         ChangeRequestEvidence(change_request_id=request.id, media_asset_id=media_asset_id)
         for media_asset_id in command.evidence_media_asset_ids
     )
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.CHANGE_REQUESTED,
+        actor_participant_id=participant_id,
+        payload={
+            "change_request_id": str(request.id),
+            "base_scope_version_id": str(request.base_scope_version_id),
+            "evidence_media_asset_ids": sorted(
+                str(media_asset_id) for media_asset_id in command.evidence_media_asset_ids
+            ),
+        },
+    )
     await session.flush()
     return await _change_request_response(session, request)
 
@@ -510,6 +571,13 @@ async def request_change_clarification(
     request.clarification_requested_by_participant_id = participant_id
     request.clarification_request = message
     request.clarification_requested_at = utc_now()
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.CHANGE_CLARIFICATION_REQUESTED,
+        actor_participant_id=participant_id,
+        payload={"change_request_id": str(change_request_id)},
+    )
     await session.flush()
     return await _change_request_response(session, request)
 
@@ -536,6 +604,13 @@ async def explain_change_request(
     request.status = ChangeRequestStatus.PENDING
     request.explanation = explanation
     request.explained_at = utc_now()
+    add_audit_event(
+        session,
+        job_id,
+        AuditEventType.CHANGE_EXPLAINED,
+        actor_participant_id=participant_id,
+        payload={"change_request_id": str(change_request_id)},
+    )
     await session.flush()
     return await _change_request_response(session, request)
 
@@ -578,6 +653,22 @@ async def decide_change_request(
     request.decided_by_participant_id = participant_id
     request.decision_note = command.note
     request.decided_at = now
+    add_audit_event(
+        session,
+        job_id,
+        (
+            AuditEventType.CHANGE_APPROVED
+            if request.status is ChangeRequestStatus.APPROVED
+            else AuditEventType.CHANGE_REJECTED
+        ),
+        actor_participant_id=participant_id,
+        payload={
+            "change_request_id": str(change_request_id),
+            "result_scope_version_id": (
+                str(request.result_scope_version_id) if request.result_scope_version_id else None
+            ),
+        },
+    )
     await session.flush()
     return await _change_request_response(session, request)
 

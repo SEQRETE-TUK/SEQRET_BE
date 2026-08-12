@@ -14,6 +14,8 @@ from app.contracts.actor import ActorContext, ActorKind
 from app.contracts.primitives import JobId, ParticipantId, RequestId, utc_now
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.schemas import AccessLinkResponse
+from app.modules.completion.models import AuditEventType
+from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant
 
 ACCESS_TOKEN_TTL = timedelta(days=7)
@@ -35,6 +37,8 @@ def _hash_secret(secret: str) -> str:
 async def issue_access_link(
     session: AsyncSession,
     participant: JobParticipant,
+    *,
+    actor_participant_id: UUID | None = None,
 ) -> AccessLinkResponse:
     """Issue a high-entropy credential while storing only its digest."""
 
@@ -60,6 +64,17 @@ async def issue_access_link(
     )
     session.add(access_link)
     await session.flush()
+    add_audit_event(
+        session,
+        participant.job_id,
+        AuditEventType.ACCESS_LINK_ISSUED,
+        actor_participant_id=actor_participant_id,
+        payload={
+            "access_link_id": str(access_link.id),
+            "participant_id": str(participant.id),
+            "role": participant.role.value,
+        },
+    )
     return AccessLinkResponse(
         id=access_link.id,
         job_id=participant.job_id,
@@ -135,6 +150,19 @@ async def load_access_link(
 async def revoke_access_link(
     session: AsyncSession,
     access_link: ParticipantAccessToken,
+    actor_participant_id: UUID,
 ) -> None:
-    access_link.revoked_at = access_link.revoked_at or utc_now()
+    if access_link.revoked_at is not None:
+        return
+    access_link.revoked_at = utc_now()
+    add_audit_event(
+        session,
+        access_link.participant.job_id,
+        AuditEventType.ACCESS_LINK_REVOKED,
+        actor_participant_id=actor_participant_id,
+        payload={
+            "access_link_id": str(access_link.id),
+            "participant_id": str(access_link.participant.id),
+        },
+    )
     await session.flush()

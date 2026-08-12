@@ -96,6 +96,7 @@ class MoveJobResponse(ContractModel):
     status: MoveJobStatus
     scheduled_at: datetime | None
     created_at: datetime
+    completed_at: datetime | None
     participants: tuple[ParticipantResponse, ...]
     locations: tuple[LocationResponse, ...]
 

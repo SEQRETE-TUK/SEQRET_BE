@@ -1,5 +1,6 @@
 """Move job HTTP API."""
 
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -75,7 +76,12 @@ async def connect_participant_endpoint(
         frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER}),
     )
     try:
-        return await connect_participant(session, job_id, command)
+        return await connect_participant(
+            session,
+            job_id,
+            command,
+            cast(UUID, actor.participant_id),
+        )
     except MoveJobNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="move job not found"
