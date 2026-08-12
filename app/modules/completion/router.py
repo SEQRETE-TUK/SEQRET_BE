@@ -3,7 +3,7 @@
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import CurrentActor, authorize_job_actor
@@ -36,10 +36,17 @@ COMPLETION_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_
 async def confirm_completion_endpoint(
     job_id: UUID,
     command: CompletionConfirmationCreate,
+    request: Request,
     actor: CurrentActor,
     session: Session,
 ) -> CompletionResult:
     authorize_job_actor(actor, job_id, COMPLETION_ROLES)
+    retention_days = request.app.state.runtime_context.settings.media_retention_days
+    if retention_days is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="media retention policy is unavailable",
+        )
     try:
         return await confirm_completion(
             session,
@@ -47,6 +54,8 @@ async def confirm_completion_endpoint(
             cast(UUID, actor.participant_id),
             cast(ParticipantRole, actor.participant_role),
             command,
+            retention_days=retention_days,
+            trace_id=actor.trace_id,
         )
     except CompletionResourceNotFoundError as error:
         raise HTTPException(

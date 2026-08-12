@@ -98,16 +98,20 @@ async def create_retention_background_job(
     session: AsyncSession,
     job_id: UUID,
     media_asset_id: UUID,
-    participant_id: UUID,
+    participant_id: UUID | None,
     *,
     retention_cutoff: datetime,
     trace_id: str,
-    now: datetime | None = None,
+    scheduled_at: datetime | None = None,
 ) -> BackgroundJobResponse:
     """Persist one immutable deletion target after server-side retention checks."""
 
     if retention_cutoff.tzinfo is None or retention_cutoff.utcoffset() is None:
         raise ValueError("retention_cutoff must include a timezone")
+    if scheduled_at is not None and (
+        scheduled_at.tzinfo is None or scheduled_at.utcoffset() is None
+    ):
+        raise ValueError("scheduled_at must include a timezone")
     target = (
         await session.execute(
             select(MediaAsset, MoveJob)
@@ -134,10 +138,10 @@ async def create_retention_background_job(
         or _aware(move_job.completed_at) > retention_cutoff
         or asset.status not in DELETABLE_MEDIA_STATUSES
         or not asset.generation
+        or asset.generation != asset.generation.strip()
     ):
         raise BackgroundJobConflictError(media_asset_id)
 
-    operation_time = now or utc_now()
     row = BackgroundJob(
         move_job_id=job_id,
         media_asset_id=media_asset_id,
@@ -145,7 +149,7 @@ async def create_retention_background_job(
         target_object_key=asset.object_key,
         target_generation=asset.generation,
         trace_id=trace_id,
-        scheduled_at=operation_time,
+        scheduled_at=scheduled_at or utc_now(),
         created_by_participant_id=participant_id,
     )
     try:

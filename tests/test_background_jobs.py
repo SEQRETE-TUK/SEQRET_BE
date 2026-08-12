@@ -659,6 +659,17 @@ async def test_target_policy_and_unexpected_dispatch_errors(
                 retention_cutoff=FIXED_NOW.replace(tzinfo=None),
                 trace_id=TRACE_ID,
             )
+    with pytest.raises(ValueError, match="scheduled_at"):
+        async with factory.begin() as session:
+            await create_retention_background_job(
+                session,
+                UUID(created["job"]["id"]),
+                active_asset.id,
+                manager_id,
+                retention_cutoff=FIXED_NOW,
+                trace_id=TRACE_ID,
+                scheduled_at=FIXED_NOW.replace(tzinfo=None),
+            )
     with pytest.raises(BackgroundJobConflictError):
         async with factory.begin() as session:
             await create_retention_background_job(
@@ -687,17 +698,22 @@ async def test_target_policy_and_unexpected_dispatch_errors(
                 trace_id=TRACE_ID,
             )
 
-    generation_missing = await _seed_media(factory, second, generation=None)
-    with pytest.raises(BackgroundJobConflictError):
-        async with factory.begin() as session:
-            await create_retention_background_job(
-                session,
-                UUID(second["job"]["id"]),
-                generation_missing.id,
-                _participant_id(second, "company_manager"),
-                retention_cutoff=FIXED_NOW,
-                trace_id=TRACE_ID,
-            )
+    for invalid_generation in (None, " "):
+        generation_missing = await _seed_media(
+            factory,
+            second,
+            generation=invalid_generation,
+        )
+        with pytest.raises(BackgroundJobConflictError):
+            async with factory.begin() as session:
+                await create_retention_background_job(
+                    session,
+                    UUID(second["job"]["id"]),
+                    generation_missing.id,
+                    _participant_id(second, "company_manager"),
+                    retention_cutoff=FIXED_NOW,
+                    trace_id=TRACE_ID,
+                )
 
     third = await _create_job(client, "예상치 못한 큐 오류")
     asset = await _seed_media(factory, third)
@@ -783,7 +799,7 @@ async def test_create_recovers_only_a_matching_concurrent_insert(
             participant_id,
             retention_cutoff=FIXED_NOW,
             trace_id=TRACE_ID,
-            now=FIXED_NOW,
+            scheduled_at=FIXED_NOW,
         )
         assert response.id == concurrent.id
     else:
@@ -795,5 +811,5 @@ async def test_create_recovers_only_a_matching_concurrent_insert(
                 participant_id,
                 retention_cutoff=FIXED_NOW,
                 trace_id=TRACE_ID,
-                now=FIXED_NOW,
+                scheduled_at=FIXED_NOW,
             )

@@ -432,7 +432,7 @@ async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> 
                         participant_id,
                         retention_cutoff=operation_time - timedelta(days=30),
                         trace_id="0123456789abcdef0123456789abcdef",
-                        now=operation_time,
+                        scheduled_at=operation_time,
                     )
                     return response.id
 
@@ -696,6 +696,7 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                 content_type="image/jpeg",
                 size_bytes=16,
                 sha256_hex="f" * 64,
+                generation="7",
             )
             async with transactional_session(factory) as session:
                 await complete_media_upload(
@@ -721,6 +722,8 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                             participant_id,
                             role,
                             completion,
+                            retention_days=30,
+                            trace_id="0123456789abcdef0123456789abcdef",
                         )
                     return "confirmed"
                 except CompletionConflictError:
@@ -737,6 +740,11 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                 )
                 events = await list_audit_events(session, created.job.id)
                 loaded = await get_move_job(session, created.job.id)
+                retention_jobs = (
+                    await session.scalars(
+                        select(BackgroundJob).where(BackgroundJob.move_job_id == created.job.id)
+                    )
+                ).all()
 
             assert tuple(outcomes) == ("confirmed", "confirmed")
             assert {confirmation.role for confirmation in confirmations} == {
@@ -746,6 +754,9 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
             assert loaded.status is MoveJobStatus.COMPLETED
             assert loaded.completed_at is not None
             assert [event.event_type for event in events].count(AuditEventType.JOB_COMPLETED) == 1
+            assert len(retention_jobs) == 1
+            assert retention_jobs[0].status is BackgroundJobStatus.PENDING
+            assert retention_jobs[0].scheduled_at == loaded.completed_at + timedelta(days=30)
         finally:
             await engine.dispose()
 
