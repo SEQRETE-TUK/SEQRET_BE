@@ -24,7 +24,12 @@ from app.contracts.fakes import FakeCache
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.main import create_app
 from app.modules.access.models import ParticipantAccessToken
-from app.modules.access.service import InvalidAccessTokenError, _increment_database_rate_window
+from app.modules.access.service import (
+    InvalidAccessTokenError,
+    _increment_database_rate_window,
+    rotate_access_link,
+)
+from app.modules.move_job.models import JobParticipant
 from app.platform.db import Base, create_session_factory
 
 
@@ -79,6 +84,7 @@ async def _create_job(client: AsyncClient) -> dict[str, Any]:
             "participants": [
                 {"role": "customer", "display_name": "고객"},
                 {"role": "company_manager", "display_name": "관리자"},
+                {"role": "field_worker", "display_name": "현장 담당"},
             ],
             "locations": [
                 {
@@ -90,6 +96,7 @@ async def _create_job(client: AsyncClient) -> dict[str, Any]:
         },
     )
     assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
     return cast(dict[str, Any], response.json())
 
 
@@ -106,7 +113,7 @@ async def test_access_links_store_only_hash_and_enforce_job_and_role_boundaries(
     second = await _create_job(client)
     job = first["job"]
     links = first["access_links"]
-    customer_link, manager_link = links
+    customer_link, manager_link, _ = links
     customer_secret = customer_link["secret"]
     manager_secret = manager_link["secret"]
 
@@ -131,19 +138,33 @@ async def test_access_links_store_only_hash_and_enforce_job_and_role_boundaries(
     )
     assert cross_job.status_code == 404
 
-    connected = await client.post(
+    removed_provisioning = await client.post(
         f"/api/v1/move-jobs/{job['id']}/participants",
         json={"role": "field_worker", "display_name": "현장 담당"},
         headers=_bearer(manager_secret),
     )
-    assert connected.status_code == 201
-    worker_secret = connected.json()["access_link"]["secret"]
-    denied = await client.post(
-        f"/api/v1/move-jobs/{job['id']}/participants",
-        json={"role": "customer", "display_name": "다른 고객"},
-        headers=_bearer(worker_secret),
+    cross_role_rotation = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/participants/{customer_link['participant_id']}/access-links",
+        headers=_bearer(manager_secret),
     )
-    assert denied.status_code == 403
+    cross_job_link = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/access-links/{second['access_links'][0]['id']}/revoke",
+        headers=_bearer(manager_secret),
+    )
+    cross_job_path = await client.post(
+        f"/api/v1/move-jobs/{second['job']['id']}/access-links/{customer_link['id']}/revoke",
+        headers=_bearer(manager_secret),
+    )
+    openapi = (await client.get("/openapi.json")).json()
+    assert removed_provisioning.status_code == 404
+    assert cross_role_rotation.status_code == 403
+    assert cross_job_link.status_code == 404
+    assert cross_job_path.status_code == 404
+    assert "/api/v1/move-jobs/{job_id}/participants" not in openapi["paths"]
+    participants_schema = openapi["components"]["schemas"]["MoveJobCreate"]["properties"][
+        "participants"
+    ]
+    assert participants_schema["minItems"] == participants_schema["maxItems"] == 3
 
 
 @pytest.mark.anyio
@@ -153,18 +174,26 @@ async def test_access_link_rotation_expiry_and_revocation(
     client, factory = access_api
     created = await _create_job(client)
     job_id = created["job"]["id"]
-    customer_link, manager_link = created["access_links"]
+    customer_link, manager_link, _ = created["access_links"]
     customer_id = customer_link["participant_id"]
     old_secret = customer_link["secret"]
     manager_secret = manager_link["secret"]
 
-    rotated = await client.post(
+    forbidden_manager_rotation = await client.post(
         f"/api/v1/move-jobs/{job_id}/participants/{customer_id}/access-links",
         headers=_bearer(manager_secret),
     )
+    assert forbidden_manager_rotation.status_code == 403
+    rotated = await client.post(
+        f"/api/v1/move-jobs/{job_id}/participants/{customer_id}/access-links",
+        headers=_bearer(old_secret),
+    )
     assert rotated.status_code == 201
+    assert rotated.headers["cache-control"] == "no-store"
     new_link = rotated.json()
     new_secret = new_link["secret"]
+    assert new_link["id"] == customer_link["id"]
+    assert new_link["expires_at"] == customer_link["expires_at"]
     assert new_secret != old_secret
     assert (
         await client.get(f"/api/v1/move-jobs/{job_id}", headers=_bearer(old_secret))
@@ -216,11 +245,13 @@ async def test_access_link_rotation_expiry_and_revocation(
 @pytest.mark.anyio
 async def test_access_link_endpoints_hide_missing_targets_and_validate_expiry(
     access_api: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _ = access_api
-    created = await _create_job(client)
-    job_id = created["job"]["id"]
-    manager_secret = created["access_links"][1]["secret"]
+    first = await _create_job(client)
+    second = await _create_job(client)
+    job_id = first["job"]["id"]
+    manager_secret = first["access_links"][1]["secret"]
 
     missing_participant = await client.post(
         f"/api/v1/move-jobs/{job_id}/participants/{uuid4()}/access-links",
@@ -230,8 +261,30 @@ async def test_access_link_endpoints_hide_missing_targets_and_validate_expiry(
         f"/api/v1/move-jobs/{job_id}/access-links/{uuid4()}/revoke",
         headers=_bearer(manager_secret),
     )
-    assert missing_participant.status_code == 404
+    other_job_link = await client.post(
+        f"/api/v1/move-jobs/{job_id}/access-links/{second['access_links'][0]['id']}/revoke",
+        headers=_bearer(manager_secret),
+    )
+    assert missing_participant.status_code == 403
     assert missing_link.status_code == 404
+    assert other_job_link.status_code == 404
+
+    async def disappear(*_args: object) -> None:
+        return None
+
+    async def invalidate(*_args: object, **_kwargs: object) -> None:
+        raise InvalidAccessTokenError
+
+    manager_id = first["access_links"][1]["participant_id"]
+    rotation_url = f"/api/v1/move-jobs/{job_id}/participants/{manager_id}/access-links"
+    with monkeypatch.context() as context:
+        context.setattr("app.modules.access.router.load_participant", disappear)
+        assert (await client.post(rotation_url, headers=_bearer(manager_secret))).status_code == 404
+    with monkeypatch.context() as context:
+        context.setattr("app.modules.access.router.rotate_access_link", invalidate)
+        invalidated = await client.post(rotation_url, headers=_bearer(manager_secret))
+        assert invalidated.status_code == 401
+        assert invalidated.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.anyio
@@ -240,7 +293,7 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
 ) -> None:
     settings = Settings(
         environment=AppEnvironment.TEST,
-        access_rate_limit_requests=2,
+        access_rate_limit_requests=3,
         access_rate_limit_window_seconds=30,
     )
     client, factory, resources = await _access_api_with_settings(tmp_path, settings)
@@ -250,11 +303,19 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
         job_id = created["job"]["id"]
         customer_link = created["access_links"][0]
         secret = customer_link["secret"]
+        participant_id = customer_link["participant_id"]
         url = f"/api/v1/move-jobs/{job_id}"
 
         assert (await client.get(url, headers=_bearer(secret))).status_code == 200
-        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
-        rejected = await client.get(url, headers=_bearer(secret))
+        rotated = await client.post(
+            f"/api/v1/move-jobs/{job_id}/participants/{participant_id}/access-links",
+            headers=_bearer(secret),
+        )
+        assert rotated.status_code == 201
+        new_secret = rotated.json()["secret"]
+        assert rotated.json()["id"] == customer_link["id"]
+        assert (await client.get(url, headers=_bearer(new_secret))).status_code == 200
+        rejected = await client.get(url, headers=_bearer(new_secret))
 
         assert rejected.status_code == 429
         assert rejected.headers["retry-after"] == "30"
@@ -262,7 +323,7 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
         async with factory() as session:
             stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
             assert stored is not None
-            assert stored.rate_window_count == 2
+            assert stored.rate_window_count == 3
             assert stored.last_used_at is not None
             assert secret not in stored.token_hash
 
@@ -272,7 +333,7 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
                 .where(ParticipantAccessToken.id == UUID(customer_link["id"]))
                 .values(rate_window_started_at=datetime.now(UTC) - timedelta(seconds=31))
             )
-        assert (await client.get(url, headers=_bearer(secret))).status_code == 200
+        assert (await client.get(url, headers=_bearer(new_secret))).status_code == 200
         async with factory() as session:
             stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
             assert stored is not None
@@ -283,12 +344,12 @@ async def test_database_fallback_limits_valid_access_link_and_resets_window(
 
 
 @pytest.mark.anyio
-async def test_redis_counter_limits_requests_without_mutating_database_fallback(
+async def test_rotation_preserves_redis_and_database_rate_limits(
     tmp_path: Path,
 ) -> None:
     settings = Settings(
         environment=AppEnvironment.TEST,
-        access_rate_limit_requests=1,
+        access_rate_limit_requests=2,
         access_rate_limit_window_seconds=10,
     )
     client, factory, resources = await _access_api_with_settings(tmp_path, settings)
@@ -300,13 +361,27 @@ async def test_redis_counter_limits_requests_without_mutating_database_fallback(
         url = f"/api/v1/move-jobs/{created['job']['id']}"
 
         assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 200
-        assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 429
+        rotated = await client.post(
+            f"/api/v1/move-jobs/{created['job']['id']}/participants/"
+            f"{customer_link['participant_id']}/access-links",
+            headers=_bearer(customer_link["secret"]),
+        )
+        assert rotated.status_code == 201
+        assert rotated.json()["id"] == customer_link["id"]
+        assert rotated.json()["expires_at"] == customer_link["expires_at"]
 
         async with factory() as session:
             stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
             assert stored is not None
-            assert stored.rate_window_count == 0
-            assert stored.rate_window_started_at is None
+            assert stored.rate_window_count == 2
+            assert stored.rate_window_started_at is not None
+        async with factory.begin() as session:
+            await session.execute(
+                update(ParticipantAccessToken)
+                .where(ParticipantAccessToken.id == UUID(customer_link["id"]))
+                .values(rate_window_started_at=None, rate_window_count=0)
+            )
+        assert (await client.get(url, headers=_bearer(rotated.json()["secret"]))).status_code == 429
     finally:
         await client.aclose()
         await engine.dispose()
@@ -321,6 +396,17 @@ class UnavailableCache:
         timeout_seconds: float,
     ) -> int:
         raise ProviderError(ProviderErrorKind.UNAVAILABLE, "offline", retryable=True)
+
+
+class OverLimitCache:
+    async def increment_fixed_window(
+        self,
+        *,
+        key: str,
+        window_seconds: int,
+        timeout_seconds: float,
+    ) -> int:
+        return 2
 
 
 class MisconfiguredCache:
@@ -345,18 +431,29 @@ async def test_redis_outage_uses_database_fallback_but_configuration_error_propa
         created = await _create_job(client)
         customer_link = created["access_links"][0]
         url = f"/api/v1/move-jobs/{created['job']['id']}"
-        application.state.cache_port = UnavailableCache()
-
+        application.state.cache_port = FakeCache()
         assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 200
+        application.state.cache_port = UnavailableCache()
         assert (await client.get(url, headers=_bearer(customer_link["secret"]))).status_code == 429
         async with factory() as session:
             stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
             assert stored is not None
-            assert stored.rate_window_count == 1
+        assert stored.rate_window_count == 1
+
+        worker_link = created["access_links"][2]
+        assert (await client.get(url, headers=_bearer(worker_link["secret"]))).status_code == 200
+        async with factory() as session:
+            worker = await session.get(ParticipantAccessToken, UUID(worker_link["id"]))
+            assert worker is not None
+            assert worker.rate_window_count == 1
+
+        application.state.cache_port = OverLimitCache()
+        manager_link = created["access_links"][1]
+        assert (await client.get(url, headers=_bearer(manager_link["secret"]))).status_code == 429
 
         application.state.cache_port = MisconfiguredCache()
         with pytest.raises(ProviderError) as error_info:
-            await client.get(url, headers=_bearer(customer_link["secret"]))
+            await client.get(url, headers=_bearer(manager_link["secret"]))
         assert error_info.value.kind is ProviderErrorKind.PERMISSION_DENIED
     finally:
         await client.aclose()
@@ -391,6 +488,7 @@ async def test_database_fallback_rejects_link_revoked_after_authentication(
     client, factory = access_api
     created = await _create_job(client)
     access_link_id = UUID(created["access_links"][0]["id"])
+    participant_id = UUID(created["access_links"][0]["participant_id"])
     async with factory.begin() as session:
         await session.execute(
             update(ParticipantAccessToken)
@@ -403,6 +501,18 @@ async def test_database_fallback_rejects_link_revoked_after_authentication(
             await _increment_database_rate_window(
                 session,
                 access_link_id,
+                expected_token_hash=hashlib.sha256(
+                    created["access_links"][0]["secret"].encode()
+                ).hexdigest(),
                 now=datetime.now(UTC),
                 window_seconds=60,
+            )
+        participant = await session.get(JobParticipant, participant_id)
+        assert participant is not None
+        with pytest.raises(InvalidAccessTokenError):
+            await rotate_access_link(
+                session,
+                participant,
+                current_secret=created["access_links"][0]["secret"],
+                actor_participant_id=participant_id,
             )

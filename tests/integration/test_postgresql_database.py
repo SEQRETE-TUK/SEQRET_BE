@@ -2,7 +2,7 @@
 
 import os
 import sys
-from asyncio import Event, SelectorEventLoop, gather
+from asyncio import Barrier, Event, SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -36,7 +36,11 @@ from app.contracts.primitives import (
     MediaAssetId,
 )
 from app.modules.access.models import ParticipantAccessToken
-from app.modules.access.service import _increment_database_rate_window
+from app.modules.access.service import (
+    InvalidAccessTokenError,
+    _increment_database_rate_window,
+    rotate_access_link,
+)
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.background_job.service import (
     BackgroundJobConflictError,
@@ -61,14 +65,14 @@ from app.modules.completion.service import (
     list_audit_events,
     list_completion_confirmations,
 )
-from app.modules.move_job.models import LocationKind, MoveJob, MoveJobStatus
+from app.modules.move_job.models import JobParticipant, LocationKind, MoveJob, MoveJobStatus
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
     ParticipantCreate,
     RoomZoneCreate,
 )
-from app.modules.move_job.service import connect_participant, create_move_job, get_move_job
+from app.modules.move_job.service import create_move_job, get_move_job
 from app.modules.scope.models import ChangeRequestStatus, ScopeApproval
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
@@ -275,6 +279,14 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
             title="Rate fallback race",
             participants=(
                 ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
             ),
             locations=(
                 LocationCreate(
@@ -289,6 +301,11 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
             async with transactional_session(factory) as session:
                 created = await create_move_job(session, command_data)
                 access_link_id = created.access_links[0].id
+                participant_id = created.access_links[0].participant_id
+                original_secret = created.access_links[0].secret
+                stored = await session.get(ParticipantAccessToken, access_link_id)
+                assert stored is not None
+                original_hash = stored.token_hash
 
             now = datetime.now(UTC)
 
@@ -297,6 +314,7 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
                     return await _increment_database_rate_window(
                         session,
                         access_link_id,
+                        expected_token_hash=original_hash,
                         now=now,
                         window_seconds=60,
                     )
@@ -309,6 +327,35 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
                 assert stored is not None
                 assert stored.rate_window_count == 20
                 assert stored.rate_window_started_at == now
+
+            rotation_barrier = Barrier(2)
+
+            async def rotate() -> str:
+                try:
+                    async with transactional_session(factory) as session:
+                        participant = await session.get(JobParticipant, participant_id)
+                        assert participant is not None
+                        await rotation_barrier.wait()
+                        await rotate_access_link(
+                            session,
+                            participant,
+                            current_secret=original_secret,
+                            actor_participant_id=participant_id,
+                        )
+                    return "rotated"
+                except InvalidAccessTokenError:
+                    return "stale"
+
+            assert sorted(await gather(rotate(), rotate())) == ["rotated", "stale"]
+            async with transactional_session(factory) as session:
+                with pytest.raises(InvalidAccessTokenError):
+                    await _increment_database_rate_window(
+                        session,
+                        access_link_id,
+                        expected_token_hash=original_hash,
+                        now=now,
+                        window_seconds=60,
+                    )
         finally:
             await engine.dispose()
 
@@ -383,6 +430,11 @@ async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> 
                 ParticipantCreate(
                     role=ParticipantRole.COMPANY_MANAGER,
                     display_name="Manager",
+                ),
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
                 ),
             ),
             locations=(
@@ -565,7 +617,17 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
         factory = create_session_factory(engine)
         command_data = MoveJobCreate(
             title="강남 이사",
-            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="관리자",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="현장 담당",
+                ),
+            ),
             locations=(
                 LocationCreate(
                     kind=LocationKind.ORIGIN,
@@ -580,20 +642,11 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 created = await create_move_job(session, command_data)
 
             async with transactional_session(factory) as session:
-                connected = await connect_participant(
-                    session,
-                    created.job.id,
-                    ParticipantCreate(
-                        role=ParticipantRole.FIELD_WORKER,
-                        display_name="현장 담당",
-                    ),
-                )
-
-            async with transactional_session(factory) as session:
                 loaded = await get_move_job(session, created.job.id)
 
-            assert connected.job == loaded
+            assert created.job == loaded
             assert [participant.role for participant in loaded.participants] == [
+                ParticipantRole.COMPANY_MANAGER,
                 ParticipantRole.CUSTOMER,
                 ParticipantRole.FIELD_WORKER,
             ]
@@ -774,7 +827,17 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
         storage = FakeObjectStorage()
         job_command = MoveJobCreate(
             title="촬영 통합 테스트",
-            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="관리자",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="현장 담당",
+                ),
+            ),
             locations=(
                 LocationCreate(
                     kind=LocationKind.ORIGIN,
@@ -787,17 +850,22 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
         try:
             async with transactional_session(factory) as session:
                 created = await create_move_job(session, job_command)
+                customer = next(
+                    participant
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
                 capture = await create_capture_session(
                     session,
                     created.job.id,
-                    created.job.participants[0].id,
+                    customer.id,
                 )
                 upload = await create_media_upload(
                     session,
                     storage,
                     created.job.id,
                     capture.id,
-                    created.job.participants[0].id,
+                    customer.id,
                     MediaUploadCreate(
                         room_zone_id=created.job.locations[0].room_zones[0].id,
                         media_purpose=MediaPurpose.INVENTORY,
@@ -820,7 +888,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
                     created.job.id,
                     capture.id,
                     upload.asset.id,
-                    created.job.participants[0].id,
+                    customer.id,
                 )
 
             assert completed.status is MediaAssetStatus.UPLOADED
@@ -860,7 +928,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
                         scope_version.c.id == imported.id
                     )
                 )
-            assert restored_creator == created.job.participants[0].id
+            assert restored_creator == customer.id
         finally:
             downgraded_engine.dispose()
 
@@ -877,7 +945,17 @@ async def test_scope_version_concurrent_children_allow_one_winner_on_postgresql(
         factory = create_session_factory(engine)
         job_command = MoveJobCreate(
             title="작업범위 동시성 테스트",
-            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="관리자",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="현장 담당",
+                ),
+            ),
             locations=(
                 LocationCreate(
                     kind=LocationKind.ORIGIN,
@@ -890,7 +968,11 @@ async def test_scope_version_concurrent_children_allow_one_winner_on_postgresql(
         try:
             async with transactional_session(factory) as session:
                 created = await create_move_job(session, job_command)
-                participant_id = created.job.participants[0].id
+                participant_id = next(
+                    participant.id
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
                 room_zone_id = created.job.locations[0].room_zones[0].id
                 root = await create_scope_version(
                     session,
@@ -964,6 +1046,10 @@ async def test_scope_lock_and_edit_race_allow_one_winner_on_postgresql() -> None
                 ParticipantCreate(
                     role=ParticipantRole.COMPANY_MANAGER,
                     display_name="관리자",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="현장 담당",
                 ),
             ),
             locations=(

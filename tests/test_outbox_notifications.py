@@ -375,6 +375,7 @@ async def test_notification_api_returns_only_current_participant_intents(
                 "participants": [
                     {"role": "customer", "display_name": "Customer"},
                     {"role": "company_manager", "display_name": "Manager"},
+                    {"role": "field_worker", "display_name": "Field worker"},
                 ],
                 "locations": [
                     {

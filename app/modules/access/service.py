@@ -47,26 +47,13 @@ def _hash_secret(secret: str) -> str:
 async def issue_access_link(
     session: AsyncSession,
     participant: JobParticipant,
-    *,
-    actor_participant_id: UUID | None = None,
 ) -> AccessLinkResponse:
-    """Issue a high-entropy credential while storing only its digest."""
+    """Issue the initial high-entropy credential for a new participant."""
 
     now = utc_now()
     expiry = now + ACCESS_TOKEN_TTL
 
     secret = secrets.token_urlsafe(32)
-    await session.execute(
-        select(JobParticipant.id).where(JobParticipant.id == participant.id).with_for_update()
-    )
-    await session.execute(
-        update(ParticipantAccessToken)
-        .where(
-            ParticipantAccessToken.participant_id == participant.id,
-            ParticipantAccessToken.revoked_at.is_(None),
-        )
-        .values(revoked_at=now)
-    )
     access_link = ParticipantAccessToken(
         participant_id=participant.id,
         token_hash=_hash_secret(secret),
@@ -78,7 +65,6 @@ async def issue_access_link(
         session,
         participant.job_id,
         AuditEventType.ACCESS_LINK_ISSUED,
-        actor_participant_id=actor_participant_id,
         payload={
             "access_link_id": str(access_link.id),
             "participant_id": str(participant.id),
@@ -92,6 +78,55 @@ async def issue_access_link(
         role=participant.role,
         secret=secret,
         expires_at=expiry,
+    )
+
+
+async def rotate_access_link(
+    session: AsyncSession,
+    participant: JobParticipant,
+    *,
+    current_secret: str,
+    actor_participant_id: UUID,
+) -> AccessLinkResponse:
+    """Replace only the caller's secret while preserving its absolute lifetime and quota."""
+
+    now = utc_now()
+    statement = (
+        select(ParticipantAccessToken)
+        .where(
+            ParticipantAccessToken.participant_id == participant.id,
+            ParticipantAccessToken.revoked_at.is_(None),
+            ParticipantAccessToken.token_hash == _hash_secret(current_secret),
+            ParticipantAccessToken.expires_at > now,
+        )
+        .with_for_update()
+    )
+    access_link = (await session.scalars(statement)).one_or_none()
+    if access_link is None:
+        raise InvalidAccessTokenError
+
+    secret = secrets.token_urlsafe(32)
+    access_link.token_hash = _hash_secret(secret)
+    await session.flush()
+    add_audit_event(
+        session,
+        participant.job_id,
+        AuditEventType.ACCESS_LINK_ISSUED,
+        actor_participant_id=actor_participant_id,
+        payload={
+            "access_link_id": str(access_link.id),
+            "participant_id": str(participant.id),
+            "role": participant.role.value,
+            "operation": "self_rotation",
+        },
+    )
+    return AccessLinkResponse(
+        id=access_link.id,
+        job_id=participant.job_id,
+        participant_id=participant.id,
+        role=participant.role,
+        secret=secret,
+        expires_at=_as_utc(access_link.expires_at),
     )
 
 
@@ -111,6 +146,7 @@ async def _increment_database_rate_window(
     session: AsyncSession,
     access_link_id: UUID,
     *,
+    expected_token_hash: str,
     now: datetime,
     window_seconds: int,
 ) -> int:
@@ -124,6 +160,7 @@ async def _increment_database_rate_window(
         update(ParticipantAccessToken)
         .where(
             ParticipantAccessToken.id == access_link_id,
+            ParticipantAccessToken.token_hash == expected_token_hash,
             ParticipantAccessToken.revoked_at.is_(None),
             ParticipantAccessToken.expires_at > now,
         )
@@ -156,11 +193,19 @@ async def _enforce_access_rate_limit(
     window_seconds: int,
     timeout_seconds: float,
 ) -> None:
-    count: int | None = None
+    database_count = await _increment_database_rate_window(
+        session,
+        access_link.id,
+        expected_token_hash=access_link.token_hash,
+        now=now,
+        window_seconds=window_seconds,
+    )
+    if database_count > request_limit:
+        raise AccessRateLimitExceededError(window_seconds)
     if cache is not None:
         try:
-            count = await cache.increment_fixed_window(
-                key=f"seqret:rate:access:{access_link.token_hash}",
+            cache_count = await cache.increment_fixed_window(
+                key=f"seqret:rate:access:{access_link.participant_id}",
                 window_seconds=window_seconds,
                 timeout_seconds=timeout_seconds,
             )
@@ -170,16 +215,9 @@ async def _enforce_access_rate_limit(
                 ProviderErrorKind.UNAVAILABLE,
             }:
                 raise
-            count = None
-    if count is None:
-        count = await _increment_database_rate_window(
-            session,
-            access_link.id,
-            now=now,
-            window_seconds=window_seconds,
-        )
-    if count > request_limit:
-        raise AccessRateLimitExceededError(window_seconds)
+            return
+        if cache_count > request_limit:
+            raise AccessRateLimitExceededError(window_seconds)
 
 
 async def authenticate_access_token(

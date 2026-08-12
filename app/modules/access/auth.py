@@ -20,23 +20,32 @@ from app.platform.observability import set_correlation_job
 bearer = HTTPBearer(auto_error=False)
 
 
-async def get_current_actor(
+async def get_bearer_secret(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    request: Request,
-) -> ActorContext:
+) -> str:
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid access token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return credentials.credentials
+
+
+BearerSecret = Annotated[str, Depends(get_bearer_secret)]
+
+
+async def get_current_actor(
+    secret: BearerSecret,
+    request: Request,
+) -> ActorContext:
     try:
         settings = request.app.state.runtime_context.settings
         cache: CachePort | None = request.app.state.cache_port
         async with transactional_session(request.app.state.database_session_factory) as session:
             actor = await authenticate_access_token(
                 session,
-                credentials.credentials,
+                secret,
                 cache=cache,
                 rate_limit_requests=settings.access_rate_limit_requests,
                 rate_limit_window_seconds=settings.access_rate_limit_window_seconds,
