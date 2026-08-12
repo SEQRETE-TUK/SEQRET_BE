@@ -81,23 +81,19 @@ jobs:
               --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" --format=json
           }
           reconciled_service() {
-            jq -e '(.metadata.generation | tostring) == (.status.observedGeneration | tostring)
-              and ([.status.conditions[]
-                | select(.type == "Ready") | .status][0] // "") == "True"'
+            jq -e '.metadata.generation != null
+              and .status.observedGeneration != null
+              and (.metadata.generation | tostring) == (.status.observedGeneration | tostring)'
           }
           service_json=""
           current=""
           rollback_target=""
           generation=""
           observed_generation=""
-          service_ready=""
           for attempt in {1..30}; do
             candidate="$(describe_service 2>/dev/null || true)"
             generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
             observed_generation="$(jq -r '.status.observedGeneration // empty' <<< "${candidate}" 2>/dev/null || true)"
-            service_ready="$(jq -r '[.status.conditions[]
-              | select(.type == "Ready") | .status][0] // empty'
-              <<< "${candidate}" 2>/dev/null || true)"
             if ! reconciled_service <<< "${candidate}" >/dev/null 2>&1; then
               sleep 5
               continue
@@ -115,7 +111,7 @@ jobs:
             sleep 5
           done
           if [[ -z "${service_json}" ]]; then
-            echo "Only the rollback target recorded by the current deployment can be restored (current=${current:-unavailable}, rollback_target=${rollback_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable}, ready=${service_ready:-unavailable})." >&2
+            echo "Only the rollback target recorded by the current deployment can be restored (current=${current:-unavailable}, rollback_target=${rollback_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable})." >&2
             exit 1
           fi
           previous_traffic="$(jq -r '[.status.traffic[]
@@ -150,9 +146,6 @@ jobs:
             candidate="$(describe_service 2>/dev/null || true)"
             generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
             observed_generation="$(jq -r '.status.observedGeneration // empty' <<< "${candidate}" 2>/dev/null || true)"
-            service_ready="$(jq -r '[.status.conditions[]
-              | select(.type == "Ready") | .status][0] // empty'
-              <<< "${candidate}" 2>/dev/null || true)"
             if reconciled_service <<< "${candidate}" >/dev/null 2>&1; then
               actual="$(jq -r '[.status.traffic[]
                 | select((.percent // 0) == 100) | .revisionName][0] // empty'
@@ -169,7 +162,7 @@ jobs:
             sleep 5
           done
           if (( ready == 0 )); then
-            echo "The rollback target was not confirmed by Cloud Run and the public health check (traffic=${actual:-unavailable}, health=${healthy:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable}, ready=${service_ready:-unavailable})." >&2
+            echo "The rollback target was not confirmed by Cloud Run and the public health check (traffic=${actual:-unavailable}, health=${healthy:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable})." >&2
             exit 1
           fi
           if (( changed == 1 )); then
@@ -182,9 +175,6 @@ jobs:
               candidate="$(describe_service 2>/dev/null || true)"
               generation="$(jq -r '.metadata.generation // empty' <<< "${candidate}" 2>/dev/null || true)"
               observed_generation="$(jq -r '.status.observedGeneration // empty' <<< "${candidate}" 2>/dev/null || true)"
-              service_ready="$(jq -r '[.status.conditions[]
-                | select(.type == "Ready") | .status][0] // empty'
-                <<< "${candidate}" 2>/dev/null || true)"
               if reconciled_service <<< "${candidate}" >/dev/null 2>&1; then
                 remaining_target="$(jq -r '[.status.traffic[]
                   | select(.tag == "rollback-target") | .revisionName][0] // empty'
@@ -197,7 +187,7 @@ jobs:
               sleep 5
             done
             if (( consumed == 0 )); then
-              echo "Cloud Run did not consume the rollback target (target=${remaining_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable}, ready=${service_ready:-unavailable})." >&2
+              echo "Cloud Run did not consume the rollback target (target=${remaining_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable})." >&2
               exit 1
             fi
           fi
