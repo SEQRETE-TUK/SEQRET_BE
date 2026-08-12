@@ -42,7 +42,15 @@
 
 ## 상태
 
-FastAPI·PostgreSQL 기반과 두 트랙이 공유하는 공통 계약을 구성했습니다.
+FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·위치·구역 API를 구성했습니다.
+
+업무 API는 설정된 API prefix(기본 `/api/v1`) 아래에서 제공됩니다.
+
+- `POST /move-jobs`: 작업과 초기 참여자·위치·구역 생성
+- `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
+- `POST /move-jobs/{job_id}/participants`: 작업 역할 참여자 연결
+
+위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
 ## 로컬 개발
 

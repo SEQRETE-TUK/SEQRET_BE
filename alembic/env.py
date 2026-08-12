@@ -7,14 +7,14 @@ from alembic import context
 from sqlalchemy import Connection, engine_from_config, pool
 
 from app.config import Settings
-from app.platform.db.base import Base
+from app.modules.move_job.models import MoveJob
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = Base.metadata
+target_metadata = MoveJob.metadata
 
 
 def _database_url() -> str:

@@ -45,6 +45,9 @@ addopts = [
 ]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+concurrency = ["greenlet", "thread"]
+
 [tool.ruff]
 line-length = 100
 src = ["app", "tests"]
