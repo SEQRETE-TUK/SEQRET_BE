@@ -29,8 +29,15 @@ from app.platform.db import create_database_engine, create_session_factory, tran
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_HEAD = "a_01_0001"
-BUSINESS_TABLES = {"job_participant", "location", "move_job", "room_zone"}
+ALEMBIC_PREVIOUS = "a_01_0001"
+ALEMBIC_HEAD = "a_02_0001"
+BUSINESS_TABLES = {
+    "job_participant",
+    "location",
+    "move_job",
+    "participant_access_token",
+    "room_zone",
+}
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
 
@@ -124,6 +131,11 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert _current_revision(engine) == ALEMBIC_HEAD
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
+            command.downgrade(configuration, ALEMBIC_PREVIOUS)
+            assert "participant_access_token" not in inspect(engine).get_table_names()
+            assert "move_job" in inspect(engine).get_table_names()
+            assert "existing_schema_probe" in inspect(engine).get_table_names()
+
             command.downgrade(configuration, ALEMBIC_BASELINE)
             assert BUSINESS_TABLES.isdisjoint(inspect(engine).get_table_names())
             assert "existing_schema_probe" in inspect(engine).get_table_names()
@@ -177,7 +189,7 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
             async with transactional_session(factory) as session:
                 connected = await connect_participant(
                     session,
-                    created.id,
+                    created.job.id,
                     ParticipantCreate(
                         role=ParticipantRole.FIELD_WORKER,
                         display_name="현장 담당",
@@ -185,9 +197,9 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 )
 
             async with transactional_session(factory) as session:
-                loaded = await get_move_job(session, created.id)
+                loaded = await get_move_job(session, created.job.id)
 
-            assert connected == loaded
+            assert connected.job == loaded
             assert [participant.role for participant in loaded.participants] == [
                 ParticipantRole.CUSTOMER,
                 ParticipantRole.FIELD_WORKER,

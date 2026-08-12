@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app import __version__
 from app.api.routes.system import router as system_router
 from app.config import AppEnvironment, Settings
+from app.modules.access.router import router as access_router
 from app.modules.move_job.router import router as move_job_router
 from app.platform.db import create_database_engine, create_session_factory
 from app.runtime import RuntimeKind, create_runtime_context
@@ -44,4 +45,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.runtime_context = runtime_context
     application.include_router(system_router)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)
+    application.include_router(access_router, prefix=runtime_context.settings.api_prefix)
     return application
