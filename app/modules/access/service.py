@@ -295,7 +295,17 @@ async def revoke_access_link(
 ) -> None:
     if access_link.revoked_at is not None:
         return
-    access_link.revoked_at = utc_now()
+    revoked_link_id = await session.scalar(
+        update(ParticipantAccessToken)
+        .where(
+            ParticipantAccessToken.id == access_link.id,
+            ParticipantAccessToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=utc_now())
+        .returning(ParticipantAccessToken.id)
+    )
+    if revoked_link_id is None:
+        return
     add_audit_event(
         session,
         access_link.participant.job_id,
