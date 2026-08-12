@@ -19,16 +19,23 @@ from app.platform.event_bus.service import RelayResult
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(("failed", "exit_code"), [(1, 1), (0, 0)])
+@pytest.mark.parametrize(
+    ("result", "exit_code"),
+    [
+        (RelayResult(claimed=1, published=0, failed=1), 1),
+        (RelayResult(claimed=1, published=0, failed=0), 1),
+        (RelayResult(claimed=1, published=1, failed=0), 0),
+    ],
+)
 async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
     monkeypatch: pytest.MonkeyPatch,
-    failed: int,
+    result: RelayResult,
     exit_code: int,
 ) -> None:
     engine = SimpleNamespace(dispose=AsyncMock())
     factory = object()
     bus = SimpleNamespace(close=Mock())
-    relay = AsyncMock(return_value=RelayResult(claimed=1, published=int(not failed), failed=failed))
+    relay = AsyncMock(return_value=result)
     span = Mock()
     observability = SimpleNamespace(
         tracer=Mock(),
@@ -62,8 +69,8 @@ async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
     )
     bus.close.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
-    getattr(observability.logger, "error" if failed else "info").assert_called_once()
-    if failed:
+    getattr(observability.logger, "error" if exit_code else "info").assert_called_once()
+    if exit_code:
         assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
     else:
         span.set_status.assert_not_called()
