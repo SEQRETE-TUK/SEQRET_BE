@@ -1,0 +1,353 @@
+"""Contract tests reused by deterministic local port fakes."""
+
+from uuid import uuid4
+
+import pytest
+
+from app.contracts import (
+    AIProviderPort,
+    AnalysisRequest,
+    AnalysisResult,
+    AnalysisRunId,
+    CaptureSessionId,
+    DomainEvent,
+    DomainEventType,
+    EventBusPort,
+    EventId,
+    IdempotencyKey,
+    MediaAssetId,
+    ObjectStoragePort,
+    ProviderError,
+    ProviderErrorKind,
+    StorageObjectMetadata,
+    TaskQueuePort,
+)
+from app.contracts.fakes import FakeAIProvider, FakeEventBus, FakeObjectStorage, FakeTaskQueue
+from app.contracts.primitives import AggregateId
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Run async contract tests with asyncio only."""
+
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> None:
+    storage = FakeObjectStorage()
+    key = IdempotencyKey("media-delete:1")
+    storage.metadata["jobs/1/photo.jpg"] = StorageObjectMetadata(
+        object_key="jobs/1/photo.jpg",
+        content_type="image/jpeg",
+        size_bytes=10,
+    )
+
+    assert isinstance(storage, ObjectStoragePort)
+    assert (
+        await storage.create_upload_url(
+            object_key="jobs/1/photo.jpg",
+            content_type="image/jpeg",
+            content_length=10,
+            expires_in_seconds=300,
+            timeout_seconds=2,
+        )
+        == "https://storage.invalid/upload/jobs/1/photo.jpg"
+    )
+    assert (
+        await storage.create_read_url(
+            object_key="jobs/1/photo.jpg",
+            expires_in_seconds=60,
+            timeout_seconds=2,
+        )
+        == "https://storage.invalid/read/jobs/1/photo.jpg"
+    )
+    assert (
+        await storage.get_metadata(object_key="jobs/1/photo.jpg", timeout_seconds=2)
+    ).size_bytes == 10
+
+    await storage.delete_object(
+        object_key="jobs/1/photo.jpg",
+        generation=None,
+        idempotency_key=key,
+        timeout_seconds=2,
+    )
+    await storage.delete_object(
+        object_key="jobs/1/photo.jpg",
+        generation=None,
+        idempotency_key=key,
+        timeout_seconds=2,
+    )
+
+    assert storage.deleted_keys == {"jobs/1/photo.jpg"}
+
+
+@pytest.mark.anyio
+async def test_task_queue_fake_returns_one_task_per_idempotency_key() -> None:
+    queue = FakeTaskQueue()
+    key = IdempotencyKey("analysis:1")
+
+    assert isinstance(queue, TaskQueuePort)
+    first = await queue.enqueue(
+        queue_name="analysis",
+        handler="analyze_capture",
+        payload={"capture_session_id": "same-capture"},
+        idempotency_key=key,
+        schedule_at=None,
+        timeout_seconds=2,
+    )
+    second = await queue.enqueue(
+        queue_name="analysis",
+        handler="analyze_capture",
+        payload={"capture_session_id": "same-capture"},
+        idempotency_key=key,
+        schedule_at=None,
+        timeout_seconds=2,
+    )
+
+    assert first == second
+    assert len(queue.enqueued) == 1
+
+
+@pytest.mark.anyio
+async def test_ai_fake_returns_versioned_result_once() -> None:
+    calls = 0
+
+    async def result_factory(request: AnalysisRequest) -> AnalysisResult:
+        nonlocal calls
+        calls += 1
+        return AnalysisResult(
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="1",
+            draft_items=(),
+        )
+
+    provider = FakeAIProvider(result_factory)
+    run_id = AnalysisRunId(uuid4())
+    key = IdempotencyKey("analysis-result:1")
+    request = AnalysisRequest(
+        analysis_run_id=run_id,
+        capture_session_id=CaptureSessionId(uuid4()),
+        source_media_asset_ids=(MediaAssetId(uuid4()),),
+        object_keys=("jobs/1/photo.jpg",),
+        model_name="fake-model",
+        model_version="1",
+        prompt_version="1",
+    )
+
+    assert isinstance(provider, AIProviderPort)
+    first = await provider.analyze(
+        request=request,
+        idempotency_key=key,
+        timeout_seconds=30,
+    )
+    second = await provider.analyze(
+        request=request,
+        idempotency_key=key,
+        timeout_seconds=30,
+    )
+
+    assert first is second
+    assert calls == 1
+
+    with pytest.raises(ProviderError, match="different analysis"):
+        await provider.analyze(
+            request=request.model_copy(update={"object_keys": ("jobs/1/other.jpg",)}),
+            idempotency_key=key,
+            timeout_seconds=30,
+        )
+
+
+@pytest.mark.anyio
+async def test_event_bus_fake_keeps_first_event_for_idempotency_key() -> None:
+    event_bus = FakeEventBus()
+    key = IdempotencyKey("event:1")
+    first = DomainEvent(
+        event_id=EventId(uuid4()),
+        event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
+        aggregate_id=AggregateId(uuid4()),
+        trace_id="0123456789abcdef0123456789abcdef",
+        payload={},
+    )
+    assert isinstance(event_bus, EventBusPort)
+    await event_bus.publish(event=first, idempotency_key=key, timeout_seconds=2)
+    await event_bus.publish(event=first, idempotency_key=key, timeout_seconds=2)
+
+    assert event_bus.published[key] is first
+
+
+@pytest.mark.anyio
+async def test_fakes_reject_idempotency_key_reuse_for_different_requests() -> None:
+    queue = FakeTaskQueue()
+    event_bus = FakeEventBus()
+    storage = FakeObjectStorage()
+    task_key = IdempotencyKey("task:conflict")
+    event_key = IdempotencyKey("event:conflict")
+    delete_key = IdempotencyKey("delete:conflict")
+    event = DomainEvent(
+        event_id=EventId(uuid4()),
+        event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
+        aggregate_id=AggregateId(uuid4()),
+        trace_id="0123456789abcdef0123456789abcdef",
+        payload={},
+    )
+
+    await queue.enqueue(
+        queue_name="analysis",
+        handler="first",
+        payload={},
+        idempotency_key=task_key,
+        schedule_at=None,
+        timeout_seconds=2,
+    )
+    await event_bus.publish(event=event, idempotency_key=event_key, timeout_seconds=2)
+    await storage.delete_object(
+        object_key="first",
+        generation=None,
+        idempotency_key=delete_key,
+        timeout_seconds=2,
+    )
+
+    with pytest.raises(ProviderError, match="different task"):
+        await queue.enqueue(
+            queue_name="analysis",
+            handler="second",
+            payload={},
+            idempotency_key=task_key,
+            schedule_at=None,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ProviderError, match="different event"):
+        await event_bus.publish(
+            event=event.model_copy(update={"event_id": EventId(uuid4())}),
+            idempotency_key=event_key,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ProviderError, match="different deletion"):
+        await storage.delete_object(
+            object_key="second",
+            generation=None,
+            idempotency_key=delete_key,
+            timeout_seconds=2,
+        )
+
+
+@pytest.mark.anyio
+async def test_storage_fake_maps_missing_object_to_provider_error() -> None:
+    storage = FakeObjectStorage()
+
+    with pytest.raises(ProviderError) as error_info:
+        await storage.get_metadata(object_key="missing", timeout_seconds=2)
+
+    assert error_info.value.kind is ProviderErrorKind.NOT_FOUND
+    assert error_info.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
+    storage = FakeObjectStorage()
+    queue = FakeTaskQueue()
+    event_bus = FakeEventBus()
+    event = DomainEvent(
+        event_id=EventId(uuid4()),
+        event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
+        aggregate_id=AggregateId(uuid4()),
+        trace_id="0123456789abcdef0123456789abcdef",
+        payload={},
+    )
+
+    async def result_factory(request: AnalysisRequest) -> AnalysisResult:
+        return AnalysisResult(
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="1",
+            draft_items=(),
+        )
+
+    provider = FakeAIProvider(result_factory)
+
+    with pytest.raises(ValueError, match="content_length must be positive"):
+        await storage.create_upload_url(
+            object_key="object",
+            content_type="image/jpeg",
+            content_length=0,
+            expires_in_seconds=60,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ValueError, match="expires_in_seconds must be positive"):
+        await storage.create_upload_url(
+            object_key="object",
+            content_type="image/jpeg",
+            content_length=1,
+            expires_in_seconds=0,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await storage.create_upload_url(
+            object_key="object",
+            content_type="image/jpeg",
+            content_length=1,
+            expires_in_seconds=60,
+            timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="expires_in_seconds must be positive"):
+        await storage.create_read_url(
+            object_key="object",
+            expires_in_seconds=0,
+            timeout_seconds=2,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await storage.get_metadata(object_key="object", timeout_seconds=0)
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await storage.delete_object(
+            object_key="object",
+            generation=None,
+            idempotency_key=IdempotencyKey("delete:timeout"),
+            timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await queue.enqueue(
+            queue_name="analysis",
+            handler="handler",
+            payload={},
+            idempotency_key=IdempotencyKey("task:timeout"),
+            schedule_at=None,
+            timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await provider.analyze(
+            request=AnalysisRequest(
+                analysis_run_id=AnalysisRunId(uuid4()),
+                capture_session_id=CaptureSessionId(uuid4()),
+                source_media_asset_ids=(MediaAssetId(uuid4()),),
+                object_keys=("object",),
+                model_name="fake-model",
+                model_version="1",
+                prompt_version="1",
+            ),
+            idempotency_key=IdempotencyKey("analysis:timeout"),
+            timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await event_bus.publish(
+            event=event,
+            idempotency_key=IdempotencyKey("event:timeout"),
+            timeout_seconds=0,
+        )
+
+
+def test_provider_error_carries_stable_retry_classification() -> None:
+    error = ProviderError(
+        ProviderErrorKind.UNAVAILABLE,
+        "storage temporarily unavailable",
+        retryable=True,
+    )
+
+    assert error.kind is ProviderErrorKind.UNAVAILABLE
+    assert error.retryable is True
+    assert str(error) == "storage temporarily unavailable"
