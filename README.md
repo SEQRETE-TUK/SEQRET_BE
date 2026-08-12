@@ -37,11 +37,12 @@
 - [기술 스택 및 아키텍처 결정](docs/TECH_STACK.md)
 - [백엔드 2인 작업 분할](docs/BACKEND_WORK_SPLIT.md)
 - [동시 개발 및 main 머지 충돌 방지 가이드](docs/CONCURRENT_DEVELOPMENT_GUIDE.md)
+- [공통 타입·Port·event 계약](docs/CONTRACTS.md)
 - [AI 작업 지침](AGENTS.md)
 
 ## 상태
 
-FastAPI 공통 실행 기반과 PostgreSQL용 SQLAlchemy·Alembic 기반을 구성하는 단계입니다.
+FastAPI·PostgreSQL 기반과 두 트랙이 공유하는 공통 계약을 구성했습니다.
 
 ## 로컬 개발
 
