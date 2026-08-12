@@ -52,7 +52,7 @@ async def create_background_job_endpoint(
             cast(UUID, actor.participant_id),
             retention_cutoff=operation_time - timedelta(days=retention_days),
             trace_id=actor.trace_id,
-            now=operation_time,
+            scheduled_at=operation_time,
         )
     except BackgroundJobNotFoundError as error:
         raise HTTPException(

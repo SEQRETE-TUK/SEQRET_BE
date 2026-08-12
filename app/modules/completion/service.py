@@ -1,6 +1,7 @@
 """Completion confirmation and append-only audit commands."""
 
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.contracts.actor import ParticipantRole
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import utc_now
+from app.modules.background_job.service import create_retention_background_job
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.completion.models import (
     AuditEvent,
@@ -94,6 +96,9 @@ async def confirm_completion(
     participant_id: UUID,
     role: ParticipantRole,
     command: CompletionConfirmationCreate,
+    *,
+    retention_days: int,
+    trace_id: str,
 ) -> CompletionResult:
     job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
     if job is None:
@@ -193,7 +198,9 @@ async def confirm_completion(
             )
         )
     ).all()
-    if {asset.id for asset in assets} != set(command.evidence_media_asset_ids):
+    if {asset.id for asset in assets} != set(command.evidence_media_asset_ids) or any(
+        not asset.generation or asset.generation != asset.generation.strip() for asset in assets
+    ):
         raise CompletionInvalidError(job_id)
 
     now = utc_now()
@@ -239,6 +246,17 @@ async def confirm_completion(
             payload={"scope_version_id": str(command.scope_version_id)},
         )
     try:
+        if completed_at is not None:
+            for asset in assets:
+                await create_retention_background_job(
+                    session,
+                    job_id,
+                    asset.id,
+                    None,
+                    retention_cutoff=now,
+                    scheduled_at=now + timedelta(days=retention_days),
+                    trace_id=trace_id,
+                )
         await session.flush()
     except IntegrityError as error:
         raise CompletionConflictError(job_id) from error

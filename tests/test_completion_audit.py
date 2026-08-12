@@ -1,11 +1,13 @@
 """Completion confirmation, state transition, and audit history tests."""
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +19,8 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.ports import StorageObjectMetadata
 from app.main import create_app
+from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
+from app.modules.background_job.service import claim_background_jobs
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent, CompletionConfirmation
 from app.modules.completion.schemas import CompletionConfirmationCreate
@@ -33,8 +37,15 @@ from app.modules.scope.service import (
     create_change_request,
 )
 from app.platform.db import Base, create_session_factory
+from app.runtime import RuntimeKind, create_runtime_context
 
-CompletionApi = tuple[AsyncClient, async_sessionmaker[AsyncSession], FakeObjectStorage]
+CompletionApi = tuple[
+    AsyncClient,
+    async_sessionmaker[AsyncSession],
+    FakeObjectStorage,
+    FastAPI,
+]
+TRACE_ID = "0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
@@ -47,12 +58,12 @@ async def completion_api(tmp_path: Path) -> AsyncIterator[CompletionApi]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(Settings(environment=AppEnvironment.TEST))
+    application = create_app(Settings(environment=AppEnvironment.TEST, media_retention_days=30))
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield client, factory, storage
+        yield client, factory, storage, application
     await engine.dispose()
 
 
@@ -139,6 +150,7 @@ async def _upload_media(
     role: str = "field_worker",
     purpose: str = "completion",
     complete: bool = True,
+    generation: str | None = "7",
 ) -> str:
     job_id = created["job"]["id"]
     headers = _headers(_secret(created, role))
@@ -171,6 +183,7 @@ async def _upload_media(
         content_type="image/jpeg",
         size_bytes=14,
         sha256_hex="d" * 64,
+        generation=generation,
     )
     completed = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions/{capture_id}"
@@ -185,15 +198,22 @@ async def _upload_media(
 async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
     completion_api: CompletionApi,
 ) -> None:
-    client, factory, storage = completion_api
+    client, factory, storage, _ = completion_api
     created = await _create_job(client)
     job_id = created["job"]["id"]
     scope_version_id = await _locked_scope(client, created)
     evidence_id = await _upload_media(client, factory, storage, created)
+    second_evidence_id = await _upload_media(
+        client,
+        factory,
+        storage,
+        created,
+        generation="8",
+    )
     confirmation_url = f"/api/v1/move-jobs/{job_id}/completion-confirmations"
     payload = {
         "scope_version_id": scope_version_id,
-        "evidence_media_asset_ids": [evidence_id],
+        "evidence_media_asset_ids": [evidence_id, second_evidence_id],
     }
 
     customer = await client.post(
@@ -204,6 +224,8 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
     assert customer.status_code == 201
     assert customer.json()["job_status"] == "draft"
     assert customer.json()["completed_at"] is None
+    async with factory() as session:
+        assert (await session.scalars(select(BackgroundJob))).all() == []
     duplicate_customer = await client.post(
         confirmation_url,
         headers=_headers(_secret(created, "customer")),
@@ -211,6 +233,25 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
     )
     assert duplicate_customer.status_code == 409
 
+    for invalid_generation in (None, " "):
+        async with factory.begin() as session:
+            asset = await session.get(MediaAsset, UUID(evidence_id))
+            assert asset is not None
+            asset.generation = invalid_generation
+        blocked = await client.post(
+            confirmation_url,
+            headers=_headers(_secret(created, "company_manager")),
+            json=payload,
+        )
+        assert blocked.status_code == 422
+        async with factory() as session:
+            job = await session.get(MoveJob, UUID(job_id))
+            assert job is not None and job.status is MoveJobStatus.DRAFT
+            assert (await session.scalars(select(BackgroundJob))).all() == []
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(evidence_id))
+        assert asset is not None
+        asset.generation = "7"
     manager = await client.post(
         confirmation_url,
         headers=_headers(_secret(created, "company_manager")),
@@ -236,7 +277,58 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
         "customer",
         "company_manager",
     ]
-    assert all(item["evidence_media_asset_ids"] == [evidence_id] for item in confirmations.json())
+    assert all(
+        set(item["evidence_media_asset_ids"]) == {evidence_id, second_evidence_id}
+        for item in confirmations.json()
+    )
+
+    completed_at = datetime.fromisoformat(manager.json()["completed_at"])
+    async with factory.begin() as session:
+        background_jobs = (await session.scalars(select(BackgroundJob))).all()
+        assert len(background_jobs) == 2
+        jobs_by_asset = {row.media_asset_id: row for row in background_jobs}
+        assert set(jobs_by_asset) == {UUID(evidence_id), UUID(second_evidence_id)}
+        background_job = jobs_by_asset[UUID(evidence_id)]
+        scheduled_at = background_job.scheduled_at
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=UTC)
+        assert {
+            (row.status, row.target_generation, row.created_by_participant_id)
+            for row in background_jobs
+        } == {
+            (BackgroundJobStatus.PENDING, "7", None),
+            (BackgroundJobStatus.PENDING, "8", None),
+        }
+        assert all(
+            (
+                row.scheduled_at.replace(tzinfo=UTC)
+                if row.scheduled_at.tzinfo is None
+                else row.scheduled_at
+            )
+            == completed_at + timedelta(days=30)
+            for row in background_jobs
+        )
+    manual = await client.post(
+        f"/api/v1/move-jobs/{job_id}/background-jobs",
+        headers=_headers(_secret(created, "company_manager")),
+        json={"media_asset_id": evidence_id},
+    )
+    assert manual.status_code == 201
+    assert manual.json()["id"] == str(background_job.id)
+    assert datetime.fromisoformat(manual.json()["scheduled_at"]) == scheduled_at
+    async with factory.begin() as session:
+        assert (
+            await claim_background_jobs(
+                session,
+                now=scheduled_at - timedelta(microseconds=1),
+            )
+            == ()
+        )
+    async with factory.begin() as session:
+        claims = await claim_background_jobs(session, now=scheduled_at)
+        assert {UUID(str(claim.task.background_job_id)) for claim in claims} == {
+            row.id for row in background_jobs
+        }
 
     audit = await client.get(
         f"/api/v1/move-jobs/{job_id}/audit-events",
@@ -253,6 +345,7 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
         "scope_version_approved",
         "scope_version_approved",
         "scope_version_locked",
+        "completion_media_uploaded",
         "completion_media_uploaded",
         "completion_confirmed",
         "completion_confirmed",
@@ -296,7 +389,7 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
 async def test_completion_rejects_role_scope_change_and_media_boundaries(
     completion_api: CompletionApi,
 ) -> None:
-    client, factory, storage = completion_api
+    client, factory, storage, application = completion_api
     created = await _create_job(client)
     job_id = created["job"]["id"]
     unlocked = await client.post(
@@ -339,6 +432,18 @@ async def test_completion_rejects_role_scope_change_and_media_boundaries(
     for role in ("customer", "company_manager"):
         await client.post(approval_url, headers=_headers(_secret(created, role)))
     locked_payload = unlocked_payload
+    configured_context = application.state.runtime_context
+    application.state.runtime_context = create_runtime_context(
+        RuntimeKind.API,
+        Settings(environment=AppEnvironment.TEST),
+    )
+    unavailable = await client.post(
+        confirmation_url,
+        headers=_headers(_secret(created, "customer")),
+        json=locked_payload,
+    )
+    application.state.runtime_context = configured_context
+    assert unavailable.status_code == 503
     async with factory.begin() as session:
         session.add(
             ScopeVersion(
@@ -443,7 +548,7 @@ async def test_completion_rejects_role_scope_change_and_media_boundaries(
 async def test_completion_blocks_pending_change_and_freezes_new_change(
     completion_api: CompletionApi,
 ) -> None:
-    client, factory, storage = completion_api
+    client, factory, storage, _ = completion_api
     created = await _create_job(client)
     job_id = created["job"]["id"]
     scope_version_id = await _locked_scope(client, created)
@@ -521,7 +626,7 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
     completion_api: CompletionApi,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, factory, storage = completion_api
+    client, factory, storage, _ = completion_api
     created = await _create_job(client)
     job_id = UUID(created["job"]["id"])
     scope_version_id = UUID(await _locked_scope(client, created))
@@ -538,6 +643,8 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
                 _participant_id(created, "field_worker"),
                 ParticipantRole.FIELD_WORKER,
                 command,
+                retention_days=30,
+                trace_id=TRACE_ID,
             )
         with pytest.raises(ScopeResourceNotFoundError):
             await create_change_request(
@@ -573,6 +680,8 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
                 _participant_id(created, "customer"),
                 ParticipantRole.CUSTOMER,
                 command,
+                retention_days=30,
+                trace_id=TRACE_ID,
             )
 
     async with factory.begin() as session:
@@ -609,6 +718,8 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
                 _participant_id(created, "customer"),
                 ParticipantRole.CUSTOMER,
                 command,
+                retention_days=30,
+                trace_id=TRACE_ID,
             )
         await session.execute(
             delete(CompletionConfirmation).where(CompletionConfirmation.job_id == job_id)
@@ -650,6 +761,8 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
                 _participant_id(created, "customer"),
                 ParticipantRole.CUSTOMER,
                 command,
+                retention_days=30,
+                trace_id=TRACE_ID,
             )
 
 
@@ -657,7 +770,7 @@ async def test_completion_service_maps_wrong_actor_canceled_job_and_database_rac
 async def test_audit_tracks_access_and_change_lifecycle_without_sensitive_text(
     completion_api: CompletionApi,
 ) -> None:
-    client, factory, storage = completion_api
+    client, factory, storage, _ = completion_api
     created_response = await client.post(
         "/api/v1/move-jobs",
         json={

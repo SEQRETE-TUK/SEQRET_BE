@@ -52,8 +52,9 @@
 
 ## 미디어 보존 작업
 
-- 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 삭제 작업 생성 API는 fail-closed로 동작한다.
-- 완료된 작업의 보존기간이 지난 `UPLOADED`, `READY`, `FAILED` 미디어 중 generation이 확인된 객체만 삭제 대상으로 고정한다. 실행 중이거나 업로드·generation이 확인되지 않은 미디어는 대상에 넣지 않는다.
+- 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 완료 확인과 삭제 작업 생성 API는 fail-closed로 동작한다.
+- 완료 증거는 첫 확인부터 generation이 필요하다. 최종 양측 확인은 모든 완료 증거의 object key·generation을 고정하고 `completed_at + SEQRET_MEDIA_RETENTION_DAYS` 시각의 `PENDING` 삭제 intent를 같은 transaction에 만든다.
+- 기존 완료 작업을 보완하는 수동 API는 보존기간이 지난 `UPLOADED`, `READY`, `FAILED` 미디어 중 generation이 확인된 객체만 즉시 삭제 대상으로 고정한다. 실행 중이거나 업로드·generation이 확인되지 않은 미디어는 대상에 넣지 않는다.
 - `MediaDeletionTaskV1` queue payload는 `background_job_id`, `job_type`, `attempt_count`, `schema_version`, `trace_id`만 포함한다. object key와 generation은 B handler가 `start_media_deletion` application query로 얻는다.
 - enqueue는 DB intent commit 뒤 lease dispatcher가 수행하고 `background-job:{id}:attempt:{n}` key로 중복 생성을 막는다.
 - B handler는 `app.modules.background_job.service.start_media_deletion(session, task)`를 먼저 호출한다. 현재 attempt·trace가 아니면 `BackgroundJobNotFoundError`, 실행할 수 없는 상태면 `BackgroundJobConflictError`, 이미 같은 attempt가 실행 중이면 같은 immutable work를 반환하고, terminal이면 `None`을 반환한다. work의 object key·generation은 provider 호출과 로그 밖으로 복제하지 않는다.
