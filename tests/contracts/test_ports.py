@@ -1,5 +1,6 @@
 """Contract tests reused by deterministic local port fakes."""
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,7 @@ from app.contracts import (
     AnalysisRequest,
     AnalysisResult,
     AnalysisRunId,
+    CachePort,
     CaptureSessionId,
     DomainEvent,
     DomainEventType,
@@ -22,7 +24,13 @@ from app.contracts import (
     StorageObjectMetadata,
     TaskQueuePort,
 )
-from app.contracts.fakes import FakeAIProvider, FakeEventBus, FakeObjectStorage, FakeTaskQueue
+from app.contracts.fakes import (
+    FakeAIProvider,
+    FakeCache,
+    FakeEventBus,
+    FakeObjectStorage,
+    FakeTaskQueue,
+)
 from app.contracts.primitives import AggregateId
 
 
@@ -180,6 +188,40 @@ async def test_event_bus_fake_keeps_first_event_for_idempotency_key() -> None:
 
 
 @pytest.mark.anyio
+async def test_cache_fake_keeps_fixed_window_expiry() -> None:
+    current = datetime(2026, 8, 12, 7, 0, tzinfo=UTC)
+    cache = FakeCache(lambda: current)
+
+    assert isinstance(cache, CachePort)
+    assert (
+        await cache.increment_fixed_window(
+            key="rate:token-hash",
+            window_seconds=60,
+            timeout_seconds=1,
+        )
+        == 1
+    )
+    current += timedelta(seconds=59)
+    assert (
+        await cache.increment_fixed_window(
+            key="rate:token-hash",
+            window_seconds=60,
+            timeout_seconds=1,
+        )
+        == 2
+    )
+    current += timedelta(seconds=1)
+    assert (
+        await cache.increment_fixed_window(
+            key="rate:token-hash",
+            window_seconds=60,
+            timeout_seconds=1,
+        )
+        == 1
+    )
+
+
+@pytest.mark.anyio
 async def test_fakes_reject_idempotency_key_reuse_for_different_requests() -> None:
     queue = FakeTaskQueue()
     event_bus = FakeEventBus()
@@ -251,6 +293,7 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
     storage = FakeObjectStorage()
     queue = FakeTaskQueue()
     event_bus = FakeEventBus()
+    cache = FakeCache()
     event = DomainEvent(
         event_id=EventId(uuid4()),
         event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
@@ -339,6 +382,12 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
             idempotency_key=IdempotencyKey("event:timeout"),
             timeout_seconds=0,
         )
+    with pytest.raises(ValueError, match="key must not be empty"):
+        await cache.increment_fixed_window(key="", window_seconds=60, timeout_seconds=1)
+    with pytest.raises(ValueError, match="must be positive"):
+        await cache.increment_fixed_window(key="rate:key", window_seconds=0, timeout_seconds=1)
+    with pytest.raises(ValueError, match="must be positive"):
+        await cache.increment_fixed_window(key="rate:key", window_seconds=60, timeout_seconds=0)
 
 
 def test_provider_error_carries_stable_retry_classification() -> None:

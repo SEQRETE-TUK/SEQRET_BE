@@ -132,3 +132,16 @@ class EventBusPort(Protocol):
         idempotency_key: IdempotencyKey,
         timeout_seconds: float,
     ) -> None: ...
+
+
+@runtime_checkable
+class CachePort(Protocol):
+    """A-owned atomic counter cache; existing windows must keep their original TTL."""
+
+    async def increment_fixed_window(
+        self,
+        *,
+        key: str,
+        window_seconds: int,
+        timeout_seconds: float,
+    ) -> int: ...
