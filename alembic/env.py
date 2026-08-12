@@ -8,13 +8,15 @@ from sqlalchemy import Connection, engine_from_config, pool
 
 from app.config import Settings
 from app.modules.access.models import ParticipantAccessToken
+from app.modules.capture.models import MediaAsset
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = ParticipantAccessToken.metadata
+_REGISTERED_MODELS = (ParticipantAccessToken, MediaAsset)
+target_metadata = _REGISTERED_MODELS[0].metadata
 
 
 def _database_url() -> str:

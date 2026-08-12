@@ -17,6 +17,15 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
 from app.contracts.actor import ParticipantRole
+from app.contracts.fakes import FakeObjectStorage
+from app.contracts.media import MediaAssetStatus, MediaPurpose
+from app.contracts.ports import StorageObjectMetadata
+from app.modules.capture.schemas import MediaUploadCreate
+from app.modules.capture.service import (
+    complete_media_upload,
+    create_capture_session,
+    create_media_upload,
+)
 from app.modules.move_job.models import LocationKind
 from app.modules.move_job.schemas import (
     LocationCreate,
@@ -29,11 +38,13 @@ from app.platform.db import create_database_engine, create_session_factory, tran
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_01_0001"
-ALEMBIC_HEAD = "a_02_0001"
+ALEMBIC_PREVIOUS = "a_02_0001"
+ALEMBIC_HEAD = "a_03_0001"
 BUSINESS_TABLES = {
+    "capture_session",
     "job_participant",
     "location",
+    "media_asset",
     "move_job",
     "participant_access_token",
     "room_zone",
@@ -124,7 +135,7 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             command.downgrade(configuration, "base")
             assert _current_revision(engine) is None
 
-            command.upgrade(configuration, ALEMBIC_BASELINE)
+            command.upgrade(configuration, ALEMBIC_PREVIOUS)
             probe.create(engine)
             command.upgrade(configuration, "head")
 
@@ -132,7 +143,9 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
-            assert "participant_access_token" not in inspect(engine).get_table_names()
+            assert "capture_session" not in inspect(engine).get_table_names()
+            assert "media_asset" not in inspect(engine).get_table_names()
+            assert "participant_access_token" in inspect(engine).get_table_names()
             assert "move_job" in inspect(engine).get_table_names()
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
@@ -204,5 +217,74 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 ParticipantRole.CUSTOMER,
                 ParticipantRole.FIELD_WORKER,
             ]
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_capture_upload_commands_round_trip_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        storage = FakeObjectStorage()
+        job_command = MoveJobCreate(
+            title="촬영 통합 테스트",
+            participants=(ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="출발지",
+                    room_zones=(RoomZoneCreate(name="거실", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    created.job.participants[0].id,
+                )
+                upload = await create_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    created.job.participants[0].id,
+                    MediaUploadCreate(
+                        room_zone_id=created.job.locations[0].room_zones[0].id,
+                        media_purpose=MediaPurpose.INVENTORY,
+                        content_type="image/jpeg",
+                        content_length=10,
+                    ),
+                )
+
+            object_key = upload.upload_url.removeprefix("https://storage.invalid/upload/")
+            storage.metadata[object_key] = StorageObjectMetadata(
+                object_key=object_key,
+                content_type="image/jpeg",
+                size_bytes=10,
+                sha256_hex="b" * 64,
+            )
+            async with transactional_session(factory) as session:
+                completed = await complete_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    upload.asset.id,
+                    created.job.participants[0].id,
+                )
+
+            assert completed.status is MediaAssetStatus.UPLOADED
+            assert completed.actual_size_bytes == 10
+            assert completed.sha256_hex == "b" * 64
         finally:
             await engine.dispose()
