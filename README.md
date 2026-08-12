@@ -121,6 +121,7 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_OUTBOX_BATCH_SIZE` | `100` | relay 한 번에 lease하고 동시에 발행할 최대 event 수 |
 | `SEQRET_OUTBOX_LEASE_SECONDS` | `60` | 발행 worker의 event lease 시간. publish timeout보다 길어야 함 |
 | `SEQRET_EVENT_PUBLISH_TIMEOUT_SECONDS` | `10` | 개별 Pub/Sub 발행 완료를 기다리는 최대 시간 |
+| `SEQRET_MEDIA_RETENTION_DAYS` | 없음 | 완료 작업 미디어의 승인된 보존기간. 비설정 시 삭제 작업 생성을 차단함 |
 
 ```bash
 uv run pytest

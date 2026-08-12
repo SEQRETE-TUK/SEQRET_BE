@@ -33,6 +33,10 @@ locals {
     SEQRET_OTEL_TRACE_SAMPLE_RATIO            = tostring(var.otel_trace_sample_ratio)
   })
 
+  api_runtime_environment = merge(local.observed_runtime_environment, {
+    SEQRET_MEDIA_RETENTION_DAYS = tostring(var.media_retention_days)
+  })
+
   api_secret_environment = merge(
     { SEQRET_DATABASE_URL = var.database_url_secret_id },
     var.redis_url_secret_id == null ? {} : { SEQRET_REDIS_URL = var.redis_url_secret_id },

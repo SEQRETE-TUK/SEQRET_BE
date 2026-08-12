@@ -8,6 +8,7 @@ from sqlalchemy import Connection, engine_from_config, pool
 
 from app.config import Settings
 from app.modules.access.models import ParticipantAccessToken
+from app.modules.background_job.models import BackgroundJob
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
 from app.modules.notification.models import NotificationDelivery
@@ -21,6 +22,7 @@ if config.config_file_name is not None:
 
 _REGISTERED_MODELS = (
     ParticipantAccessToken,
+    BackgroundJob,
     MediaAsset,
     ScopeApproval,
     AuditEvent,
@@ -31,7 +33,7 @@ target_metadata = _REGISTERED_MODELS[0].metadata
 
 
 def _database_url() -> str:
-    configured_url = config.get_main_option("sqlalchemy.url").strip()
+    configured_url = (config.get_main_option("sqlalchemy.url") or "").strip()
     if configured_url:
         return configured_url
 

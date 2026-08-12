@@ -34,6 +34,7 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `ARTIFACT_REPOSITORY` | Artifact Registry repository ID |
 | `API_DOMAIN` | Public lowercase API DNS name |
 | `DATABASE_URL_SECRET_ID` | Existing database URL secret ID |
+| `MEDIA_RETENTION_DAYS` | Approved whole-number media retention period, from 1 through 3650 days |
 | `REDIS_URL_SECRET_ID` | Optional Redis URL secret ID |
 | `MONITORING_NOTIFICATION_CHANNELS` | Comma-separated full notification-channel names |
 

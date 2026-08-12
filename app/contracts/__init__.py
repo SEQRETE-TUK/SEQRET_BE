@@ -4,6 +4,13 @@ from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
 from app.contracts.errors import ErrorDetail, ErrorResponse
 from app.contracts.events import DomainEvent, DomainEventType
+from app.contracts.maintenance import (
+    BackgroundJobType,
+    MediaDeletionOutcome,
+    MediaDeletionResultV1,
+    MediaDeletionTaskV1,
+    MediaDeletionWorkV1,
+)
 from app.contracts.media import MediaAssetRef, MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
     AIProviderPort,
@@ -19,6 +26,7 @@ from app.contracts.ports import (
 from app.contracts.primitives import (
     AggregateId,
     AnalysisRunId,
+    BackgroundJobId,
     CaptureSessionId,
     EventId,
     IdempotencyKey,
@@ -39,6 +47,8 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResult",
     "AnalysisRunId",
+    "BackgroundJobId",
+    "BackgroundJobType",
     "CachePort",
     "CaptureSessionId",
     "DomainEvent",
@@ -53,6 +63,10 @@ __all__ = [
     "MediaAssetId",
     "MediaAssetRef",
     "MediaAssetStatus",
+    "MediaDeletionOutcome",
+    "MediaDeletionResultV1",
+    "MediaDeletionTaskV1",
+    "MediaDeletionWorkV1",
     "MediaPurpose",
     "ObjectStoragePort",
     "ParticipantId",

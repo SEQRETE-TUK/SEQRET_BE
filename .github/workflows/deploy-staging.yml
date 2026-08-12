@@ -24,6 +24,7 @@ env:
   ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY }}
   API_DOMAIN: ${{ vars.API_DOMAIN }}
   DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
+  MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
   REDIS_URL_SECRET_ID: ${{ vars.REDIS_URL_SECRET_ID }}
   MONITORING_NOTIFICATION_CHANNELS: ${{ vars.MONITORING_NOTIFICATION_CHANNELS }}
   CANARY_PERCENT: "10"
@@ -67,6 +68,7 @@ jobs:
             ARTIFACT_REPOSITORY
             API_DOMAIN
             DATABASE_URL_SECRET_ID
+            MEDIA_RETENTION_DAYS
             MONITORING_NOTIFICATION_CHANNELS
           )
           for variable_name in "${required_variables[@]}"; do
@@ -81,6 +83,11 @@ jobs:
           fi
           if [[ ! "${API_DOMAIN}" =~ ^[a-z0-9.-]+\.[a-z0-9-]+$ ]]; then
             echo "API_DOMAIN must be a lowercase fully-qualified DNS name." >&2
+            exit 1
+          fi
+          if [[ ! "${MEDIA_RETENTION_DAYS}" =~ ^[1-9][0-9]{0,3}$ ]] || \
+            (( 10#${MEDIA_RETENTION_DAYS} > 3650 )); then
+            echo "MEDIA_RETENTION_DAYS must be a whole number from 1 through 3650." >&2
             exit 1
           fi
           IFS=',' read -ra channels <<< "${MONITORING_NOTIFICATION_CHANNELS}"
@@ -140,7 +147,8 @@ jobs:
             -var="environment=staging" \
             -var="api_domain=${API_DOMAIN}" \
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
-            -var="container_image=${placeholder_image}"
+            -var="container_image=${placeholder_image}" \
+            -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
 
       - name: Build and publish immutable image
         id: image
@@ -250,6 +258,7 @@ jobs:
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="otel_trace_sample_ratio=1"
           )
           if [[ -n "${REDIS_URL_SECRET_ID}" ]]; then
@@ -283,6 +292,7 @@ jobs:
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="monitoring_notification_channel_ids=${channels_json}"
             -var="otel_trace_sample_ratio=1"
             -var="public_traffic_enabled=${PUBLIC_TRAFFIC_ENABLED}"
@@ -532,6 +542,7 @@ jobs:
               -var="api_domain=${API_DOMAIN}" \
               -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
               -var="container_image=${CONTAINER_IMAGE}" \
+              -var="media_retention_days=${MEDIA_RETENTION_DAYS}" \
               -var="public_traffic_enabled=$1"
           }
           restore_closed_edge() {

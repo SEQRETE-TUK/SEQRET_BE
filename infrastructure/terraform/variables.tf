@@ -194,6 +194,20 @@ variable "otel_trace_sample_ratio" {
   }
 }
 
+variable "media_retention_days" {
+  description = "Approved number of days completed-job media must be retained before deletion."
+  type        = number
+
+  validation {
+    condition = (
+      var.media_retention_days >= 1 &&
+      var.media_retention_days <= 3650 &&
+      floor(var.media_retention_days) == var.media_retention_days
+    )
+    error_message = "media_retention_days must be a whole number from 1 through 3650."
+  }
+}
+
 variable "labels" {
   description = "Additional non-sensitive labels applied to Cloud Run resources."
   type        = map(string)

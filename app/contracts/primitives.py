@@ -8,6 +8,7 @@ from pydantic import StringConstraints
 
 AggregateId = NewType("AggregateId", UUID)
 AnalysisRunId = NewType("AnalysisRunId", UUID)
+BackgroundJobId = NewType("BackgroundJobId", UUID)
 CaptureSessionId = NewType("CaptureSessionId", UUID)
 EventId = NewType("EventId", UUID)
 JobId = NewType("JobId", UUID)
