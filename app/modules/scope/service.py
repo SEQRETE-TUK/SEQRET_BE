@@ -11,12 +11,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
-from app.contracts.media import MediaAssetStatus
+from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.move_job.models import JobParticipant, Location, RoomZone
-from app.modules.scope.models import ScopeApproval, ScopeVersion
+from app.modules.scope.models import (
+    ChangeRequest,
+    ChangeRequestEvidence,
+    ChangeRequestStatus,
+    ScopeApproval,
+    ScopeVersion,
+)
 from app.modules.scope.schemas import (
+    ChangeDecisionCreate,
+    ChangeRequestCreate,
+    ChangeRequestResponse,
     ScopeApprovalResponse,
     ScopeApprovalResult,
     ScopeContent,
@@ -42,10 +51,43 @@ class AnalysisDraftInvalidError(ValueError):
     """Raised when an AI result cannot map safely to a work scope."""
 
 
+class ChangeRequestConflictError(ValueError):
+    """Raised when a change request cannot transition from its current state."""
+
+
+class ChangeRequestInvalidError(ValueError):
+    """Raised when proposed content and evidence do not describe the same change."""
+
+
 REQUIRED_APPROVAL_ROLES = (
     ParticipantRole.CUSTOMER,
     ParticipantRole.COMPANY_MANAGER,
 )
+
+
+def _normalize_scope_content(content: ScopeContent) -> ScopeContent:
+    return ScopeContent(
+        schema_version=content.schema_version,
+        items=tuple(sorted(content.items, key=lambda item: item.item_key)),
+    )
+
+
+async def _validate_scope_zones(
+    session: AsyncSession,
+    job_id: UUID,
+    content: ScopeContent,
+) -> None:
+    requested_zone_ids = {item.room_zone_id for item in content.items}
+    zone_statement = (
+        select(RoomZone.id)
+        .join(RoomZone.location)
+        .where(
+            RoomZone.id.in_(requested_zone_ids),
+            Location.job_id == job_id,
+        )
+    )
+    if set((await session.scalars(zone_statement)).all()) != requested_zone_ids:
+        raise ScopeResourceNotFoundError(job_id)
 
 
 async def _to_response(
@@ -85,6 +127,7 @@ async def create_scope_version(
     command: ScopeVersionCreate,
     *,
     analysis_source: AnalysisResult | None = None,
+    from_locked_parent: bool = False,
 ) -> ScopeVersionResponse:
     is_analysis_import = analysis_source is not None
     if is_analysis_import == (participant_id is not None):
@@ -99,18 +142,7 @@ async def create_scope_version(
         if participant is None:
             raise ScopeResourceNotFoundError(job_id)
 
-    requested_zone_ids = {item.room_zone_id for item in command.content.items}
-    zone_statement = (
-        select(RoomZone.id)
-        .join(RoomZone.location)
-        .where(
-            RoomZone.id.in_(requested_zone_ids),
-            Location.job_id == job_id,
-        )
-    )
-    job_zone_ids = set((await session.scalars(zone_statement)).all())
-    if job_zone_ids != requested_zone_ids:
-        raise ScopeResourceNotFoundError(job_id)
+    await _validate_scope_zones(session, job_id, command.content)
 
     if command.parent_version_id is None:
         existing_root = await session.scalar(
@@ -133,7 +165,15 @@ async def create_scope_version(
         )
         if parent is None:
             raise ScopeResourceNotFoundError(command.parent_version_id)
-        if parent.locked_at is not None:
+        if from_locked_parent != (parent.locked_at is not None):
+            raise ScopeVersionConflictError(parent.id)
+        if (
+            not from_locked_parent
+            and await session.scalar(
+                select(ChangeRequest.id).where(ChangeRequest.result_scope_version_id == parent.id)
+            )
+            is not None
+        ):
             raise ScopeVersionConflictError(parent.id)
         existing_child = await session.scalar(
             select(ScopeVersion.id).where(ScopeVersion.parent_version_id == parent.id)
@@ -142,15 +182,7 @@ async def create_scope_version(
             raise ScopeVersionConflictError(parent.id)
         sequence_number = parent.sequence_number + 1
 
-    normalized_content = ScopeContent(
-        schema_version=command.content.schema_version,
-        items=tuple(
-            sorted(
-                command.content.items,
-                key=lambda item: item.item_key,
-            )
-        ),
-    )
+    normalized_content = _normalize_scope_content(command.content)
     content_document: dict[str, Any] = normalized_content.model_dump(mode="json")
     canonical_json = json.dumps(
         content_document,
@@ -336,3 +368,249 @@ async def import_analysis_draft(
         ),
         analysis_source=result,
     )
+
+
+async def _change_request_response(
+    session: AsyncSession,
+    request: ChangeRequest,
+) -> ChangeRequestResponse:
+    evidence_ids = (
+        await session.scalars(
+            select(ChangeRequestEvidence.media_asset_id)
+            .where(ChangeRequestEvidence.change_request_id == request.id)
+            .order_by(ChangeRequestEvidence.media_asset_id)
+        )
+    ).all()
+    return ChangeRequestResponse(
+        id=request.id,
+        job_id=request.job_id,
+        base_scope_version_id=request.base_scope_version_id,
+        requested_by_participant_id=request.requested_by_participant_id,
+        description=request.description,
+        proposed_content=ScopeContent.model_validate(request.proposed_content, strict=False),
+        evidence_media_asset_ids=tuple(evidence_ids),
+        status=request.status,
+        clarification_requested_by_participant_id=(
+            request.clarification_requested_by_participant_id
+        ),
+        clarification_request=request.clarification_request,
+        clarification_requested_at=request.clarification_requested_at,
+        explanation=request.explanation,
+        explained_at=request.explained_at,
+        decided_by_participant_id=request.decided_by_participant_id,
+        decision_note=request.decision_note,
+        decided_at=request.decided_at,
+        result_scope_version_id=request.result_scope_version_id,
+        created_at=request.created_at,
+    )
+
+
+async def create_change_request(
+    session: AsyncSession,
+    job_id: UUID,
+    participant_id: UUID,
+    command: ChangeRequestCreate,
+) -> ChangeRequestResponse:
+    participant = await session.scalar(
+        select(JobParticipant.id).where(
+            JobParticipant.id == participant_id,
+            JobParticipant.job_id == job_id,
+            JobParticipant.role == ParticipantRole.FIELD_WORKER,
+        )
+    )
+    if participant is None:
+        raise ScopeResourceNotFoundError(job_id)
+    base_version = await session.scalar(
+        select(ScopeVersion)
+        .where(
+            ScopeVersion.id == command.base_scope_version_id,
+            ScopeVersion.job_id == job_id,
+        )
+        .with_for_update()
+    )
+    if base_version is None:
+        raise ScopeResourceNotFoundError(command.base_scope_version_id)
+    if base_version.locked_at is None:
+        raise ChangeRequestConflictError(command.base_scope_version_id)
+    if (
+        await session.scalar(
+            select(ScopeVersion.id).where(ScopeVersion.parent_version_id == base_version.id)
+        )
+        is not None
+    ):
+        raise ChangeRequestConflictError(command.base_scope_version_id)
+
+    await _validate_scope_zones(session, job_id, command.proposed_content)
+    normalized_content = _normalize_scope_content(command.proposed_content)
+    if normalized_content.model_dump(mode="json") == base_version.content:
+        raise ChangeRequestInvalidError(job_id)
+    evidence_statement = (
+        select(MediaAsset)
+        .join(CaptureSession, CaptureSession.id == MediaAsset.capture_session_id)
+        .where(
+            MediaAsset.id.in_(command.evidence_media_asset_ids),
+            CaptureSession.job_id == job_id,
+            CaptureSession.created_by_participant_id == participant_id,
+            MediaAsset.media_purpose == MediaPurpose.CHANGE_EVIDENCE,
+            MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
+        )
+    )
+    evidence = (await session.scalars(evidence_statement)).all()
+    if {asset.id for asset in evidence} != set(command.evidence_media_asset_ids):
+        raise ChangeRequestInvalidError(job_id)
+
+    request = ChangeRequest(
+        job_id=job_id,
+        base_scope_version_id=command.base_scope_version_id,
+        requested_by_participant_id=participant_id,
+        description=command.description,
+        proposed_content=normalized_content.model_dump(mode="json"),
+    )
+    session.add(request)
+    await session.flush()
+    session.add_all(
+        ChangeRequestEvidence(change_request_id=request.id, media_asset_id=media_asset_id)
+        for media_asset_id in command.evidence_media_asset_ids
+    )
+    await session.flush()
+    return await _change_request_response(session, request)
+
+
+async def list_change_requests(
+    session: AsyncSession,
+    job_id: UUID,
+) -> tuple[ChangeRequestResponse, ...]:
+    requests = (
+        await session.scalars(
+            select(ChangeRequest)
+            .where(ChangeRequest.job_id == job_id)
+            .order_by(ChangeRequest.created_at, ChangeRequest.id)
+        )
+    ).all()
+    return tuple([await _change_request_response(session, request) for request in requests])
+
+
+async def request_change_clarification(
+    session: AsyncSession,
+    job_id: UUID,
+    change_request_id: UUID,
+    participant_id: UUID,
+    message: str,
+) -> ChangeRequestResponse:
+    await _require_job_participant(
+        session,
+        job_id,
+        participant_id,
+        {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER},
+    )
+    request = await _load_change_request_for_update(session, job_id, change_request_id)
+    if request.status is not ChangeRequestStatus.PENDING or request.clarification_request:
+        raise ChangeRequestConflictError(change_request_id)
+    request.status = ChangeRequestStatus.CLARIFICATION_REQUESTED
+    request.clarification_requested_by_participant_id = participant_id
+    request.clarification_request = message
+    request.clarification_requested_at = utc_now()
+    await session.flush()
+    return await _change_request_response(session, request)
+
+
+async def explain_change_request(
+    session: AsyncSession,
+    job_id: UUID,
+    change_request_id: UUID,
+    participant_id: UUID,
+    explanation: str,
+) -> ChangeRequestResponse:
+    await _require_job_participant(
+        session,
+        job_id,
+        participant_id,
+        {ParticipantRole.FIELD_WORKER},
+    )
+    request = await _load_change_request_for_update(session, job_id, change_request_id)
+    if (
+        request.status is not ChangeRequestStatus.CLARIFICATION_REQUESTED
+        or request.requested_by_participant_id != participant_id
+    ):
+        raise ChangeRequestConflictError(change_request_id)
+    request.status = ChangeRequestStatus.PENDING
+    request.explanation = explanation
+    request.explained_at = utc_now()
+    await session.flush()
+    return await _change_request_response(session, request)
+
+
+async def decide_change_request(
+    session: AsyncSession,
+    job_id: UUID,
+    change_request_id: UUID,
+    participant_id: UUID,
+    command: ChangeDecisionCreate,
+) -> ChangeRequestResponse:
+    await _require_job_participant(
+        session,
+        job_id,
+        participant_id,
+        {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER},
+    )
+    request = await _load_change_request_for_update(session, job_id, change_request_id)
+    if request.status is not ChangeRequestStatus.PENDING:
+        raise ChangeRequestConflictError(change_request_id)
+    now = utc_now()
+    if command.decision == "reject":
+        request.status = ChangeRequestStatus.REJECTED
+    else:
+        try:
+            result_version = await create_scope_version(
+                session,
+                job_id,
+                participant_id,
+                ScopeVersionCreate(
+                    parent_version_id=request.base_scope_version_id,
+                    content=ScopeContent.model_validate(request.proposed_content, strict=False),
+                ),
+                from_locked_parent=True,
+            )
+        except ScopeVersionConflictError as error:
+            raise ChangeRequestConflictError(change_request_id) from error
+        request.status = ChangeRequestStatus.APPROVED
+        request.result_scope_version_id = result_version.id
+    request.decided_by_participant_id = participant_id
+    request.decision_note = command.note
+    request.decided_at = now
+    await session.flush()
+    return await _change_request_response(session, request)
+
+
+async def _load_change_request_for_update(
+    session: AsyncSession,
+    job_id: UUID,
+    change_request_id: UUID,
+) -> ChangeRequest:
+    request = await session.scalar(
+        select(ChangeRequest)
+        .where(ChangeRequest.id == change_request_id, ChangeRequest.job_id == job_id)
+        .with_for_update()
+    )
+    if request is None:
+        raise ScopeResourceNotFoundError(change_request_id)
+    return request
+
+
+async def _require_job_participant(
+    session: AsyncSession,
+    job_id: UUID,
+    participant_id: UUID,
+    roles: set[ParticipantRole],
+) -> None:
+    if (
+        await session.scalar(
+            select(JobParticipant.id).where(
+                JobParticipant.id == participant_id,
+                JobParticipant.job_id == job_id,
+                JobParticipant.role.in_(roles),
+            )
+        )
+        is None
+    ):
+        raise ScopeResourceNotFoundError(job_id)
