@@ -79,7 +79,7 @@ variable "container_image" {
 }
 
 variable "deletion_protection" {
-  description = "Protect Cloud Run resources from accidental Terraform deletion."
+  description = "Protect Cloud Run resources, the retained event topic, and its scheduled trigger from accidental Terraform deletion."
   type        = bool
   default     = true
 }

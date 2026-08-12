@@ -9,6 +9,9 @@ locals {
   worker_name                        = "${local.resource_stem}-worker"
   job_name                           = "${local.resource_stem}-job"
   migration_name                     = "${local.resource_stem}-migrate"
+  outbox_relay_name                  = "${local.resource_stem}-relay"
+  outbox_scheduler_name              = "${local.resource_stem}-cron"
+  events_topic_name                  = "${local.resource_stem}-events"
   cloud_sql_instance_connection_name = "${var.project_id}:${var.region}:${var.cloud_sql_instance_id}"
 
   common_labels = merge(
@@ -41,6 +44,13 @@ locals {
     SEQRET_MEDIA_RETENTION_DAYS  = tostring(var.media_retention_days)
   })
 
+  outbox_relay_environment = merge(local.observed_runtime_environment, {
+    SEQRET_DATABASE_MAX_OVERFLOW = "0"
+    SEQRET_DATABASE_POOL_SIZE    = "1"
+    SEQRET_PUBSUB_PROJECT_ID     = var.project_id
+    SEQRET_PUBSUB_TOPIC_ID       = local.events_topic_name
+  })
+
   api_secret_environment = merge(
     { SEQRET_DATABASE_URL = var.database_url_secret_id },
     var.redis_url_secret_id == null ? {} : { SEQRET_REDIS_URL = var.redis_url_secret_id },
@@ -54,6 +64,7 @@ check "cloud_run_name_lengths" {
       length(local.worker_name) <= 49,
       length(local.job_name) <= 49,
       length(local.migration_name) <= 49,
+      length(local.outbox_relay_name) <= 49,
     ])
     error_message = "Cloud Run resource names must not exceed 49 characters."
   }
@@ -66,6 +77,8 @@ check "service_account_name_lengths" {
       length(local.worker_name) <= 30,
       length(local.job_name) <= 30,
       length(local.migration_name) <= 30,
+      length(local.outbox_relay_name) <= 30,
+      length(local.outbox_scheduler_name) <= 30,
     ])
     error_message = "Runtime service account IDs must not exceed 30 characters."
   }

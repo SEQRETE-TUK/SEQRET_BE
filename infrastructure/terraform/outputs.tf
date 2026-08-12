@@ -55,5 +55,6 @@ output "runtime_service_accounts" {
     worker    = google_service_account.worker.email
     job       = google_service_account.job.email
     migration = google_service_account.migration.email
+    relay     = google_service_account.outbox_relay.email
   }
 }
