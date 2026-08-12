@@ -59,6 +59,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/scope-versions/{scope_version_id}/approvals`: 작업범위 버전 확인
 - `POST /move-jobs/{job_id}/change-requests`: 현장 변경요청 생성
 - `GET /move-jobs/{job_id}/change-requests`: 현장 변경요청 이력 조회
+- `GET /move-jobs/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url`: 고객·회사 관리자용 변경 증거 열람 URL 발급
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/clarification`: 설명 요청
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/explanation`: 설명 제출
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/decision`: 승인 또는 거절

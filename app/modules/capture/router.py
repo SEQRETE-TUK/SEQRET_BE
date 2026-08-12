@@ -41,7 +41,7 @@ def get_storage_port(request: Request, job_id: UUID, actor: CurrentActor) -> Sto
 Storage = Annotated[StoragePort, Depends(get_storage_port)]
 
 
-def _storage_error(error: ProviderError) -> HTTPException:
+def storage_error(error: ProviderError) -> HTTPException:
     if error.kind in {
         ProviderErrorKind.NOT_FOUND,
         ProviderErrorKind.CONFLICT,
@@ -112,7 +112,7 @@ async def create_media_upload_endpoint(
             detail="media purpose is not allowed for this capture workflow",
         ) from error
     except ProviderError as error:
-        raise _storage_error(error) from error
+        raise storage_error(error) from error
 
 
 @router.post(
@@ -154,4 +154,4 @@ async def complete_media_upload_endpoint(
             detail="media upload cannot complete from its current state",
         ) from error
     except ProviderError as error:
-        raise _storage_error(error) from error
+        raise storage_error(error) from error
