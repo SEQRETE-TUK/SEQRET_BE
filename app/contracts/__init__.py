@@ -12,14 +12,17 @@ from app.contracts.maintenance import (
 )
 from app.contracts.media import MediaAssetRef, MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
+    CREATE_ONLY_UPLOAD_HEADER,
     AIProviderPort,
     CachePort,
     EventBusPort,
     ObjectStoragePort,
     ProviderError,
     ProviderErrorKind,
+    StorageObjectGeneration,
     StorageObjectMetadata,
     StoragePort,
+    StorageUploadTarget,
     TaskQueuePort,
 )
 from app.contracts.primitives import (
@@ -39,6 +42,7 @@ from app.contracts.primitives import (
 )
 
 __all__ = [
+    "CREATE_ONLY_UPLOAD_HEADER",
     "AIProviderPort",
     "ActorContext",
     "ActorKind",
@@ -72,8 +76,10 @@ __all__ = [
     "ProviderErrorKind",
     "RequestId",
     "RoomZoneId",
+    "StorageObjectGeneration",
     "StorageObjectMetadata",
     "StoragePort",
+    "StorageUploadTarget",
     "TaskQueuePort",
     "TraceId",
     "utc_now",

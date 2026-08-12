@@ -52,4 +52,5 @@ class MediaAssetResponse(ContractModel):
 class MediaUploadResponse(ContractModel):
     asset: MediaAssetResponse
     upload_url: Annotated[str, Field(min_length=1, repr=False)]
+    upload_headers: Annotated[dict[str, str], Field(min_length=1, repr=False)]
     expires_at: datetime

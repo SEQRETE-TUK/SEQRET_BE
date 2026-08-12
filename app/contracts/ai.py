@@ -1,8 +1,8 @@
 """Versioned AI output that remains an unconfirmed draft."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.contracts.model import ContractModel
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
@@ -43,3 +43,13 @@ class AnalysisRequest(ContractModel):
     model_name: Annotated[str, Field(min_length=1, max_length=100)]
     model_version: Annotated[str, Field(min_length=1, max_length=100)]
     prompt_version: Annotated[str, Field(min_length=1, max_length=100)]
+
+    @model_validator(mode="after")
+    def require_unique_one_to_one_sources(self) -> Self:
+        if len(self.source_media_asset_ids) != len(self.object_keys):
+            raise ValueError("source media asset IDs and object keys must have the same length")
+        if len(set(self.source_media_asset_ids)) != len(self.source_media_asset_ids):
+            raise ValueError("source media asset IDs must be unique")
+        if len(set(self.object_keys)) != len(self.object_keys):
+            raise ValueError("object keys must be unique")
+        return self

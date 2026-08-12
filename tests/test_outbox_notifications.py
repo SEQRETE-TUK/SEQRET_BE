@@ -79,6 +79,27 @@ async def _job(factory: OutboxDatabase) -> tuple[UUID, dict[ParticipantRole, UUI
     return job_id, participant_ids
 
 
+def _event_payload(event_type: DomainEventType) -> dict[str, Any]:
+    resource_id = str(uuid4())
+    if event_type is DomainEventType.SCOPE_LOCKED_V1:
+        return {"scope_version_id": resource_id, "content_hash": "a" * 64}
+    if event_type is DomainEventType.CHANGE_REQUESTED_V1:
+        return {
+            "change_request_id": resource_id,
+            "base_scope_version_id": str(uuid4()),
+            "evidence_media_asset_ids": [str(uuid4())],
+        }
+    if event_type is DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1:
+        return {
+            "capture_session_id": resource_id,
+            "media_asset_id": str(uuid4()),
+            "room_zone_id": str(uuid4()),
+        }
+    if event_type is DomainEventType.MEDIA_DELETED_V1:
+        return {"background_job_id": resource_id, "media_asset_id": str(uuid4())}
+    return {"resource_id": resource_id}
+
+
 def _event(
     job_id: UUID,
     event_type: DomainEventType,
@@ -92,7 +113,7 @@ def _event(
         aggregate_id=AggregateId(job_id),
         actor_id=ParticipantId(actor_id) if actor_id else None,
         trace_id="0123456789abcdef0123456789abcdef",
-        payload={"resource_id": str(uuid4())},
+        payload=_event_payload(event_type),
     )
 
 
@@ -108,7 +129,7 @@ async def test_business_rollback_removes_outbox_event(outbox_database: OutboxDat
                 job_id,
                 actor_id=participants[ParticipantRole.CUSTOMER],
                 trace_id="0123456789abcdef0123456789abcdef",
-                payload={"scope_version_id": str(uuid4())},
+                payload={"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
             )
             event_id = event.event_id
             await session.flush()
@@ -131,7 +152,11 @@ async def test_outbox_relay_retries_failure_and_publishes_once(
             job_id,
             actor_id=participants[ParticipantRole.FIELD_WORKER],
             trace_id="0123456789abcdef0123456789abcdef",
-            payload={"change_request_id": str(uuid4())},
+            payload={
+                "change_request_id": str(uuid4()),
+                "base_scope_version_id": str(uuid4()),
+                "evidence_media_asset_ids": [str(uuid4())],
+            },
             occurred_at=start,
         )
 
@@ -180,7 +205,13 @@ async def test_outbox_relay_starts_all_leased_publications_without_queueing(
             DomainEventType.SCOPE_LOCKED_V1,
             DomainEventType.CHANGE_REQUESTED_V1,
         ):
-            enqueue_domain_event(session, event_type, job_id, occurred_at=start)
+            enqueue_domain_event(
+                session,
+                event_type,
+                job_id,
+                occurred_at=start,
+                payload=_event_payload(event_type),
+            )
 
     class BarrierBus:
         def __init__(self) -> None:
@@ -220,6 +251,7 @@ async def test_claim_recovers_expired_lease_and_rejects_stale_owner(
             DomainEventType.SCOPE_LOCKED_V1,
             job_id,
             occurred_at=start,
+            payload={"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
         )
     async with outbox_database.begin() as session:
         first = (await claim_outbox_events(session, now=start, lease_seconds=10))[0]

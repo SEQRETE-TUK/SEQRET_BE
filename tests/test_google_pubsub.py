@@ -46,7 +46,7 @@ def _event() -> DomainEvent:
         event_type=DomainEventType.SCOPE_LOCKED_V1,
         aggregate_id=AggregateId(uuid4()),
         trace_id="0123456789abcdef0123456789abcdef",
-        payload={"scope_version_id": str(uuid4())},
+        payload={"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
     )
 
 

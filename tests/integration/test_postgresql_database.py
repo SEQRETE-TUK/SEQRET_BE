@@ -459,7 +459,7 @@ async def test_outbox_claims_are_exclusive_on_postgresql() -> None:
                     DomainEventType.SCOPE_LOCKED_V1,
                     job_id,
                     trace_id="0123456789abcdef0123456789abcdef",
-                    payload={"scope_version_id": str(uuid4())},
+                    payload={"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
                 )
 
             first_task = claim(True)

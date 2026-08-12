@@ -135,6 +135,72 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
 
 
 @pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        (
+            DomainEventType.SCOPE_LOCKED_V1,
+            {"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
+        ),
+        (
+            DomainEventType.CHANGE_REQUESTED_V1,
+            {
+                "change_request_id": str(uuid4()),
+                "base_scope_version_id": str(uuid4()),
+                "evidence_media_asset_ids": [str(uuid4())],
+            },
+        ),
+        (
+            DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "media_asset_id": str(uuid4()),
+                "room_zone_id": str(uuid4()),
+            },
+        ),
+        (
+            DomainEventType.MEDIA_DELETED_V1,
+            {"background_job_id": str(uuid4()), "media_asset_id": str(uuid4())},
+        ),
+    ],
+)
+def test_documented_v1_event_payloads_require_minimum_key_types(
+    event_type: DomainEventType,
+    payload: dict[str, object],
+) -> None:
+    assert _event(event_type=event_type, payload=payload).payload == payload
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        (DomainEventType.SCOPE_LOCKED_V1, {"scope_version_id": str(uuid4())}),
+        (
+            DomainEventType.CHANGE_REQUESTED_V1,
+            {
+                "change_request_id": str(uuid4()),
+                "base_scope_version_id": str(uuid4()),
+                "evidence_media_asset_ids": [1],
+            },
+        ),
+        (
+            DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
+            {"capture_session_id": str(uuid4()), "media_asset_id": str(uuid4())},
+        ),
+        (
+            DomainEventType.MEDIA_DELETED_V1,
+            {"background_job_id": 1, "media_asset_id": str(uuid4())},
+        ),
+    ],
+)
+def test_documented_v1_event_payloads_reject_missing_or_wrong_types(
+    event_type: DomainEventType,
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="minimum contract"):
+        _event(event_type=event_type, payload=payload)
+
+
+@pytest.mark.parametrize(
     "trace_id",
     [
         "too-short",

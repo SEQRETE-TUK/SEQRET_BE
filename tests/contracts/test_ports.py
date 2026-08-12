@@ -1,11 +1,12 @@
 """Contract tests reused by deterministic local port fakes."""
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.contracts import (
+    CREATE_ONLY_UPLOAD_HEADER,
     AIProviderPort,
     AnalysisRequest,
     AnalysisResult,
@@ -22,6 +23,7 @@ from app.contracts import (
     ProviderError,
     ProviderErrorKind,
     StorageObjectMetadata,
+    StorageUploadTarget,
     TaskQueuePort,
 )
 from app.contracts.fakes import (
@@ -49,19 +51,19 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
         object_key="jobs/1/photo.jpg",
         content_type="image/jpeg",
         size_bytes=10,
+        generation="7",
     )
 
     assert isinstance(storage, ObjectStoragePort)
-    assert (
-        await storage.create_upload_url(
-            object_key="jobs/1/photo.jpg",
-            content_type="image/jpeg",
-            content_length=10,
-            expires_in_seconds=300,
-            timeout_seconds=2,
-        )
-        == "https://storage.invalid/upload/jobs/1/photo.jpg"
+    upload = await storage.create_upload_url(
+        object_key="jobs/1/photo.jpg",
+        content_type="image/jpeg",
+        content_length=10,
+        expires_in_seconds=300,
+        timeout_seconds=2,
     )
+    assert upload.url == "https://storage.invalid/upload/jobs/1/photo.jpg"
+    assert upload.headers == (CREATE_ONLY_UPLOAD_HEADER,)
     assert (
         await storage.create_read_url(
             object_key="jobs/1/photo.jpg",
@@ -77,18 +79,64 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
 
     await storage.delete_object(
         object_key="jobs/1/photo.jpg",
-        generation=None,
+        generation="7",
         idempotency_key=key,
         timeout_seconds=2,
     )
     await storage.delete_object(
         object_key="jobs/1/photo.jpg",
-        generation=None,
+        generation="7",
         idempotency_key=key,
         timeout_seconds=2,
     )
 
     assert storage.deleted_keys == {"jobs/1/photo.jpg"}
+    assert "jobs/1/photo.jpg" not in storage.metadata
+
+
+@pytest.mark.anyio
+async def test_storage_fake_preserves_a_different_generation_and_accepts_missing_snapshot() -> None:
+    storage = FakeObjectStorage()
+    current = StorageObjectMetadata(
+        object_key="jobs/1/photo.jpg",
+        content_type="image/jpeg",
+        size_bytes=10,
+        generation="8",
+    )
+    storage.metadata[current.object_key] = current
+
+    await storage.delete_object(
+        object_key=current.object_key,
+        generation="7",
+        idempotency_key=IdempotencyKey("media-delete:old-generation"),
+        timeout_seconds=2,
+    )
+    await storage.delete_object(
+        object_key="jobs/1/missing.jpg",
+        generation="7",
+        idempotency_key=IdempotencyKey("media-delete:missing"),
+        timeout_seconds=2,
+    )
+
+    assert storage.metadata[current.object_key] is current
+    assert storage.deleted_keys == set()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        (("content-type", "x"),),
+        (CREATE_ONLY_UPLOAD_HEADER, ("X-Goog-If-Generation-Match", "1")),
+    ],
+)
+def test_storage_upload_target_requires_create_only_header(
+    headers: tuple[tuple[str, str], ...],
+) -> None:
+    with pytest.raises(ValueError, match="create-only"):
+        StorageUploadTarget(
+            url="https://storage.invalid/upload",
+            headers=headers,
+        )
 
 
 @pytest.mark.parametrize("generation", ["", " ", "x" * 256])
@@ -181,6 +229,39 @@ async def test_ai_fake_returns_versioned_result_once() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("source_ids", "object_keys", "message"),
+    [
+        ((MediaAssetId(uuid4()),), ("first", "second"), "same length"),
+        (
+            (MediaAssetId(UUID(int=1)), MediaAssetId(UUID(int=1))),
+            ("first", "second"),
+            "asset IDs must be unique",
+        ),
+        (
+            (MediaAssetId(UUID(int=1)), MediaAssetId(UUID(int=2))),
+            ("same", "same"),
+            "object keys must be unique",
+        ),
+    ],
+)
+def test_analysis_request_requires_unique_one_to_one_sources(
+    source_ids: tuple[MediaAssetId, ...],
+    object_keys: tuple[str, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        AnalysisRequest(
+            analysis_run_id=AnalysisRunId(uuid4()),
+            capture_session_id=CaptureSessionId(uuid4()),
+            source_media_asset_ids=source_ids,
+            object_keys=object_keys,
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="1",
+        )
+
+
 @pytest.mark.anyio
 async def test_event_bus_fake_keeps_first_event_for_idempotency_key() -> None:
     event_bus = FakeEventBus()
@@ -260,7 +341,7 @@ async def test_fakes_reject_idempotency_key_reuse_for_different_requests() -> No
     await event_bus.publish(event=event, idempotency_key=event_key, timeout_seconds=2)
     await storage.delete_object(
         object_key="first",
-        generation=None,
+        generation="1",
         idempotency_key=delete_key,
         timeout_seconds=2,
     )
@@ -283,7 +364,7 @@ async def test_fakes_reject_idempotency_key_reuse_for_different_requests() -> No
     with pytest.raises(ProviderError, match="different deletion"):
         await storage.delete_object(
             object_key="second",
-            generation=None,
+            generation="1",
             idempotency_key=delete_key,
             timeout_seconds=2,
         )
@@ -369,7 +450,7 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
         await storage.delete_object(
             object_key="object",
-            generation=None,
+            generation="1",
             idempotency_key=IdempotencyKey("delete:timeout"),
             timeout_seconds=0,
         )

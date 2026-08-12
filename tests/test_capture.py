@@ -15,7 +15,13 @@ from sqlalchemy.pool import NullPool
 from app.config import AppEnvironment, Settings
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
+from app.contracts.ports import (
+    CREATE_ONLY_UPLOAD_HEADER,
+    ProviderError,
+    ProviderErrorKind,
+    StorageObjectMetadata,
+    StorageUploadTarget,
+)
 from app.main import create_app
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
@@ -39,6 +45,10 @@ CaptureApi = tuple[
     FakeObjectStorage,
     FastAPI,
 ]
+
+
+def _upload_target(url: str) -> StorageUploadTarget:
+    return StorageUploadTarget(url=url, headers=(CREATE_ONLY_UPLOAD_HEADER,))
 
 
 @pytest.fixture
@@ -127,8 +137,8 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     }
     signed_upload_url = "https://storage.invalid/upload/%2F?X-Goog-Signature=A%2B&object=jobs%2F1"
 
-    async def encoded_upload_url(**_kwargs: object) -> str:
-        return signed_upload_url
+    async def encoded_upload_url(**_kwargs: object) -> StorageUploadTarget:
+        return _upload_target(signed_upload_url)
 
     monkeypatch.setattr(storage, "create_upload_url", encoded_upload_url)
     upload = await client.post(
@@ -148,6 +158,7 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     upload_body = upload.json()
     assert upload_body["asset"]["status"] == "pending_upload"
     assert upload_body["upload_url"] == signed_upload_url
+    assert upload_body["upload_headers"] == dict([CREATE_ONLY_UPLOAD_HEADER])
     parsed_upload = MediaUploadResponse.model_validate(upload_body, strict=False)
     assert "storage.invalid" not in repr(parsed_upload)
     customer_link = next(link for link in created["access_links"] if link["role"] == "customer")
@@ -189,7 +200,7 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     assert repeated.json()["status"] == "uploaded"
     assert repeated.json()["actual_size_bytes"] == 12
 
-    async def unexpected_storage(**_kwargs: object) -> str:
+    async def unexpected_storage(**_kwargs: object) -> object:
         raise AssertionError("terminal capture must not call storage")
 
     monkeypatch.setattr(storage, "get_metadata", unexpected_storage)
@@ -377,7 +388,7 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
 
     original_create_upload_url = storage.create_upload_url
 
-    async def fail_upload_url(**_kwargs: object) -> str:
+    async def fail_upload_url(**_kwargs: object) -> StorageUploadTarget:
         raise ProviderError(ProviderErrorKind.UNAVAILABLE, "unavailable", retryable=True)
 
     monkeypatch.setattr(storage, "create_upload_url", fail_upload_url)
@@ -386,16 +397,16 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 0
 
-    async def insecure_upload_url(**_kwargs: object) -> str:
-        return "http://storage.invalid/upload?signature=secret"
+    async def insecure_upload_url(**_kwargs: object) -> StorageUploadTarget:
+        return _upload_target("http://storage.invalid/upload?signature=secret")
 
     monkeypatch.setattr(storage, "create_upload_url", insecure_upload_url)
     insecure_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
     assert insecure_provider.status_code == 503
     assert "signature=secret" not in insecure_provider.text
 
-    async def malformed_upload_url(**_kwargs: object) -> str:
-        return "https:///upload?signature=secret"
+    async def malformed_upload_url(**_kwargs: object) -> StorageUploadTarget:
+        return _upload_target("https:///upload?signature=secret")
 
     monkeypatch.setattr(storage, "create_upload_url", malformed_upload_url)
     malformed_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
