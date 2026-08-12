@@ -41,7 +41,7 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `REDIS_URL_SECRET_ID` | Optional Redis URL secret ID |
 | `MONITORING_NOTIFICATION_CHANNELS` | Comma-separated full notification-channel names |
 
-The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, impersonate the four runtime service accounts, and access the state prefix. Restrict the Workload Identity Provider to this repository and `main`.
+The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, impersonate the four runtime service accounts, and access the state prefix. Enable the Cloud Resource Manager API before the first run because the Terraform provider requires it before Terraform can manage project APIs. Restrict the Workload Identity Provider to this repository and `main`.
 
 The runtime module mounts `CLOUD_SQL_SOURCE_INSTANCE` at `/cloudsql` for the Gen2 API and migration gate and grants only those service accounts `roles/cloudsql.client`. This staging path requires a public IPv4 Cloud SQL instance; the authenticated proxy does not need an authorized network. Store a psycopg Unix-socket URL such as `postgresql+psycopg://USER:PASSWORD@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE` in `DATABASE_URL_SECRET_ID`, percent-encoding the URL components, and do not expose the database through an unrestricted authorized network. Both runtimes reject a secret whose socket path does not exactly match the mounted instance. The staging workflow caps the API service at two instances with three database connections each so canary revisions fit a small Cloud SQL connection budget.
 

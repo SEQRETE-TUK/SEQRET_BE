@@ -117,6 +117,21 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
+      - name: Verify external bootstrap APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_api="cloudresourcemanager.googleapis.com"
+          enabled_api="$(gcloud services list \
+            --project "${GCP_PROJECT_ID}" \
+            --enabled \
+            --filter="config.name=${required_api}" \
+            --format='value(config.name)')"
+          if [[ "${enabled_api}" != "${required_api}" ]]; then
+            echo "Cloud Resource Manager API must be enabled before deployment." >&2
+            exit 1
+          fi
+
       - name: Read Terraform version
         id: terraform-version
         shell: bash
