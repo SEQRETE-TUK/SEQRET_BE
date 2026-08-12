@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
+from app.api.errors import protected_error_responses
 from app.contracts.actor import ParticipantRole
 from app.contracts.ports import ProviderError
 from app.modules.access.auth import CurrentActor, authorize_job_actor
@@ -64,6 +65,11 @@ def _change_error(error: Exception) -> HTTPException:
     "/{job_id}/scope-versions",
     response_model=ScopeVersionResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="불변 작업범위 버전 생성",
 )
 async def create_scope_version_endpoint(
@@ -99,6 +105,7 @@ async def create_scope_version_endpoint(
 @router.get(
     "/{job_id}/scope-versions",
     response_model=tuple[ScopeVersionResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="작업범위 버전 이력 조회",
 )
 async def list_scope_versions_endpoint(
@@ -114,6 +121,11 @@ async def list_scope_versions_endpoint(
     "/{job_id}/scope-versions/{scope_version_id}/approvals",
     response_model=ScopeApprovalResult,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="작업범위 버전 확인",
 )
 async def approve_scope_version_endpoint(
@@ -148,6 +160,11 @@ async def approve_scope_version_endpoint(
     "/{job_id}/change-requests",
     response_model=ChangeRequestResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="현장 변경요청 생성",
 )
 async def create_change_request_endpoint(
@@ -176,6 +193,7 @@ async def create_change_request_endpoint(
 @router.get(
     "/{job_id}/change-requests",
     response_model=tuple[ChangeRequestResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="현장 변경요청 목록 조회",
 )
 async def list_change_requests_endpoint(
@@ -190,13 +208,12 @@ async def list_change_requests_endpoint(
 @router.get(
     "/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url",
     response_model=ChangeEvidenceReadResponse,
-    responses={
-        status.HTTP_401_UNAUTHORIZED: {"description": "Invalid access token"},
-        status.HTTP_403_FORBIDDEN: {"description": "Insufficient role"},
-        status.HTTP_404_NOT_FOUND: {"description": "Change evidence not found"},
-        status.HTTP_409_CONFLICT: {"description": "Change evidence is not readable"},
-        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Storage is unavailable"},
-    },
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     summary="변경 증거 열람 URL 발급",
 )
 async def create_change_evidence_read_url_endpoint(
@@ -232,6 +249,11 @@ async def create_change_evidence_read_url_endpoint(
 @router.post(
     "/{job_id}/change-requests/{change_request_id}/clarification",
     response_model=ChangeRequestResponse,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="현장 변경 설명 요청",
 )
 async def request_change_clarification_endpoint(
@@ -257,6 +279,11 @@ async def request_change_clarification_endpoint(
 @router.post(
     "/{job_id}/change-requests/{change_request_id}/explanation",
     response_model=ChangeRequestResponse,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="현장 변경 설명 제출",
 )
 async def explain_change_request_endpoint(
@@ -282,6 +309,11 @@ async def explain_change_request_endpoint(
 @router.post(
     "/{job_id}/change-requests/{change_request_id}/decision",
     response_model=ChangeRequestResponse,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
     summary="현장 변경 승인 또는 거절",
 )
 async def decide_change_request_endpoint(

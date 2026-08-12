@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
+from app.api.errors import protected_error_responses
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.move_job.schemas import (
     MoveJobCreate,
@@ -39,6 +40,7 @@ async def create_move_job_endpoint(
 @router.get(
     "/{job_id}",
     response_model=MoveJobResponse,
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="작업 구성 조회",
 )
 async def get_move_job_endpoint(

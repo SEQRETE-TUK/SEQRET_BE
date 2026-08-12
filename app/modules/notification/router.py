@@ -3,8 +3,9 @@
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
+from app.api.errors import protected_error_responses
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.notification.schemas import NotificationResponse
 from app.modules.notification.service import list_notifications
@@ -16,6 +17,7 @@ router = APIRouter(prefix="/move-jobs", tags=["notification"])
 @router.get(
     "/{job_id}/notifications",
     response_model=tuple[NotificationResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
     summary="내 작업 알림 이력 조회",
 )
 async def list_notifications_endpoint(

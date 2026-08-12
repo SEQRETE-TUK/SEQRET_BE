@@ -2,7 +2,6 @@
 
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
-from app.contracts.errors import ErrorDetail, ErrorResponse
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.maintenance import (
     BackgroundJobType,
@@ -54,8 +53,6 @@ __all__ = [
     "DomainEvent",
     "DomainEventType",
     "DraftItem",
-    "ErrorDetail",
-    "ErrorResponse",
     "EventBusPort",
     "EventId",
     "IdempotencyKey",
