@@ -165,9 +165,7 @@ async def create_scope_version(
         content=content_document,
         content_hash=hashlib.sha256(canonical_json.encode()).hexdigest(),
         source_analysis_run_id=(analysis_source.analysis_run_id if analysis_source else None),
-        source_capture_session_id=(
-            analysis_source.capture_session_id if analysis_source else None
-        ),
+        source_capture_session_id=(analysis_source.capture_session_id if analysis_source else None),
         analysis_source=(analysis_source.model_dump(mode="json") if analysis_source else None),
         created_by_participant_id=participant_id,
     )

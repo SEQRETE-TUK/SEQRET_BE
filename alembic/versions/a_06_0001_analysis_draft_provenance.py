@@ -22,9 +22,7 @@ def upgrade() -> None:
     with op.batch_alter_table("scope_version") as batch_op:
         batch_op.add_column(sa.Column("source_analysis_run_id", sa.Uuid(), nullable=True))
         batch_op.add_column(sa.Column("source_capture_session_id", sa.Uuid(), nullable=True))
-        batch_op.add_column(
-            sa.Column("analysis_source", sa.JSON(none_as_null=True), nullable=True)
-        )
+        batch_op.add_column(sa.Column("analysis_source", sa.JSON(none_as_null=True), nullable=True))
         batch_op.alter_column(
             "created_by_participant_id",
             existing_type=sa.Uuid(),

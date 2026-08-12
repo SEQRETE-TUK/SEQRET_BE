@@ -158,8 +158,8 @@ def _analysis_result(
 async def test_analysis_result_becomes_editable_unconfirmed_scope_with_provenance(
     analysis_database: AnalysisDatabase,
 ) -> None:
-    job_id, customer_id, capture_id, zone_a_id, _, asset_a_id, asset_b_id = (
-        await _seed_analysis(analysis_database)
+    job_id, customer_id, capture_id, zone_a_id, _, asset_a_id, asset_b_id = await _seed_analysis(
+        analysis_database
     )
     result = _analysis_result(capture_id, asset_a_id, asset_b_id)
 
@@ -223,12 +223,8 @@ async def test_analysis_result_becomes_editable_unconfirmed_scope_with_provenanc
 async def test_analysis_import_rejects_invalid_capture_items_and_media(
     analysis_database: AnalysisDatabase,
 ) -> None:
-    job_id, _, capture_id, _, _, asset_a_id, asset_b_id = await _seed_analysis(
-        analysis_database
-    )
-    _, _, other_capture_id, _, _, other_asset_id, _ = await _seed_analysis(
-        analysis_database
-    )
+    job_id, _, capture_id, _, _, asset_a_id, asset_b_id = await _seed_analysis(analysis_database)
+    _, _, other_capture_id, _, _, other_asset_id, _ = await _seed_analysis(analysis_database)
 
     def result_with(*items: DraftItem, capture: UUID = capture_id) -> AnalysisResult:
         return AnalysisResult(

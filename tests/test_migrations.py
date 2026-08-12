@@ -140,9 +140,9 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert "existing_schema_probe" in inspect(engine).get_table_names()
         with engine.connect() as connection:
             restored_creator = connection.scalar(
-                select(
-                    migrated_metadata.tables["scope_version"].c.created_by_participant_id
-                ).where(migrated_metadata.tables["scope_version"].c.id == scope_version_id)
+                select(migrated_metadata.tables["scope_version"].c.created_by_participant_id).where(
+                    migrated_metadata.tables["scope_version"].c.id == scope_version_id
+                )
             )
         assert restored_creator == participant_id
 
