@@ -417,6 +417,7 @@ jobs:
         run: |
           set -euo pipefail
           load_balancer_ip="$(terraform -chdir="${TF_ROOT}" output -raw api_load_balancer_ip)"
+          certificate_name="$(terraform -chdir="${TF_ROOT}" output -raw api_managed_certificate_name)"
           expected_revision="${STABLE_REVISION:-${NEW_REVISION}}"
           probe_path="readyz"
           if [[ -n "${STABLE_REVISION}" && "${READINESS_CONTRACT}" != "v1" ]]; then
@@ -430,7 +431,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           ready=0
           for attempt in {1..30}; do
-            certificate_status="$(gcloud compute ssl-certificates describe "${SERVICE}-certificate" \
+            certificate_status="$(gcloud compute ssl-certificates describe "${certificate_name}" \
               --project "${GCP_PROJECT_ID}" --global \
               --format='value(managed.status)' 2>/dev/null || true)"
             response="$(curl --connect-timeout 2 --max-time 3 --fail --silent --show-error \
@@ -515,7 +516,8 @@ jobs:
           promoted="$(gcloud run services describe "${SERVICE}" \
             --project "${GCP_PROJECT_ID}" \
             --region "${GCP_REGION}" \
-            --format='value(status.traffic[percent=100].revisionName)' | head -n 1)"
+            --format=json \
+            | jq -r '[.status.traffic[] | select((.percent // 0) == 100) | .revisionName][0] // empty')"
           if [[ "${promoted}" != "${NEW_REVISION}" ]]; then
             echo "Cloud Run did not confirm the promoted revision." >&2
             exit 1
@@ -627,7 +629,8 @@ jobs:
           fi
           restored="$(gcloud run services describe "${SERVICE}" \
             --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
-            --format='value(status.traffic[percent=100].revisionName)' | head -n 1)"
+            --format=json \
+            | jq -r '[.status.traffic[] | select((.percent // 0) == 100) | .revisionName][0] // empty')"
           if [[ "${restored}" != "${STABLE_REVISION}" ]]; then
             echo "Cloud Run did not confirm restoration of the stable revision." >&2
             exit 1

@@ -28,6 +28,11 @@ output "api_load_balancer_ip" {
   value       = google_compute_global_address.api.address
 }
 
+output "api_managed_certificate_name" {
+  description = "Managed certificate name for the configured API domain."
+  value       = google_compute_managed_ssl_certificate.api.name
+}
+
 output "artifact_repository" {
   description = "Artifact Registry repository resource name."
   value       = google_artifact_registry_repository.backend.name

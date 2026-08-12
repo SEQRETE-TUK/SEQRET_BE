@@ -139,6 +139,7 @@ run "staging_runtime_isolation" {
         if rule.priority == 2147483647
       ]) == "deny(502)",
       google_compute_global_forwarding_rule.api_https.port_range == "443",
+      google_compute_managed_ssl_certificate.api.name == "seqret-stg-api-cert-6d0cd4bd",
       google_monitoring_uptime_check_config.api.http_check[0].path == "/edgez",
     ])
     error_message = "The public API edge must enforce Cloud Armor, HTTPS, and external health checks."

@@ -113,7 +113,8 @@ jobs:
           fi
           actual="$(gcloud run services describe "${SERVICE}" \
             --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
-            --format='value(status.traffic[percent=100].revisionName)' | head -n 1)"
+            --format=json \
+            | jq -r '[.status.traffic[] | select((.percent // 0) == 100) | .revisionName][0] // empty')"
           if [[ "${actual}" != "${REVISION}" ]]; then
             echo "Cloud Run did not confirm the requested rollback target." >&2
             exit 1
