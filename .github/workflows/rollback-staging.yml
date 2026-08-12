@@ -111,7 +111,25 @@ jobs:
             sleep 5
           done
           if [[ -z "${service_json}" ]]; then
-            echo "Only the rollback target recorded by the current deployment can be restored (current=${current:-unavailable}, rollback_target=${rollback_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable})." >&2
+            traffic_shapes="$(jq -c '{
+              spec_traffic: [.spec.traffic[]?
+                | {revisionName, revision, percent, tag, latestRevision, type}],
+              status_traffic: [.status.traffic[]?
+                | {revisionName, revision, percent, tag, latestRevision, type}],
+              status_traffic_statuses: [.status.trafficStatuses[]?
+                | {revisionName, revision, percent, tag, latestRevision, type}],
+              traffic_statuses: [.trafficStatuses[]?
+                | {revisionName, revision, percent, tag, latestRevision, type}]
+              }'
+              <<< "${candidate}" 2>/dev/null || echo unavailable)"
+            api_shape="$(jq -c '{apiVersion, kind, top_level_keys: keys}'
+              <<< "${candidate}" 2>/dev/null || echo unavailable)"
+            status_keys="$(jq -c '(.status // {}) | keys'
+              <<< "${candidate}" 2>/dev/null || echo unavailable)"
+            active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null || echo unavailable)"
+            gcloud_version="$(gcloud version --format=json 2>/dev/null \
+              | jq -r '."Google Cloud SDK" // "unavailable"' || echo unavailable)"
+            echo "Only the rollback target recorded by the current deployment can be restored (current=${current:-unavailable}, rollback_target=${rollback_target:-unavailable}, generation=${generation:-unavailable}, observed_generation=${observed_generation:-unavailable}, api_shape=${api_shape}, status_keys=${status_keys}, traffic_shapes=${traffic_shapes}, active_account=${active_account:-unavailable}, gcloud_version=${gcloud_version:-unavailable})." >&2
             exit 1
           fi
           previous_traffic="$(jq -r '[.status.traffic[]
