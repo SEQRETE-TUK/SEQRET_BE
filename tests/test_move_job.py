@@ -210,6 +210,27 @@ def test_location_rejects_duplicate_room_zone_identity(
         LocationCreate(kind=LocationKind.ORIGIN, label="출발지", room_zones=zones)
 
 
+def test_location_limits_room_zone_expansion() -> None:
+    accepted = tuple(RoomZoneCreate(name=f"구역 {index}", sort_order=index) for index in range(100))
+
+    assert (
+        len(
+            LocationCreate(
+                kind=LocationKind.ORIGIN,
+                label="출발지",
+                room_zones=accepted,
+            ).room_zones
+        )
+        == 100
+    )
+    with pytest.raises(ValidationError, match="at most 100 items"):
+        LocationCreate(
+            kind=LocationKind.ORIGIN,
+            label="출발지",
+            room_zones=(*accepted, RoomZoneCreate(name="초과 구역", sort_order=100)),
+        )
+
+
 @pytest.mark.anyio
 async def test_move_job_service_and_endpoints_map_disappeared_job(
     monkeypatch: pytest.MonkeyPatch,

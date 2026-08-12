@@ -179,7 +179,23 @@ run "staging_runtime_isolation" {
       length([
         for rule in google_compute_security_policy.api.rule : rule
         if rule.action == "throttle"
-      ]) == 1,
+      ]) == 3,
+      one([
+        for rule in google_compute_security_policy.api.rule : rule
+        if rule.priority == 800
+      ]).match[0].expr[0].expression == "request.method == 'POST' && request.path == '/api/v1/move-jobs'",
+      one([
+        for rule in google_compute_security_policy.api.rule : rule
+        if rule.priority == 800
+      ]).rate_limit_options[0].rate_limit_threshold[0].count == 10,
+      one([
+        for rule in google_compute_security_policy.api.rule : rule
+        if rule.priority == 850
+      ]).match[0].expr[0].expression == "request.path.startsWith('/api/v1/')",
+      one([
+        for rule in google_compute_security_policy.api.rule : rule
+        if rule.priority == 850
+      ]).rate_limit_options[0].rate_limit_threshold[0].count == 600,
       one([
         for rule in google_compute_security_policy.api.rule : rule.action
         if rule.priority == 2147483647

@@ -17,11 +17,13 @@ The Outbox relay runs once per minute with one task and no platform retries. Dat
 - GitHub Actions uses Workload Identity Federation, never a service-account key.
 - Published containers are non-root and deployed by immutable Artifact Registry digest.
 - The API accepts load-balancer ingress only; the worker remains internal-only.
-- Cloud Armor applies managed SQL injection and XSS rules and rate-limits database readiness probes at the public edge.
+- Cloud Armor applies managed SQL injection and XSS rules, limits public move-job bootstrap to 10 requests per minute per client IP, limits all `/api/v1/` traffic to 600 requests per minute per client IP, and rate-limits database readiness probes.
 - Database and optional Redis URLs come from existing Secret Manager secrets.
 - Runtime service accounts are distinct and receive only their required secret and trace roles.
 - Terraform state uses a pre-created private, versioned GCS bucket.
 - Every deployed migration must remain compatible with the previous ready revision. Destructive schema contraction is deployed only after that revision is no longer a rollback target.
+
+One move-job request accepts at most 100 room zones per location so the public bootstrap cannot expand into an unbounded database write.
 
 ## Staging prerequisites
 
