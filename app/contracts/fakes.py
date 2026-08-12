@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from pydantic import JsonValue
 
@@ -43,12 +44,16 @@ class FakeObjectStorage:
         self,
         *,
         object_key: str,
+        generation: str,
         expires_in_seconds: int,
         timeout_seconds: float,
     ) -> str:
+        if not generation.strip() or len(generation) > 255:
+            msg = "generation must be 1..255 characters"
+            raise ValueError(msg)
         self._require_positive(expires_in_seconds, "expires_in_seconds")
         self._require_positive(timeout_seconds, "timeout_seconds")
-        return f"https://storage.invalid/read/{object_key}"
+        return f"https://storage.invalid/read/{object_key}?{urlencode({'generation': generation})}"
 
     async def get_metadata(
         self,
