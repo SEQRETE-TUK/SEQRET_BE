@@ -149,9 +149,15 @@ def downgrade() -> None:
         connection.execute(
             sa.text("LOCK TABLE detection, ai_analysis_run IN ACCESS EXCLUSIVE MODE")
         )
-    if connection.scalar(sa.text("SELECT 1 FROM ai_analysis_run LIMIT 1")):
+    # As the head migration, b_03 carries the operational-data guard: once any
+    # background job or analysis run exists, keep the extended schema and roll
+    # back the application instead of downgrading (see docs/CONTRACTS.md).
+    operational_rows_exist = connection.scalar(
+        sa.text("SELECT 1 FROM background_job LIMIT 1")
+    ) or connection.scalar(sa.text("SELECT 1 FROM ai_analysis_run LIMIT 1"))
+    if operational_rows_exist:
         raise RuntimeError(
-            "B-03 analysis runs exist; roll back the application without downgrading the schema"
+            "operational rows exist; roll back the application without downgrading the schema"
         )
 
     op.drop_index("ix_detection_analysis_run", table_name="detection")
