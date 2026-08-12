@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.actor import ParticipantRole
+from app.contracts.ai import AnalysisResult
 from app.contracts.model import ContractModel
 
 
@@ -44,10 +45,11 @@ class ScopeVersionResponse(ContractModel):
     sequence_number: int
     content: ScopeContent
     content_hash: str
-    created_by_participant_id: UUID
+    created_by_participant_id: UUID | None
     created_at: datetime
     approval_roles: tuple[ParticipantRole, ...]
     locked_at: datetime | None
+    analysis_source: AnalysisResult | None
 
 
 class ScopeApprovalResponse(ContractModel):

@@ -36,6 +36,13 @@ class ScopeVersion(Base):
         UniqueConstraint("parent_version_id"),
         CheckConstraint("sequence_number > 0", name="sequence_positive"),
         CheckConstraint("length(content_hash) = 64", name="content_hash_length"),
+        CheckConstraint(
+            "(source_analysis_run_id IS NULL AND source_capture_session_id IS NULL "
+            "AND analysis_source IS NULL AND created_by_participant_id IS NOT NULL) OR "
+            "(source_analysis_run_id IS NOT NULL AND source_capture_session_id IS NOT NULL "
+            "AND analysis_source IS NOT NULL AND created_by_participant_id IS NULL)",
+            name="scope_version_origin",
+        ),
         Index(
             "uq_scope_version_initial_job",
             "job_id",
@@ -56,9 +63,13 @@ class ScopeVersion(Base):
     sequence_number: Mapped[int] = mapped_column(nullable=False)
     content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_by_participant_id: Mapped[UUID] = mapped_column(
+    source_analysis_run_id: Mapped[UUID | None] = mapped_column(Uuid, unique=True)
+    source_capture_session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("capture_session.id", ondelete="RESTRICT"),
+    )
+    analysis_source: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
+    created_by_participant_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("job_participant.id", ondelete="RESTRICT"),
-        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
