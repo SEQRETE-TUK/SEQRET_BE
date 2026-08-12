@@ -6,20 +6,23 @@ from asyncio import SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import SecretStr
-from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect, text
+from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
 from app.contracts.actor import ParticipantRole
+from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StorageObjectMetadata
+from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
 from app.modules.capture.schemas import MediaUploadCreate
 from app.modules.capture.service import (
     complete_media_upload,
@@ -40,14 +43,15 @@ from app.modules.scope.service import (
     ScopeVersionConflictError,
     approve_scope_version,
     create_scope_version,
+    import_analysis_draft,
     list_scope_versions,
 )
 from app.platform.db import create_database_engine, create_session_factory, transactional_session
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
-ALEMBIC_PREVIOUS = "a_04_0001"
-ALEMBIC_HEAD = "a_05_0001"
+ALEMBIC_PREVIOUS = "a_05_0001"
+ALEMBIC_HEAD = "a_06_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -153,7 +157,13 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
-            assert "scope_approval" not in inspect(engine).get_table_names()
+            scope_columns = {
+                column["name"] for column in inspect(engine).get_columns("scope_version")
+            }
+            assert "source_analysis_run_id" not in scope_columns
+            assert "source_capture_session_id" not in scope_columns
+            assert "analysis_source" not in scope_columns
+            assert "scope_approval" in inspect(engine).get_table_names()
             assert "scope_version" in inspect(engine).get_table_names()
             assert "capture_session" in inspect(engine).get_table_names()
             assert "media_asset" in inspect(engine).get_table_names()
@@ -234,7 +244,7 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
 
 
 @pytest.mark.anyio
-async def test_capture_upload_commands_round_trip_on_postgresql() -> None:
+async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> None:
     url = _test_database_url()
     with _isolated_test_schema(url) as schema_url:
         command.upgrade(_alembic_config(schema_url), "head")
@@ -298,8 +308,43 @@ async def test_capture_upload_commands_round_trip_on_postgresql() -> None:
             assert completed.status is MediaAssetStatus.UPLOADED
             assert completed.actual_size_bytes == 10
             assert completed.sha256_hex == "b" * 64
+
+            result = AnalysisResult(
+                analysis_run_id=AnalysisRunId(uuid4()),
+                capture_session_id=CaptureSessionId(capture.id),
+                model_name="gemini",
+                model_version="2.5",
+                prompt_version="scope-v1",
+                draft_items=(
+                    DraftItem(
+                        item_key="sofa",
+                        description="소파 이동",
+                        confidence=0.9,
+                        source_media_asset_ids=(MediaAssetId(upload.asset.id),),
+                    ),
+                ),
+            )
+            async with transactional_session(factory) as session:
+                imported = await import_analysis_draft(session, created.job.id, result)
+
+            assert imported.created_by_participant_id is None
+            assert imported.analysis_source == result
         finally:
             await engine.dispose()
+
+        downgraded_engine = create_engine(schema_url)
+        try:
+            command.downgrade(_alembic_config(schema_url), ALEMBIC_PREVIOUS)
+            scope_version = Table("scope_version", MetaData(), autoload_with=downgraded_engine)
+            with downgraded_engine.connect() as connection:
+                restored_creator = connection.scalar(
+                    select(scope_version.c.created_by_participant_id).where(
+                        scope_version.c.id == imported.id
+                    )
+                )
+            assert restored_creator == created.job.participants[0].id
+        finally:
+            downgraded_engine.dispose()
 
 
 @pytest.mark.anyio
