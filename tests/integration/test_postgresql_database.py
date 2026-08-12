@@ -2,7 +2,7 @@
 
 import os
 import sys
-from asyncio import Barrier, Event, SelectorEventLoop, gather
+from asyncio import Barrier, Event, SelectorEventLoop, gather, wait_for
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -815,7 +815,9 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
 
 
 @pytest.mark.anyio
-async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> None:
+async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     url = _test_database_url()
     with _isolated_test_schema(url) as schema_url:
         command.upgrade(_alembic_config(schema_url), "head")
@@ -880,6 +882,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
                 content_type="image/jpeg",
                 size_bytes=10,
                 sha256_hex="b" * 64,
+                generation="1",
             )
             async with transactional_session(factory) as session:
                 completed = await complete_media_upload(
@@ -894,6 +897,90 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql() -> N
             assert completed.status is MediaAssetStatus.UPLOADED
             assert completed.actual_size_bytes == 10
             assert completed.sha256_hex == "b" * 64
+
+            async with transactional_session(factory) as session:
+                completion_upload = await create_media_upload(
+                    session,
+                    storage,
+                    created.job.id,
+                    capture.id,
+                    customer.id,
+                    MediaUploadCreate(
+                        room_zone_id=created.job.locations[0].room_zones[0].id,
+                        media_purpose=MediaPurpose.COMPLETION,
+                        content_type="image/jpeg",
+                        content_length=12,
+                    ),
+                )
+
+            completion_object_key = completion_upload.upload_url.removeprefix(
+                "https://storage.invalid/upload/"
+            )
+            storage.metadata[completion_object_key] = StorageObjectMetadata(
+                object_key=completion_object_key,
+                content_type="image/jpeg",
+                size_bytes=12,
+                sha256_hex="c" * 64,
+                generation="2",
+            )
+            metadata_barrier = Barrier(2)
+            original_get_metadata = storage.get_metadata
+
+            async def synchronized_metadata(
+                *, object_key: str, timeout_seconds: float
+            ) -> StorageObjectMetadata:
+                metadata = await original_get_metadata(
+                    object_key=object_key,
+                    timeout_seconds=timeout_seconds,
+                )
+                if metadata.object_key == completion_object_key:
+                    await wait_for(metadata_barrier.wait(), timeout=5)
+                return metadata
+
+            monkeypatch.setattr(storage, "get_metadata", synchronized_metadata)
+
+            async def complete_concurrently() -> MediaAssetStatus:
+                async with transactional_session(factory) as session:
+                    result = await complete_media_upload(
+                        session,
+                        storage,
+                        created.job.id,
+                        capture.id,
+                        completion_upload.asset.id,
+                        customer.id,
+                        trace_id="0123456789abcdef0123456789abcdef",
+                    )
+                    return result.status
+
+            completion_outcomes = await gather(
+                complete_concurrently(),
+                complete_concurrently(),
+            )
+            async with transactional_session(factory) as session:
+                stored_completion_asset = await session.get(
+                    MediaAsset,
+                    completion_upload.asset.id,
+                )
+                completion_events = await list_audit_events(session, created.job.id)
+                completion_outbox = (
+                    await session.scalars(
+                        select(OutboxEvent).where(
+                            OutboxEvent.aggregate_id == created.job.id,
+                            OutboxEvent.event_type == DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
+                        )
+                    )
+                ).all()
+
+            assert tuple(completion_outcomes) == (
+                MediaAssetStatus.UPLOADED,
+                MediaAssetStatus.UPLOADED,
+            )
+            assert stored_completion_asset is not None
+            assert stored_completion_asset.generation == "2"
+            assert [event.event_type for event in completion_events].count(
+                AuditEventType.COMPLETION_MEDIA_UPLOADED
+            ) == 1
+            assert len(completion_outbox) == 1
 
             result = AnalysisResult(
                 analysis_run_id=AnalysisRunId(uuid4()),
@@ -1278,6 +1365,7 @@ async def test_change_request_concurrent_approvals_allow_one_result_on_postgresq
                 content_type="image/jpeg",
                 size_bytes=12,
                 sha256_hex="c" * 64,
+                generation="1",
             )
             async with transactional_session(factory) as session:
                 await complete_media_upload(

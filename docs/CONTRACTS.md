@@ -23,6 +23,7 @@
 로컬 fake는 실제 adapter와 같은 Protocol을 만족하고 멱등 동작을 contract test로 검증한다.
 
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
+- 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, 업로드 URL은 provider가 반환한 HTTPS 원문을 cache하지 않고 전달한다.
 - merge 순서는 이 계약과 fake → A의 열람 오케스트레이션 → B의 Storage adapter → 실제 provider 통합 검증이다. 호출자를 도입하기 전에 breaking signature를 먼저 고정하며, 기존 upload·metadata·delete 계약과 event schema는 바뀌지 않는다.
 
 ## 미디어 열람

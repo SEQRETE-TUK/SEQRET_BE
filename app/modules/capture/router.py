@@ -3,7 +3,7 @@
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.modules.access.auth import CurrentActor, authorize_job_actor
@@ -15,6 +15,7 @@ from app.modules.capture.schemas import (
 )
 from app.modules.capture.service import (
     CaptureResourceNotFoundError,
+    CaptureWorkflowConflictError,
     MediaMetadataMismatchError,
     MediaPurposeNotAllowedError,
     MediaUploadStateConflictError,
@@ -76,6 +77,11 @@ async def create_capture_session_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="move job not found",
         ) from error
+    except CaptureWorkflowConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="capture workflow is closed",
+        ) from error
 
 
 @router.post(
@@ -88,12 +94,13 @@ async def create_media_upload_endpoint(
     job_id: UUID,
     capture_session_id: UUID,
     command: MediaUploadCreate,
+    response: Response,
     actor: CurrentActor,
     session: Session,
     storage: Storage,
 ) -> MediaUploadResponse:
     try:
-        return await create_media_upload(
+        result = await create_media_upload(
             session,
             storage,
             job_id,
@@ -101,6 +108,8 @@ async def create_media_upload_endpoint(
             cast(UUID, actor.participant_id),
             command,
         )
+        response.headers["Cache-Control"] = "no-store"
+        return result
     except CaptureResourceNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -110,6 +119,11 @@ async def create_media_upload_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="media purpose is not allowed for this capture workflow",
+        ) from error
+    except CaptureWorkflowConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="capture workflow is closed",
         ) from error
     except ProviderError as error:
         raise storage_error(error) from error
@@ -152,6 +166,11 @@ async def complete_media_upload_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="media upload cannot complete from its current state",
+        ) from error
+    except CaptureWorkflowConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="capture workflow is closed",
         ) from error
     except ProviderError as error:
         raise storage_error(error) from error

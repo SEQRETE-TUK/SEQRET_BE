@@ -1,6 +1,7 @@
 """Capture session and storage-port application commands."""
 
 from datetime import timedelta
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import StoragePort
+from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
@@ -19,7 +20,13 @@ from app.modules.capture.schemas import (
 )
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
-from app.modules.move_job.models import JobParticipant, Location, RoomZone
+from app.modules.move_job.models import (
+    JobParticipant,
+    Location,
+    MoveJob,
+    MoveJobStatus,
+    RoomZone,
+)
 from app.platform.event_bus import enqueue_domain_event
 
 UPLOAD_URL_TTL_SECONDS = 15 * 60
@@ -36,6 +43,10 @@ CAPTURE_PURPOSES = frozenset(
 
 class CaptureResourceNotFoundError(LookupError):
     """Raised for missing or cross-participant capture resources."""
+
+
+class CaptureWorkflowConflictError(ValueError):
+    """Raised when a terminal move job no longer accepts capture mutations."""
 
 
 class MediaPurposeNotAllowedError(ValueError):
@@ -66,11 +77,34 @@ def _asset_response(asset: MediaAsset) -> MediaAssetResponse:
     )
 
 
+async def _lock_mutable_job(session: AsyncSession, job_id: UUID) -> None:
+    job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
+    if job is None:
+        raise CaptureResourceNotFoundError(job_id)
+    if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise CaptureWorkflowConflictError(job_id)
+
+
+def _validated_upload_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() != "https" or parsed.hostname is None:
+            raise ValueError
+    except ValueError:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            "storage returned an invalid upload URL",
+            retryable=False,
+        ) from None
+    return value
+
+
 async def create_capture_session(
     session: AsyncSession,
     job_id: UUID,
     participant_id: UUID,
 ) -> CaptureSessionResponse:
+    await _lock_mutable_job(session, job_id)
     participant = await session.scalar(
         select(JobParticipant.id).where(
             JobParticipant.id == participant_id,
@@ -119,6 +153,9 @@ async def create_media_upload(
     command: MediaUploadCreate,
 ) -> MediaUploadResponse:
     await _load_owned_capture_session(session, job_id, capture_session_id, participant_id)
+    job_status = await session.scalar(select(MoveJob.status).where(MoveJob.id == job_id))
+    if job_status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise CaptureWorkflowConflictError(job_id)
     if command.media_purpose not in CAPTURE_PURPOSES:
         raise MediaPurposeNotAllowedError(command.media_purpose)
     room_zone = await session.scalar(
@@ -140,8 +177,6 @@ async def create_media_upload(
         content_type=command.content_type,
         expected_size_bytes=command.content_length,
     )
-    session.add(asset)
-    await session.flush()
     expires_at = utc_now() + timedelta(seconds=UPLOAD_URL_TTL_SECONDS)
     upload_url = await storage.create_upload_url(
         object_key=object_key,
@@ -150,6 +185,11 @@ async def create_media_upload(
         expires_in_seconds=UPLOAD_URL_TTL_SECONDS,
         timeout_seconds=STORAGE_TIMEOUT_SECONDS,
     )
+    upload_url = _validated_upload_url(upload_url)
+
+    await _lock_mutable_job(session, job_id)
+    session.add(asset)
+    await session.flush()
     return MediaUploadResponse(
         asset=_asset_response(asset),
         upload_url=upload_url,
@@ -180,6 +220,10 @@ async def complete_media_upload(
     if asset.status is not MediaAssetStatus.PENDING_UPLOAD:
         raise MediaUploadStateConflictError(media_asset_id)
 
+    job_status = await session.scalar(select(MoveJob.status).where(MoveJob.id == job_id))
+    if job_status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise CaptureWorkflowConflictError(job_id)
+
     metadata = await storage.get_metadata(
         object_key=asset.object_key,
         timeout_seconds=STORAGE_TIMEOUT_SECONDS,
@@ -192,8 +236,25 @@ async def complete_media_upload(
         asset.object_key,
         asset.content_type,
         asset.expected_size_bytes,
-    ):
+    ) or metadata.generation is None:
         raise MediaMetadataMismatchError(media_asset_id)
+
+    await _lock_mutable_job(session, job_id)
+    asset = (
+        await session.scalars(
+            select(MediaAsset)
+            .where(
+                MediaAsset.id == media_asset_id,
+                MediaAsset.capture_session_id == capture_session_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).one()
+    if asset.status is MediaAssetStatus.UPLOADED:
+        return _asset_response(asset)
+    assert asset.status is MediaAssetStatus.PENDING_UPLOAD
+
     asset.status = MediaAssetStatus.UPLOADED
     asset.actual_size_bytes = metadata.size_bytes
     asset.sha256_hex = metadata.sha256_hex

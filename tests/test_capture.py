@@ -17,7 +17,7 @@ from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
 from app.main import create_app
-from app.modules.capture.models import MediaAsset
+from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
     MAX_IMAGE_BYTES,
     MAX_VIDEO_BYTES,
@@ -30,6 +30,7 @@ from app.modules.capture.service import (
     create_capture_session,
     create_media_upload,
 )
+from app.modules.move_job.models import MoveJob, MoveJobStatus
 from app.platform.db import Base, create_session_factory
 
 CaptureApi = tuple[
@@ -105,28 +106,48 @@ async def _create_capture(
 
 
 @pytest.mark.anyio
-async def test_capture_upload_verifies_metadata_and_is_idempotent(capture_api: CaptureApi) -> None:
+async def test_capture_upload_verifies_metadata_and_is_idempotent(
+    capture_api: CaptureApi,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client, factory, storage, _ = capture_api
     created = await _create_job(client)
     customer_secret = _secret(created, "customer")
     capture = await _create_capture(client, created, customer_secret)
     job = created["job"]
     room_zone_id = job["locations"][0]["room_zones"][0]["id"]
+    upload_path = (
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}/media-assets/upload"
+    )
+    upload_payload = {
+        "room_zone_id": room_zone_id,
+        "media_purpose": "inventory",
+        "content_type": "image/jpeg",
+        "content_length": 12,
+    }
+    signed_upload_url = "https://storage.invalid/upload/%2F?X-Goog-Signature=A%2B&object=jobs%2F1"
+
+    async def encoded_upload_url(**_kwargs: object) -> str:
+        return signed_upload_url
+
+    monkeypatch.setattr(storage, "create_upload_url", encoded_upload_url)
     upload = await client.post(
-        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}/media-assets/upload",
+        upload_path,
         headers=_headers(customer_secret),
-        json={
-            "room_zone_id": room_zone_id,
-            "media_purpose": "inventory",
-            "content_type": "image/jpeg",
-            "content_length": 12,
-        },
+        json=upload_payload,
+    )
+    pending_upload = await client.post(
+        upload_path,
+        headers=_headers(customer_secret),
+        json=upload_payload,
     )
 
     assert upload.status_code == 201
+    assert pending_upload.status_code == 201
+    assert upload.headers["cache-control"] == "no-store"
     upload_body = upload.json()
     assert upload_body["asset"]["status"] == "pending_upload"
-    assert upload_body["upload_url"].startswith("https://storage.invalid/upload/jobs/")
+    assert upload_body["upload_url"] == signed_upload_url
     parsed_upload = MediaUploadResponse.model_validate(upload_body, strict=False)
     assert "storage.invalid" not in repr(parsed_upload)
     customer_link = next(link for link in created["access_links"] if link["role"] == "customer")
@@ -156,12 +177,48 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(capture_api: C
     assert completed.json()["actual_size_bytes"] == 12
     assert completed.json()["sha256_hex"] == "a" * 64
 
+    async with factory.begin() as session:
+        move_job = await session.get(MoveJob, UUID(job["id"]))
+        assert move_job is not None
+        move_job.status = MoveJobStatus.CANCELED
+
     storage.metadata.clear()
     repeated = await client.post(complete_url, headers=_headers(customer_secret))
     assert repeated.status_code == 200
     assert repeated.json()["id"] == completed.json()["id"]
     assert repeated.json()["status"] == "uploaded"
     assert repeated.json()["actual_size_bytes"] == 12
+
+    async def unexpected_storage(**_kwargs: object) -> str:
+        raise AssertionError("terminal capture must not call storage")
+
+    monkeypatch.setattr(storage, "get_metadata", unexpected_storage)
+    monkeypatch.setattr(storage, "create_upload_url", unexpected_storage)
+    new_capture = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions",
+        headers=_headers(customer_secret),
+    )
+    new_upload = await client.post(
+        upload_path,
+        headers=_headers(customer_secret),
+        json=upload_payload,
+    )
+    pending_asset_id = pending_upload.json()["asset"]["id"]
+    pending_complete = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}"
+        f"/media-assets/{pending_asset_id}/complete",
+        headers=_headers(customer_secret),
+    )
+    assert new_capture.status_code == 409
+    assert new_upload.status_code == 409
+    assert pending_complete.status_code == 409
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(CaptureSession)) == 1
+        assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 2
+        pending_asset = await session.get(MediaAsset, UUID(pending_asset_id))
+        assert pending_asset is not None
+        assert pending_asset.status is MediaAssetStatus.PENDING_UPLOAD
 
 
 @pytest.mark.anyio
@@ -249,6 +306,8 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
 
     async with factory() as session:
         with pytest.raises(CaptureResourceNotFoundError):
+            await create_capture_session(session, uuid4(), uuid4())
+        with pytest.raises(CaptureResourceNotFoundError):
             await create_capture_session(session, UUID(job["id"]), uuid4())
 
     async def raise_missing(*_args: object) -> None:
@@ -326,6 +385,24 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
     assert provider_failed.status_code == 503
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 0
+
+    async def insecure_upload_url(**_kwargs: object) -> str:
+        return "http://storage.invalid/upload?signature=secret"
+
+    monkeypatch.setattr(storage, "create_upload_url", insecure_upload_url)
+    insecure_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
+    assert insecure_provider.status_code == 503
+    assert "signature=secret" not in insecure_provider.text
+
+    async def malformed_upload_url(**_kwargs: object) -> str:
+        return "https:///upload?signature=secret"
+
+    monkeypatch.setattr(storage, "create_upload_url", malformed_upload_url)
+    malformed_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
+    assert malformed_provider.status_code == 503
+    assert "signature=secret" not in malformed_provider.text
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 0
     monkeypatch.setattr(storage, "create_upload_url", original_create_upload_url)
 
     uploaded = await client.post(upload_url, headers=_headers(secret), json=payload)
@@ -348,22 +425,39 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
             object_key=f"{object_key}-other",
             content_type="video/mp4",
             size_bytes=50,
+            generation="1",
         ),
         StorageObjectMetadata(
             object_key=object_key,
             content_type="image/jpeg",
             size_bytes=50,
+            generation="1",
         ),
         StorageObjectMetadata(
             object_key=object_key,
             content_type="video/mp4",
             size_bytes=51,
+            generation="1",
         ),
     )
     for metadata in mismatches:
         storage.metadata[object_key] = metadata
         mismatch = await client.post(complete_url, headers=_headers(secret))
         assert mismatch.status_code == 409
+
+    storage.metadata[object_key] = StorageObjectMetadata(
+        object_key=object_key,
+        content_type="video/mp4",
+        size_bytes=50,
+    )
+    missing_generation = await client.post(complete_url, headers=_headers(secret))
+    assert missing_generation.status_code == 409
+    async with factory() as session:
+        asset = await session.get(MediaAsset, asset_id)
+        assert asset is not None
+        assert asset.status is MediaAssetStatus.PENDING_UPLOAD
+        assert asset.actual_size_bytes is None
+        assert asset.generation is None
 
     original_get_metadata = storage.get_metadata
 
@@ -385,6 +479,7 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
         object_key=object_key,
         content_type="video/mp4",
         size_bytes=50,
+        generation="1",
     )
     completed = await client.post(complete_url, headers=_headers(secret))
     assert completed.status_code == 200
