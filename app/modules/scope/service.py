@@ -2,10 +2,11 @@
 
 import hashlib
 import json
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,8 +15,10 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
+from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
+from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
 from app.modules.completion.models import AuditEventType, CompletionConfirmation
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, MoveJob, MoveJobStatus, RoomZone
@@ -28,6 +31,7 @@ from app.modules.scope.models import (
 )
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
+    ChangeEvidenceReadResponse,
     ChangeRequestCreate,
     ChangeRequestResponse,
     ScopeApprovalResponse,
@@ -68,6 +72,7 @@ REQUIRED_APPROVAL_ROLES = (
     ParticipantRole.CUSTOMER,
     ParticipantRole.COMPANY_MANAGER,
 )
+READ_URL_TTL_SECONDS = 5 * 60
 
 
 def _normalize_scope_content(content: ScopeContent) -> ScopeContent:
@@ -583,6 +588,69 @@ async def list_change_requests(
         )
     ).all()
     return tuple([await _change_request_response(session, request) for request in requests])
+
+
+async def create_change_evidence_read_url(
+    session: AsyncSession,
+    storage: StoragePort,
+    job_id: UUID,
+    change_request_id: UUID,
+    media_asset_id: UUID,
+    participant_id: UUID,
+) -> ChangeEvidenceReadResponse:
+    await _require_job_participant(
+        session,
+        job_id,
+        participant_id,
+        {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER},
+    )
+    asset = await session.scalar(
+        select(MediaAsset)
+        .join(
+            ChangeRequestEvidence,
+            ChangeRequestEvidence.media_asset_id == MediaAsset.id,
+        )
+        .join(ChangeRequest, ChangeRequest.id == ChangeRequestEvidence.change_request_id)
+        .join(CaptureSession, CaptureSession.id == MediaAsset.capture_session_id)
+        .where(
+            ChangeRequest.id == change_request_id,
+            ChangeRequest.job_id == job_id,
+            ChangeRequestEvidence.media_asset_id == media_asset_id,
+            CaptureSession.job_id == job_id,
+            MediaAsset.media_purpose == MediaPurpose.CHANGE_EVIDENCE,
+        )
+    )
+    if asset is None:
+        raise ScopeResourceNotFoundError(media_asset_id)
+    if (
+        asset.status is not MediaAssetStatus.READY
+        or not asset.generation
+        or asset.generation != asset.generation.strip()
+    ):
+        raise ChangeRequestConflictError(media_asset_id)
+
+    expires_at = utc_now() + timedelta(seconds=READ_URL_TTL_SECONDS)
+    read_url = await storage.create_read_url(
+        object_key=asset.object_key,
+        generation=asset.generation,
+        expires_in_seconds=READ_URL_TTL_SECONDS,
+        timeout_seconds=STORAGE_TIMEOUT_SECONDS,
+    )
+    try:
+        return ChangeEvidenceReadResponse.model_validate(
+            {
+                "media_asset_id": asset.id,
+                "read_url": read_url,
+                "expires_at": expires_at,
+            },
+            strict=False,
+        )
+    except ValidationError:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            "storage returned an invalid read URL",
+            retryable=False,
+        ) from None
 
 
 async def request_change_clarification(

@@ -1,11 +1,13 @@
 """Field change evidence, decision workflow, and result-version tests."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -13,12 +15,13 @@ from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
 from app.contracts.fakes import FakeObjectStorage
-from app.contracts.media import MediaAssetStatus
-from app.contracts.ports import StorageObjectMetadata
+from app.contracts.media import MediaAssetStatus, MediaPurpose
+from app.contracts.ports import ProviderError, ProviderErrorKind, StorageObjectMetadata
 from app.main import create_app
 from app.modules.capture.models import MediaAsset
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
+    ChangeEvidenceReadResponse,
     ChangeRequestCreate,
     ScopeContent,
 )
@@ -189,6 +192,7 @@ async def _upload_evidence(
         content_type="image/jpeg",
         size_bytes=12,
         sha256_hex="c" * 64,
+        generation="7",
     )
     completed = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions/{capture_id}"
@@ -217,6 +221,7 @@ def _change_payload(
 @pytest.mark.anyio
 async def test_change_request_clarification_approval_and_result_confirmation(
     change_api: ChangeApi,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, factory, storage = change_api
     created = await _create_job(client)
@@ -239,6 +244,54 @@ async def test_change_request_clarification_approval_and_result_confirmation(
     assert body["evidence_media_asset_ids"] == [evidence_id]
     assert body["result_scope_version_id"] is None
     change_id = body["id"]
+
+    read_requests: list[tuple[str, str, int, float]] = []
+    original_create_read_url = storage.create_read_url
+
+    async def record_read_url(
+        *,
+        object_key: str,
+        generation: str,
+        expires_in_seconds: int,
+        timeout_seconds: float,
+    ) -> str:
+        read_requests.append((object_key, generation, expires_in_seconds, timeout_seconds))
+        return await original_create_read_url(
+            object_key=object_key,
+            generation=generation,
+            expires_in_seconds=expires_in_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+
+    monkeypatch.setattr(storage, "create_read_url", record_read_url)
+    evidence_url = f"{changes_url}/{change_id}/evidence/{evidence_id}/read-url"
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(evidence_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.READY
+    for headers in (customer_headers, manager_headers):
+        readable = await client.get(evidence_url, headers=headers)
+        assert readable.status_code == 200
+        assert readable.json()["media_asset_id"] == evidence_id
+        assert readable.json()["read_url"].startswith("https://storage.invalid/read/jobs/")
+        assert readable.json()["expires_at"] is not None
+        assert readable.headers["cache-control"] == "no-store"
+        parsed = ChangeEvidenceReadResponse.model_validate(readable.json(), strict=False)
+        assert "storage.invalid" not in repr(parsed)
+        assert 290 <= (parsed.expires_at - datetime.now(UTC)).total_seconds() <= 300
+    assert [
+        (generation, expires, timeout) for _, generation, expires, timeout in read_requests
+    ] == [
+        ("7", 300, 5.0),
+        ("7", 300, 5.0),
+    ]
+    route_responses = (await client.get("/openapi.json")).json()["paths"][
+        evidence_url.replace(job_id, "{job_id}")
+        .replace(change_id, "{change_request_id}")
+        .replace(evidence_id, "{media_asset_id}")
+    ]["get"]["responses"]
+    assert {"200", "401", "403", "404", "409", "503"} <= set(route_responses)
+    assert (await client.get(evidence_url, headers=worker_headers)).status_code == 403
 
     listed = await client.get(changes_url, headers=customer_headers)
     assert listed.status_code == 200
@@ -496,6 +549,104 @@ async def test_change_request_rejects_unconfirmed_scope_and_invalid_evidence(
         headers=worker_headers,
     )
     assert hidden.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_change_evidence_read_url_hides_resources_and_rejects_unreadable_media(
+    change_api: ChangeApi,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, factory, storage = change_api
+    created = await _create_job(client)
+    base = await _create_scope(client, created, lock=True)
+    evidence_id = await _upload_evidence(client, factory, storage, created)
+    job_id = created["job"]["id"]
+    changes_url = f"/api/v1/move-jobs/{job_id}/change-requests"
+    request = await client.post(
+        changes_url,
+        headers=_headers(_secret(created, "field_worker")),
+        json=_change_payload(created, base["id"], evidence_id),
+    )
+    read_url = f"{changes_url}/{request.json()['id']}/evidence/{evidence_id}/read-url"
+    customer_headers = _headers(_secret(created, "customer"))
+
+    unattached_id = await _upload_evidence(client, factory, storage, created)
+    assert (
+        await client.get(read_url.replace(evidence_id, unattached_id), headers=customer_headers)
+    ).status_code == 404
+    second_job = await _create_job(client)
+    cross_job_url = read_url.replace(job_id, second_job["job"]["id"], 1)
+    assert (
+        await client.get(
+            cross_job_url,
+            headers=_headers(_secret(second_job, "customer")),
+        )
+    ).status_code == 404
+
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(evidence_id))
+        assert asset is not None
+        asset.media_purpose = MediaPurpose.INVENTORY
+    assert (await client.get(read_url, headers=customer_headers)).status_code == 404
+
+    for unreadable_status in set(MediaAssetStatus) - {MediaAssetStatus.READY}:
+        async with factory.begin() as session:
+            asset = await session.get(MediaAsset, UUID(evidence_id))
+            assert asset is not None
+            asset.media_purpose = MediaPurpose.CHANGE_EVIDENCE
+            asset.status = unreadable_status
+        assert (await client.get(read_url, headers=customer_headers)).status_code == 409
+
+    for invalid_generation in (None, " "):
+        async with factory.begin() as session:
+            asset = await session.get(MediaAsset, UUID(evidence_id))
+            assert asset is not None
+            asset.status = MediaAssetStatus.READY
+            asset.generation = invalid_generation
+        assert (await client.get(read_url, headers=customer_headers)).status_code == 409
+
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(evidence_id))
+        assert asset is not None
+        asset.generation = "7"
+
+    async def unavailable(**_kwargs: object) -> str:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            "provider detail must not leak",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(storage, "create_read_url", unavailable)
+    provider_failure = await client.get(read_url, headers=customer_headers)
+    assert provider_failure.status_code == 503
+    assert provider_failure.json()["detail"] == "storage is unavailable"
+
+    async def invalid_url(**_kwargs: object) -> str:
+        return "http://storage.invalid/read?signature=must-not-leak"
+
+    monkeypatch.setattr(storage, "create_read_url", invalid_url)
+    invalid_provider_url = await client.get(read_url, headers=customer_headers)
+    assert invalid_provider_url.status_code == 503
+    assert "must-not-leak" not in invalid_provider_url.text
+
+    def missing_storage(*_args: object) -> None:
+        raise HTTPException(status_code=503, detail="storage is unavailable")
+
+    monkeypatch.setattr("app.modules.scope.router.get_storage_port", missing_storage)
+    assert (
+        await client.get(
+            read_url,
+            headers=_headers(_secret(created, "field_worker")),
+        )
+    ).status_code == 403
+    assert (
+        await client.get(
+            read_url,
+            headers=_headers(_secret(second_job, "customer")),
+        )
+    ).status_code == 404
+    assert (await client.get(read_url, headers=customer_headers)).status_code == 503
 
 
 @pytest.mark.anyio

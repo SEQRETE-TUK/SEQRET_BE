@@ -25,6 +25,10 @@
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
 - merge 순서는 이 계약과 fake → A의 열람 오케스트레이션 → B의 Storage adapter → 실제 provider 통합 검증이다. 호출자를 도입하기 전에 breaking signature를 먼저 고정하며, 기존 upload·metadata·delete 계약과 event schema는 바뀌지 않는다.
 
+## 미디어 열람
+
+- 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부된 `READY` 상태의 `change_evidence` 미디어와 저장된 generation만 허용한다.
+
 ## Event envelope
 
 `DomainEvent`는 `event_id`, version이 포함된 `event_type`, `schema_version`, `aggregate_id`, `occurred_at`, 선택적 `actor_id`, `trace_id`, JSON `payload`로 구성한다. consumer는 `event_id`를 기준으로 중복 처리를 막는다.

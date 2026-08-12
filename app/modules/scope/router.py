@@ -3,13 +3,16 @@
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.contracts.actor import ParticipantRole
+from app.contracts.ports import ProviderError
 from app.modules.access.auth import CurrentActor, authorize_job_actor
+from app.modules.capture.router import get_storage_port, storage_error
 from app.modules.scope.schemas import (
     ChangeClarificationCreate,
     ChangeDecisionCreate,
+    ChangeEvidenceReadResponse,
     ChangeExplanationCreate,
     ChangeRequestCreate,
     ChangeRequestResponse,
@@ -24,6 +27,7 @@ from app.modules.scope.service import (
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
     approve_scope_version,
+    create_change_evidence_read_url,
     create_change_request,
     create_scope_version,
     decide_change_request,
@@ -181,6 +185,48 @@ async def list_change_requests_endpoint(
 ) -> tuple[ChangeRequestResponse, ...]:
     authorize_job_actor(actor, job_id)
     return await list_change_requests(session, job_id)
+
+
+@router.get(
+    "/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url",
+    response_model=ChangeEvidenceReadResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Invalid access token"},
+        status.HTTP_403_FORBIDDEN: {"description": "Insufficient role"},
+        status.HTTP_404_NOT_FOUND: {"description": "Change evidence not found"},
+        status.HTTP_409_CONFLICT: {"description": "Change evidence is not readable"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Storage is unavailable"},
+    },
+    summary="변경 증거 열람 URL 발급",
+)
+async def create_change_evidence_read_url_endpoint(
+    job_id: UUID,
+    change_request_id: UUID,
+    media_asset_id: UUID,
+    request: Request,
+    response: Response,
+    actor: CurrentActor,
+    session: Session,
+) -> ChangeEvidenceReadResponse:
+    authorize_job_actor(actor, job_id, APPROVER_ROLES)
+    storage = get_storage_port(request, job_id, actor)
+    try:
+        result = await create_change_evidence_read_url(
+            session,
+            storage,
+            job_id,
+            change_request_id,
+            media_asset_id,
+            cast(UUID, actor.participant_id),
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return result
+    except ScopeResourceNotFoundError as error:
+        raise _change_error(error) from error
+    except ChangeRequestConflictError as error:
+        raise _change_error(error) from error
+    except ProviderError as error:
+        raise storage_error(error) from error
 
 
 @router.post(
