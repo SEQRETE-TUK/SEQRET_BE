@@ -65,6 +65,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인
 - `GET /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인 이력 조회
 - `GET /move-jobs/{job_id}/audit-events`: 작업 감사 이력 조회
+- `GET /move-jobs/{job_id}/notifications`: 현재 참여자의 알림 전달 상태 조회
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
@@ -81,6 +82,10 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 현장 작업자는 잠긴 현재 범위를 기준으로 자신이 촬영한 `change_evidence` 미디어와 변경안을 제출할 수 있습니다. 고객 또는 회사 관리자는 한 번 설명을 요청한 뒤 승인하거나 사유와 함께 거절합니다. 승인된 요청만 기준 범위의 결과 버전을 만들며, 결과 버전은 다시 양측 확인을 받아야 잠깁니다.
 
 현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
+
+범위 잠금, 현장 변경요청, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하며, 실패 event는 지수 backoff로 다시 시도됩니다. 소비자는 `event_id`별 영속 receipt로 중복 효과를 막고, 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
+
+notification consumer는 worker가 수신한 `DomainEvent`를 `consume_notification_event` application command에 전달합니다. 실제 연락처 해석과 이메일·메시지 provider 호출은 이 저장소의 intent 상태 command 바깥에서 수행하며, 성공·실패 결과만 `mark_notification_sent`, `mark_notification_failed`로 반영합니다.
 
 ## 로컬 개발
 
@@ -106,6 +111,11 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_DATABASE_POOL_SIZE` | `5` | runtime별 기본 connection pool 크기 |
 | `SEQRET_DATABASE_MAX_OVERFLOW` | `10` | pool 크기를 초과해 일시적으로 허용할 connection 수 |
 | `SEQRET_DATABASE_POOL_TIMEOUT_SECONDS` | `30` | pool에서 connection을 기다리는 최대 시간 |
+| `SEQRET_PUBSUB_PROJECT_ID` | 없음 | Outbox relay가 발행할 Pub/Sub project. topic과 함께 설정 |
+| `SEQRET_PUBSUB_TOPIC_ID` | 없음 | versioned domain event Pub/Sub topic ID. project와 함께 설정 |
+| `SEQRET_OUTBOX_BATCH_SIZE` | `100` | relay 한 번에 lease하고 동시에 발행할 최대 event 수 |
+| `SEQRET_OUTBOX_LEASE_SECONDS` | `60` | 발행 worker의 event lease 시간. publish timeout보다 길어야 함 |
+| `SEQRET_EVENT_PUBLISH_TIMEOUT_SECONDS` | `10` | 개별 Pub/Sub 발행 완료를 기다리는 최대 시간 |
 
 ```bash
 uv run pytest

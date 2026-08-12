@@ -136,6 +136,7 @@ async def complete_media_upload_endpoint(
             capture_session_id,
             media_asset_id,
             cast(UUID, actor.participant_id),
+            trace_id=actor.trace_id,
         )
     except CaptureResourceNotFoundError as error:
         raise HTTPException(

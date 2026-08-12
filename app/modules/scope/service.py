@@ -5,12 +5,14 @@ import json
 from typing import Any
 from uuid import UUID
 
+from pydantic import JsonValue
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
+from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
@@ -35,6 +37,7 @@ from app.modules.scope.schemas import (
     ScopeVersionCreate,
     ScopeVersionResponse,
 )
+from app.platform.event_bus import enqueue_domain_event
 
 
 class ScopeResourceNotFoundError(LookupError):
@@ -245,6 +248,8 @@ async def approve_scope_version(
     scope_version_id: UUID,
     participant_id: UUID,
     role: ParticipantRole,
+    *,
+    trace_id: str | None = None,
 ) -> ScopeApprovalResult:
     participant = await session.scalar(
         select(JobParticipant.id).where(
@@ -308,6 +313,17 @@ async def approve_scope_version(
             job_id,
             AuditEventType.SCOPE_VERSION_LOCKED,
             actor_participant_id=participant_id,
+            payload={
+                "scope_version_id": str(scope_version_id),
+                "content_hash": version.content_hash,
+            },
+        )
+        enqueue_domain_event(
+            session,
+            DomainEventType.SCOPE_LOCKED_V1,
+            job_id,
+            actor_id=participant_id,
+            trace_id=trace_id,
             payload={
                 "scope_version_id": str(scope_version_id),
                 "content_hash": version.content_hash,
@@ -446,6 +462,8 @@ async def create_change_request(
     job_id: UUID,
     participant_id: UUID,
     command: ChangeRequestCreate,
+    *,
+    trace_id: str | None = None,
 ) -> ChangeRequestResponse:
     job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
     if job is None:
@@ -531,6 +549,22 @@ async def create_change_request(
             "evidence_media_asset_ids": sorted(
                 str(media_asset_id) for media_asset_id in command.evidence_media_asset_ids
             ),
+        },
+    )
+    evidence_ids = sorted(
+        str(media_asset_id) for media_asset_id in command.evidence_media_asset_ids
+    )
+    event_evidence_ids: list[JsonValue] = [media_asset_id for media_asset_id in evidence_ids]
+    enqueue_domain_event(
+        session,
+        DomainEventType.CHANGE_REQUESTED_V1,
+        job_id,
+        actor_id=participant_id,
+        trace_id=trace_id,
+        payload={
+            "change_request_id": str(request.id),
+            "base_scope_version_id": str(request.base_scope_version_id),
+            "evidence_media_asset_ids": event_evidence_ids,
         },
     )
     await session.flush()

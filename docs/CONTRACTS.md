@@ -35,6 +35,21 @@
 - `completion_media_submitted.v1`
 - `media_deleted.v1`
 
+현재 A 업무 command가 생성하는 event payload는 다음 최소 식별자만 포함한다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
+
+- `scope_locked.v1`: `scope_version_id`, `content_hash`
+- `change_requested.v1`: `change_request_id`, `base_scope_version_id`, `evidence_media_asset_ids`
+- `completion_media_submitted.v1`: `capture_session_id`, `media_asset_id`, `room_zone_id`
+
+## Outbox와 소비 멱등성
+
+- 업무 상태와 event envelope는 같은 PostgreSQL transaction에서 commit한다.
+- relay는 due row를 `FOR UPDATE SKIP LOCKED`로 lease하고, 한 batch의 provider 발행을 동시에 시작해 아직 시도하지 않은 row의 lease 만료를 방지한다.
+- Pub/Sub 메시지 body는 `DomainEvent` JSON이며 `event_id`, `event_type`, `schema_version`, `idempotency_key`를 attribute로도 전달한다.
+- publish 완료 후 DB 반영이 실패하면 같은 `event_id`가 다시 발행될 수 있으므로 전달 의미는 at-least-once이다.
+- consumer는 `(consumer_name, event_id)` receipt를 먼저 기록하고, 같은 event의 중복 효과를 만들지 않는다.
+- Outbox 실패는 정제된 오류 분류와 시도 횟수만 저장하고 1초부터 최대 300초까지 지수 backoff로 다시 시도한다. payload나 provider 오류 원문은 운영 오류 필드에 복제하지 않는다.
+
 ## 오류와 호환성
 
 공통 fake는 누락된 object key 같은 결정적 오류를 `ProviderError`로 재현한다. `not_found`, `conflict`, `invalid_input`, `unavailable`, `deadline_exceeded`, `permission_denied` 분류와 `retryable` 여부는 provider SDK 타입을 application 계층에 노출하지 않는다. 기존 version 1 필드를 제거하거나 의미를 바꾸지 않으며 optional 필드 추가 또는 새 schema version으로 확장한다.

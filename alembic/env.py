@@ -10,14 +10,23 @@ from app.config import Settings
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
+from app.modules.notification.models import NotificationDelivery
 from app.modules.scope.models import ScopeApproval
+from app.platform.event_bus.models import OutboxEvent
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-_REGISTERED_MODELS = (ParticipantAccessToken, MediaAsset, ScopeApproval, AuditEvent)
+_REGISTERED_MODELS = (
+    ParticipantAccessToken,
+    MediaAsset,
+    ScopeApproval,
+    AuditEvent,
+    OutboxEvent,
+    NotificationDelivery,
+)
 target_metadata = _REGISTERED_MODELS[0].metadata
 
 

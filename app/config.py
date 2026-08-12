@@ -28,6 +28,8 @@ SERVICE_NAME_PATTERN = re.compile(
     rf"^[a-z](?:[a-z0-9-]{{0,{MAX_SERVICE_NAME_LENGTH - 2}}}[a-z0-9])?$"
 )
 API_PREFIX_PATTERN = re.compile(r"^/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$")
+GCP_PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+PUBSUB_TOPIC_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._~+%-]{2,254}$")
 
 
 class Settings(BaseSettings):
@@ -53,6 +55,11 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1, le=50)
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     database_pool_timeout_seconds: float = Field(default=30.0, gt=0, le=300.0)
+    pubsub_project_id: str | None = None
+    pubsub_topic_id: str | None = None
+    outbox_batch_size: int = Field(default=100, ge=1, le=100)
+    outbox_lease_seconds: int = Field(default=60, ge=1, le=600)
+    event_publish_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
 
     @field_validator("service_name")
     @classmethod
@@ -90,11 +97,32 @@ class Settings(BaseSettings):
         return normalized
 
     @model_validator(mode="after")
-    def reject_production_debug(self) -> Self:
-        """Prevent accidental debug responses in production."""
+    def validate_cross_field_settings(self) -> Self:
+        """Reject unsafe runtime setting combinations."""
 
         if self.environment is AppEnvironment.PRODUCTION and self.debug:
             msg = "debug must be disabled in production"
+            raise ValueError(msg)
+        if (self.pubsub_project_id is None) != (self.pubsub_topic_id is None):
+            msg = "pubsub_project_id and pubsub_topic_id must be configured together"
+            raise ValueError(msg)
+        if (
+            self.pubsub_project_id is not None
+            and GCP_PROJECT_ID_PATTERN.fullmatch(self.pubsub_project_id) is None
+        ):
+            msg = "pubsub_project_id must be a valid GCP project ID"
+            raise ValueError(msg)
+        if (
+            self.pubsub_topic_id is not None
+            and PUBSUB_TOPIC_ID_PATTERN.fullmatch(self.pubsub_topic_id) is None
+        ):
+            msg = "pubsub_topic_id must be a valid Pub/Sub topic ID"
+            raise ValueError(msg)
+        if self.pubsub_topic_id is not None and self.pubsub_topic_id.lower().startswith("goog"):
+            msg = "pubsub_topic_id must not start with goog"
+            raise ValueError(msg)
+        if self.outbox_lease_seconds <= self.event_publish_timeout_seconds:
+            msg = "outbox_lease_seconds must exceed event_publish_timeout_seconds"
             raise ValueError(msg)
         return self
 

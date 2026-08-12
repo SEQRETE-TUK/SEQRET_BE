@@ -2,7 +2,7 @@
 
 import os
 import sys
-from asyncio import SelectorEventLoop, gather
+from asyncio import Event, SelectorEventLoop, gather
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +19,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from app.config import Settings
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
+from app.contracts.events import DomainEventType
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StorageObjectMetadata
@@ -66,13 +67,16 @@ from app.modules.scope.service import (
     list_scope_versions,
 )
 from app.platform.db import create_database_engine, create_session_factory, transactional_session
+from app.platform.event_bus.models import OutboxEvent
+from app.platform.event_bus.service import claim_outbox_events, enqueue_domain_event
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_08_0001"
+ALEMBIC_HEAD = "a_09_0001"
+ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 BUSINESS_TABLES = {
     "capture_session",
     "job_participant",
@@ -88,6 +92,9 @@ BUSINESS_TABLES = {
     "completion_confirmation",
     "completion_evidence",
     "audit_event",
+    "outbox_event",
+    "event_consumption",
+    "notification_delivery",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -182,6 +189,11 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert _current_revision(engine) == ALEMBIC_HEAD
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
+            command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
+            assert "outbox_event" not in inspect(engine).get_table_names()
+            assert "event_consumption" not in inspect(engine).get_table_names()
+            assert "notification_delivery" not in inspect(engine).get_table_names()
+
             command.downgrade(configuration, ALEMBIC_PREVIOUS)
             assert "completion_confirmation" not in inspect(engine).get_table_names()
             assert "completion_evidence" not in inspect(engine).get_table_names()
@@ -209,6 +221,59 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert _current_revision(engine) == ALEMBIC_HEAD
         finally:
             engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_outbox_claims_are_exclusive_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        job_id = uuid4()
+        ready = Event()
+        release = Event()
+
+        async def claim(hold_lock: bool) -> tuple[UUID, ...]:
+            async with factory.begin() as session:
+                claims = await claim_outbox_events(session, limit=1, lease_seconds=60)
+                if hold_lock:
+                    ready.set()
+                    await release.wait()
+                return tuple(claim.event.event_id for claim in claims)
+
+        try:
+            async with factory.begin() as session:
+                enqueue_domain_event(
+                    session,
+                    DomainEventType.SCOPE_LOCKED_V1,
+                    job_id,
+                    trace_id="0123456789abcdef0123456789abcdef",
+                    payload={"scope_version_id": str(uuid4())},
+                )
+
+            first_task = claim(True)
+
+            async def second_claim() -> tuple[UUID, ...]:
+                await ready.wait()
+                try:
+                    return await claim(False)
+                finally:
+                    release.set()
+
+            first, second = await gather(first_task, second_claim())
+            assert len(first) == 1
+            assert second == ()
+            async with factory() as session:
+                row = await session.get(OutboxEvent, first[0])
+                assert row is not None
+                assert row.attempt_count == 1
+                assert row.lock_token is not None
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.anyio

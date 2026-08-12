@@ -111,6 +111,38 @@ def test_settings_reject_production_debug() -> None:
         Settings(environment=AppEnvironment.PRODUCTION, debug=True)
 
 
+def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
+    settings = Settings(
+        pubsub_project_id="seqret-test",
+        pubsub_topic_id="domain-events.v1",
+        outbox_batch_size=25,
+        outbox_lease_seconds=30,
+        event_publish_timeout_seconds=5,
+    )
+
+    assert settings.pubsub_project_id == "seqret-test"
+    assert settings.pubsub_topic_id == "domain-events.v1"
+    assert settings.outbox_batch_size == 25
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"pubsub_project_id": "seqret-test"},
+        {"pubsub_topic_id": "domain-events"},
+        {"pubsub_project_id": "INVALID", "pubsub_topic_id": "domain-events"},
+        {"pubsub_project_id": "seqret-test", "pubsub_topic_id": "no spaces"},
+        {"pubsub_project_id": "seqret-test", "pubsub_topic_id": "goog-events"},
+        {"outbox_lease_seconds": 10, "event_publish_timeout_seconds": 10},
+    ],
+)
+def test_settings_reject_invalid_pubsub_and_relay_configuration(
+    values: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(values)
+
+
 @pytest.mark.parametrize("runtime_kind", list(RuntimeKind))
 def test_each_runtime_uses_the_same_settings_contract(runtime_kind: RuntimeKind) -> None:
     settings = Settings(environment=AppEnvironment.TEST)

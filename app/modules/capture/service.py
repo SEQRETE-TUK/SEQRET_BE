@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StoragePort
 from app.contracts.primitives import utc_now
@@ -19,6 +20,7 @@ from app.modules.capture.schemas import (
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, RoomZone
+from app.platform.event_bus import enqueue_domain_event
 
 UPLOAD_URL_TTL_SECONDS = 15 * 60
 STORAGE_TIMEOUT_SECONDS = 5.0
@@ -162,6 +164,8 @@ async def complete_media_upload(
     capture_session_id: UUID,
     media_asset_id: UUID,
     participant_id: UUID,
+    *,
+    trace_id: str | None = None,
 ) -> MediaAssetResponse:
     await _load_owned_capture_session(session, job_id, capture_session_id, participant_id)
     statement = select(MediaAsset).where(
@@ -201,6 +205,18 @@ async def complete_media_upload(
             job_id,
             AuditEventType.COMPLETION_MEDIA_UPLOADED,
             actor_participant_id=participant_id,
+            payload={
+                "capture_session_id": str(capture_session_id),
+                "media_asset_id": str(asset.id),
+                "room_zone_id": str(asset.room_zone_id),
+            },
+        )
+        enqueue_domain_event(
+            session,
+            DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
+            job_id,
+            actor_id=participant_id,
+            trace_id=trace_id,
             payload={
                 "capture_session_id": str(capture_session_id),
                 "media_asset_id": str(asset.id),
