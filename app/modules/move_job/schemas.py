@@ -19,7 +19,7 @@ class RequestModel(ContractModel):
 
 
 class ParticipantCreate(RequestModel):
-    """Initial or newly connected participant."""
+    """Participant connected while creating a job."""
 
     role: ParticipantRole
     display_name: Annotated[str, Field(min_length=1, max_length=100)]
@@ -55,7 +55,10 @@ class MoveJobCreate(RequestModel):
 
     title: Annotated[str, Field(min_length=1, max_length=200)]
     scheduled_at: datetime | None = None
-    participants: Annotated[tuple[ParticipantCreate, ...], Field(min_length=1)]
+    participants: Annotated[
+        tuple[ParticipantCreate, ...],
+        Field(min_length=len(ParticipantRole), max_length=len(ParticipantRole)),
+    ]
     locations: Annotated[tuple[LocationCreate, ...], Field(min_length=1, max_length=2)]
 
     @model_validator(mode="after")
@@ -104,8 +107,3 @@ class MoveJobResponse(ContractModel):
 class MoveJobCreatedResponse(ContractModel):
     job: MoveJobResponse
     access_links: tuple[AccessLinkResponse, ...]
-
-
-class ParticipantConnectedResponse(ContractModel):
-    job: MoveJobResponse
-    access_link: AccessLinkResponse

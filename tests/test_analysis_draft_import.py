@@ -68,6 +68,10 @@ async def _seed_analysis(factory: AnalysisDatabase) -> AnalysisSeed:
                         role=ParticipantRole.COMPANY_MANAGER,
                         display_name="관리자",
                     ),
+                    ParticipantCreate(
+                        role=ParticipantRole.FIELD_WORKER,
+                        display_name="현장 담당",
+                    ),
                 ),
                 locations=(
                     LocationCreate(

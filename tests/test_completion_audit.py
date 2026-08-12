@@ -778,6 +778,7 @@ async def test_audit_tracks_access_and_change_lifecycle_without_sensitive_text(
             "participants": [
                 {"role": "customer", "display_name": "고객"},
                 {"role": "company_manager", "display_name": "관리자"},
+                {"role": "field_worker", "display_name": "현장 담당"},
             ],
             "locations": [
                 {
@@ -792,15 +793,6 @@ async def test_audit_tracks_access_and_change_lifecycle_without_sensitive_text(
     created = cast(dict[str, Any], created_response.json())
     job_id = created["job"]["id"]
     manager_headers = _headers(_secret(created, "company_manager"))
-    connected = await client.post(
-        f"/api/v1/move-jobs/{job_id}/participants",
-        headers=manager_headers,
-        json={"role": "field_worker", "display_name": "현장 담당"},
-    )
-    assert connected.status_code == 201
-    created["access_links"].append(connected.json()["access_link"])
-    created["job"] = connected.json()["job"]
-
     worker_id = next(
         participant["id"]
         for participant in created["job"]["participants"]
@@ -808,7 +800,7 @@ async def test_audit_tracks_access_and_change_lifecycle_without_sensitive_text(
     )
     rotated = await client.post(
         f"/api/v1/move-jobs/{job_id}/participants/{worker_id}/access-links",
-        headers=manager_headers,
+        headers=_headers(_secret(created, "field_worker")),
     )
     assert rotated.status_code == 201
     created["access_links"].append(rotated.json())
@@ -877,7 +869,6 @@ async def test_audit_tracks_access_and_change_lifecycle_without_sensitive_text(
     assert audit.status_code == 200
     event_types = [event["event_type"] for event in audit.json()]
     for expected in (
-        "participant_connected",
         "access_link_issued",
         "access_link_revoked",
         "change_requested",

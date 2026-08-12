@@ -66,6 +66,7 @@ async def _create_job(client: AsyncClient) -> dict[str, Any]:
             "title": "촬영 테스트",
             "participants": [
                 {"role": "customer", "display_name": "고객"},
+                {"role": "company_manager", "display_name": "관리자"},
                 {"role": "field_worker", "display_name": "현장 담당"},
             ],
             "locations": [

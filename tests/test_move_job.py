@@ -9,7 +9,6 @@ import pytest
 from httpx2 import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -17,20 +16,15 @@ from app.config import AppEnvironment, Settings
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.primitives import JobId, ParticipantId, RequestId
 from app.main import create_app
-from app.modules.move_job.models import LocationKind, MoveJob
-from app.modules.move_job.router import connect_participant_endpoint, get_move_job_endpoint
+from app.modules.move_job.models import LocationKind
+from app.modules.move_job.router import get_move_job_endpoint
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
     ParticipantCreate,
     RoomZoneCreate,
 )
-from app.modules.move_job.service import (
-    MoveJobNotFoundError,
-    ParticipantRoleConflictError,
-    connect_participant,
-    get_move_job,
-)
+from app.modules.move_job.service import MoveJobNotFoundError, get_move_job
 from app.platform.db import Base, create_session_factory
 
 
@@ -53,7 +47,11 @@ async def move_job_client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
 def _move_job_payload() -> dict[str, object]:
     return {
         "title": "강남 이사",
-        "participants": [{"role": "customer", "display_name": "고객"}],
+        "participants": [
+            {"role": "customer", "display_name": "고객"},
+            {"role": "company_manager", "display_name": "관리자"},
+            {"role": "field_worker", "display_name": "현장 담당"},
+        ],
         "locations": [
             {
                 "kind": "origin",
@@ -73,12 +71,13 @@ def _move_job_payload() -> dict[str, object]:
 
 
 @pytest.mark.anyio
-async def test_move_job_api_creates_reads_and_connects_participant(
+async def test_move_job_api_creates_initial_participants_and_reads_job(
     move_job_client: AsyncClient,
 ) -> None:
     created = await move_job_client.post("/api/v1/move-jobs", json=_move_job_payload())
 
     assert created.status_code == 201
+    assert created.headers["cache-control"] == "no-store"
     created_body = created.json()
     job = created_body["job"]
     customer_secret = created_body["access_links"][0]["secret"]
@@ -97,25 +96,17 @@ async def test_move_job_api_creates_reads_and_connects_participant(
     loaded = await move_job_client.get(f"/api/v1/move-jobs/{job_id}", headers=headers)
     assert loaded.status_code == 200
     assert loaded.json() == job
-
-    connected = await move_job_client.post(
-        f"/api/v1/move-jobs/{job_id}/participants",
-        json={"role": "field_worker", "display_name": "현장 담당"},
-        headers=headers,
-    )
-    assert connected.status_code == 201
-    assert [participant["role"] for participant in connected.json()["job"]["participants"]] == [
+    assert [participant["role"] for participant in job["participants"]] == [
+        "company_manager",
         "customer",
         "field_worker",
     ]
-
-    conflict = await move_job_client.post(
+    removed_provisioning = await move_job_client.post(
         f"/api/v1/move-jobs/{job_id}/participants",
-        json={"role": "customer", "display_name": "다른 고객"},
+        json={"role": "company_manager", "display_name": "관리자"},
         headers=headers,
     )
-    assert conflict.status_code == 409
-    assert conflict.json() == {"detail": "participant role already exists"}
+    assert removed_provisioning.status_code == 404
 
 
 @pytest.mark.anyio
@@ -123,17 +114,22 @@ async def test_move_job_api_reports_missing_jobs(move_job_client: AsyncClient) -
     missing_job_id = uuid4()
 
     loaded = await move_job_client.get(f"/api/v1/move-jobs/{missing_job_id}")
-    connected = await move_job_client.post(
+    removed_provisioning = await move_job_client.post(
         f"/api/v1/move-jobs/{missing_job_id}/participants",
         json={"role": "customer", "display_name": "고객"},
     )
 
     assert loaded.status_code == 401
-    assert connected.status_code == 401
+    assert removed_provisioning.status_code == 404
 
 
 def test_move_job_command_rejects_duplicate_roles_locations_and_naive_time() -> None:
     participant = ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객")
+    participants = (
+        participant,
+        ParticipantCreate(role=ParticipantRole.COMPANY_MANAGER, display_name="관리자"),
+        ParticipantCreate(role=ParticipantRole.FIELD_WORKER, display_name="현장 담당"),
+    )
     locations = (
         LocationCreate(
             kind=LocationKind.ORIGIN,
@@ -150,16 +146,18 @@ def test_move_job_command_rejects_duplicate_roles_locations_and_naive_time() -> 
     with pytest.raises(ValidationError, match="participant roles must be unique"):
         MoveJobCreate(
             title="이사",
-            participants=(participant, participant),
+            participants=(participant, participant, participants[2]),
             locations=locations[:1],
         )
+    with pytest.raises(ValidationError, match="at least 3 items"):
+        MoveJobCreate(title="이사", participants=(participant,), locations=locations[:1])
     with pytest.raises(ValidationError, match="location kinds must be unique"):
-        MoveJobCreate(title="이사", participants=(participant,), locations=locations)
+        MoveJobCreate(title="이사", participants=participants, locations=locations)
     with pytest.raises(ValidationError, match="scheduled_at must include a timezone"):
         MoveJobCreate(
             title="이사",
             scheduled_at=datetime(2026, 8, 20, 9),
-            participants=(participant,),
+            participants=participants,
             locations=locations[:1],
         )
 
@@ -167,7 +165,11 @@ def test_move_job_command_rejects_duplicate_roles_locations_and_naive_time() -> 
         {
             "title": "이사",
             "scheduled_at": "2026-08-20T09:00:00+09:00",
-            "participants": [{"role": "customer", "display_name": "고객"}],
+            "participants": [
+                {"role": "customer", "display_name": "고객"},
+                {"role": "company_manager", "display_name": "관리자"},
+                {"role": "field_worker", "display_name": "현장 담당"},
+            ],
             "locations": [
                 {
                     "kind": "origin",
@@ -209,33 +211,6 @@ def test_location_rejects_duplicate_room_zone_identity(
 
 
 @pytest.mark.anyio
-async def test_participant_connection_maps_database_race_to_conflict(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job = MoveJob(id=uuid4(), title="이사")
-    job.participants = []
-    job.locations = []
-    session = AsyncSession()
-
-    async def load_job(_session: AsyncSession, _job_id: object) -> MoveJob:
-        return job
-
-    async def fail_flush() -> None:
-        raise IntegrityError("duplicate role", {}, RuntimeError("duplicate"))
-
-    monkeypatch.setattr("app.modules.move_job.service._load_move_job", load_job)
-    monkeypatch.setattr(session, "flush", fail_flush)
-
-    with pytest.raises(ParticipantRoleConflictError):
-        await connect_participant(
-            session,
-            job.id,
-            ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="고객"),
-        )
-    await session.close()
-
-
-@pytest.mark.anyio
 async def test_move_job_service_and_endpoints_map_disappeared_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -250,7 +225,6 @@ async def test_move_job_service_and_endpoints_map_disappeared_job(
         request_id=RequestId(uuid4()),
         trace_id="a" * 32,
     )
-    command = ParticipantCreate(role=ParticipantRole.FIELD_WORKER, display_name="현장 담당")
 
     async def load_missing(_session: AsyncSession, _job_id: object) -> None:
         return None
@@ -258,18 +232,12 @@ async def test_move_job_service_and_endpoints_map_disappeared_job(
     monkeypatch.setattr("app.modules.move_job.service._load_move_job", load_missing)
     with pytest.raises(MoveJobNotFoundError):
         await get_move_job(session, job_id)
-    with pytest.raises(MoveJobNotFoundError):
-        await connect_participant(session, job_id, command)
 
     async def raise_missing(*_args: object) -> None:
         raise MoveJobNotFoundError(job_id)
 
     monkeypatch.setattr("app.modules.move_job.router.get_move_job", raise_missing)
-    monkeypatch.setattr("app.modules.move_job.router.connect_participant", raise_missing)
     with pytest.raises(Exception) as get_error:
         await get_move_job_endpoint(job_id, actor, session)
-    with pytest.raises(Exception) as connect_error:
-        await connect_participant_endpoint(job_id, command, actor, session)
     assert getattr(get_error.value, "status_code", None) == 404
-    assert getattr(connect_error.value, "status_code", None) == 404
     await session.close()

@@ -3,7 +3,6 @@
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,8 +15,6 @@ from app.modules.move_job.schemas import (
     MoveJobCreate,
     MoveJobCreatedResponse,
     MoveJobResponse,
-    ParticipantConnectedResponse,
-    ParticipantCreate,
     ParticipantResponse,
     RoomZoneResponse,
 )
@@ -25,10 +22,6 @@ from app.modules.move_job.schemas import (
 
 class MoveJobNotFoundError(LookupError):
     """Raised when a move job does not exist."""
-
-
-class ParticipantRoleConflictError(ValueError):
-    """Raised when one job already has the requested role."""
 
 
 async def _load_move_job(session: AsyncSession, job_id: UUID) -> MoveJob | None:
@@ -120,38 +113,3 @@ async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
     if job is None:
         raise MoveJobNotFoundError(job_id)
     return _to_response(job)
-
-
-async def connect_participant(
-    session: AsyncSession,
-    job_id: UUID,
-    command: ParticipantCreate,
-    actor_participant_id: UUID | None = None,
-) -> ParticipantConnectedResponse:
-    """Connect one missing business role to an existing job."""
-
-    job = await _load_move_job(session, job_id)
-    if job is None:
-        raise MoveJobNotFoundError(job_id)
-    if any(participant.role is command.role for participant in job.participants):
-        raise ParticipantRoleConflictError(command.role)
-
-    participant = JobParticipant(role=command.role, display_name=command.display_name)
-    job.participants.append(participant)
-    try:
-        await session.flush()
-    except IntegrityError as error:
-        raise ParticipantRoleConflictError(command.role) from error
-    add_audit_event(
-        session,
-        job_id,
-        AuditEventType.PARTICIPANT_CONNECTED,
-        actor_participant_id=actor_participant_id,
-        payload={"participant_id": str(participant.id), "role": participant.role.value},
-    )
-    access_link = await issue_access_link(
-        session,
-        participant,
-        actor_participant_id=actor_participant_id,
-    )
-    return ParticipantConnectedResponse(job=_to_response(job), access_link=access_link)

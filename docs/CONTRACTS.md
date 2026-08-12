@@ -6,7 +6,7 @@
 
 - 모든 외부 경계 모델은 알 수 없는 필드를 거부하고 생성 후 변경할 수 없다.
 - 식별자는 UUID 기반 nominal type이며, 시각은 timezone-aware 값만 허용한다.
-- `ActorContext`는 인증 계층이 검증한 신원과 한 작업의 권한 경계를 application command에 전달한다. 원문 역할 토큰은 포함하지 않는다.
+- `ActorContext`는 인증 계층이 검증한 작업·참여자·역할 capability와 권한 경계를 application command에 전달한다. bearer 링크는 개인 신원을 증명하지 않으며 원문 역할 토큰은 포함하지 않는다.
 - `ErrorResponse.schema_version`과 `DomainEvent.schema_version`의 최초 값은 `1`이다. 기존 event payload를 깨는 변경은 event 이름과 schema version을 새로 추가한다.
 - signed URL, 역할 토큰, 주소 원문과 원본 미디어는 모델 repr이나 로그에 남기지 않는다.
 
@@ -18,7 +18,7 @@
 | `TaskQueuePort` | B | queue, handler, JSON payload → provider task ID | 같은 key는 한 task만 반환한다 | enqueue 호출에 초 단위 명시 | 재시도 가능 여부를 provider 외부 타입으로 노출하지 않는다 |
 | `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, object key, model/prompt version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
 | `EventBusPort` | A | `DomainEvent` → 발행 완료 | event ID 기반 key로 중복 발행 효과를 막는다 | 발행 호출에 초 단위 명시 | Outbox 상태와 retry 정책은 A가 관리한다 |
-| `CachePort` | A | namespace가 포함된 key와 fixed-window 길이 → 원자적으로 증가한 count | 같은 window의 증가가 기존 TTL을 연장하지 않는다 | cache 호출에 초 단위 명시 | Redis 오류는 adapter 예외로 매핑하며 DB fallback 선택은 application 정책이 관리한다 |
+| `CachePort` | A | namespace가 포함된 key와 fixed-window 길이 → 원자적으로 증가한 count | 같은 window의 증가가 기존 TTL을 연장하지 않는다 | cache 호출에 초 단위 명시 | Redis 오류는 adapter 예외로 매핑하며 application은 DB 원본 제한을 계속 적용한다 |
 
 로컬 fake는 실제 adapter와 같은 Protocol을 만족하고 멱등 동작을 contract test로 검증한다.
 

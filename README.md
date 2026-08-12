@@ -48,8 +48,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 - `POST /move-jobs`: 작업과 초기 참여자·위치·구역 생성
 - `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
-- `POST /move-jobs/{job_id}/participants`: 작업 역할 참여자 연결
-- `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 역할 링크 재발급
+- `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
 - `POST /move-jobs/{job_id}/capture-sessions`: 참여자 소유 촬영 세션 생성
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload`: 업로드 URL 발급
@@ -70,7 +69,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
-작업 생성과 참여자 연결 응답은 7일 동안 유효한 역할 링크의 비밀값을 한 번만 반환합니다. 이후 작업 API는 이 값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 고객과 회사 관리자는 참여자를 연결할 수 있고, 현장 작업자는 작업 조회만 할 수 있습니다. 링크를 재발급하면 기존 링크는 즉시 철회됩니다.
+작업 생성 응답은 최초 발급부터 7일 동안 유효한 초기 역할 링크의 비밀값을 한 번만 반환합니다. 이 공개 bootstrap 호출자는 모든 초기 역할 capability를 각 참여자에게 안전하게 전달하는 신뢰 주체이며, bearer 링크 자체는 개인 신원을 증명하지 않습니다. 고객·회사 관리자·현장 작업자 세 역할은 작업 생성 시 모두 연결하며, 검증된 별도 전달 채널이 없는 현재 public API에서는 이후 참여자를 추가하지 않습니다. 이후 작업 API는 비밀값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 각 참여자는 자기 링크만 회전할 수 있고, 회전은 같은 링크의 비밀값만 교체하므로 최초 절대 만료와 rate-limit 구간을 연장하거나 초기화하지 않습니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
 
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type과 정확한 크기를 다시 확인합니다. 비공개 객체의 signed URL은 응답으로만 반환하고 데이터베이스와 로그에는 저장하지 않습니다. 실제 스토리지 adapter가 구성되지 않은 환경에서는 업로드 API가 `503`을 반환합니다.
 
@@ -112,7 +111,7 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_DATABASE_POOL_SIZE` | `5` | runtime별 기본 connection pool 크기 |
 | `SEQRET_DATABASE_MAX_OVERFLOW` | `10` | pool 크기를 초과해 일시적으로 허용할 connection 수 |
 | `SEQRET_DATABASE_POOL_TIMEOUT_SECONDS` | `30` | pool에서 connection을 기다리는 최대 시간 |
-| `SEQRET_REDIS_URL` | 없음 | `redis://` 또는 TLS `rediss://` 연결 URL. 비설정 또는 일시 장애 시 접근 제한은 PostgreSQL fallback을 사용 |
+| `SEQRET_REDIS_URL` | 없음 | `redis://` 또는 TLS `rediss://` 연결 URL. PostgreSQL 제한 구간을 원본으로 유지하며 Redis는 같은 구간의 보조 제한 적용 |
 | `SEQRET_REDIS_MAX_CONNECTIONS` | `10` | API process가 공유하는 Redis connection pool 상한 |
 | `SEQRET_CACHE_TIMEOUT_SECONDS` | `0.2` | Redis 카운터 호출을 기다리는 최대 시간 |
 | `SEQRET_ACCESS_RATE_LIMIT_REQUESTS` | `120` | 유효한 역할 링크 하나가 고정 구간에서 허용받는 요청 수 |

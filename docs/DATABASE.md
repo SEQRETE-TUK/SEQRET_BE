@@ -4,7 +4,7 @@
 
 - 업무 runtime은 `postgresql+psycopg` URL만 허용한다.
 - `SEQRET_DATABASE_URL`은 비밀값으로 취급하며 설정 repr, health 응답과 로그에 노출하지 않는다.
-- `participant_access_token`의 `rate_window_*` 열은 Redis 일시 장애 시에만 쓰는 원자적 fixed-window fallback이다. 평문 역할 링크는 Redis key와 DB 어느 쪽에도 저장하지 않는다.
+- `participant_access_token`의 `rate_window_*` 열은 원자적 fixed-window 원본이며 Redis는 같은 구간의 보조 제한을 적용한다. Redis 장애 뒤에도 같은 DB 구간을 이어 쓰며 평문 역할 링크는 Redis key와 DB 어느 쪽에도 저장하지 않는다.
 - SQLAlchemy engine은 `pool_pre_ping`과 parameter hiding을 활성화한다.
 - application command는 `transactional_session`을 경계로 한 번 commit되며 예외 시 전체 rollback된다.
 - 각 ORM model은 `app.platform.db.Base`를 사용해 Alembic constraint 이름을 결정적으로 유지한다.
