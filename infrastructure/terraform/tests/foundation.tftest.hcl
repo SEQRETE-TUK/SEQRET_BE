@@ -1,12 +1,14 @@
 mock_provider "google" {}
 
 variables {
-  project_id           = "seqret-staging"
-  region               = "asia-northeast3"
-  environment          = "staging"
-  api_domain           = "api.staging.example.com"
-  container_image      = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  media_retention_days = 30
+  project_id            = "seqret-staging"
+  region                = "asia-northeast3"
+  environment           = "staging"
+  api_domain            = "api.staging.example.com"
+  container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  cloud_sql_instance_id = "seqret-stg-db"
+  api_max_instances     = 2
+  media_retention_days  = 30
 }
 
 run "staging_runtime_isolation" {
@@ -23,6 +25,31 @@ run "staging_runtime_isolation" {
       if env.name == "SEQRET_MEDIA_RETENTION_DAYS"
     ]) == "30"
     error_message = "The API must receive the approved media-retention policy."
+  }
+
+  assert {
+    condition = alltrue([
+      google_cloud_run_v2_service.api.template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2",
+      google_cloud_run_v2_service.api.template[0].max_instance_request_concurrency == 3,
+      google_cloud_run_v2_service.api.scaling[0].max_instance_count == 2,
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_DATABASE_POOL_SIZE"
+      ]) == "2",
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_DATABASE_MAX_OVERFLOW"
+      ]) == "1",
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_DATABASE_SOCKET_PATH"
+      ]) == "/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db",
+      one([
+        for env in google_cloud_run_v2_job.migration.template[0].template[0].containers[0].env : env.value
+        if env.name == "SEQRET_DATABASE_SOCKET_PATH"
+      ]) == "/cloudsql/seqret-staging:asia-northeast3:seqret-stg-db",
+    ])
+    error_message = "The staging API must stay within the Cloud SQL connection budget."
   }
 
   assert {
@@ -62,6 +89,7 @@ run "staging_runtime_isolation" {
         "iam.googleapis.com",
         "run.googleapis.com",
         "secretmanager.googleapis.com",
+        "sqladmin.googleapis.com",
       ])
     )
     error_message = "The runtime foundation must enable its required Google Cloud APIs."
@@ -73,6 +101,18 @@ run "staging_runtime_isolation" {
       google_cloud_run_v2_job.migration.deletion_protection,
     ])
     error_message = "Deletion protection must default to enabled."
+  }
+
+  assert {
+    condition = alltrue([
+      google_cloud_run_v2_service.api.template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql",
+      one(google_cloud_run_v2_service.api.template[0].volumes[0].cloud_sql_instance[0].instances) == "seqret-staging:asia-northeast3:seqret-stg-db",
+      google_cloud_run_v2_job.migration.template[0].template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql",
+      one(google_cloud_run_v2_job.migration.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == "seqret-staging:asia-northeast3:seqret-stg-db",
+      google_project_iam_member.api_cloud_sql_client.role == "roles/cloudsql.client",
+      google_project_iam_member.migration_cloud_sql_client.role == "roles/cloudsql.client",
+    ])
+    error_message = "The API and migration gate must use the same authenticated Cloud SQL Unix socket."
   }
 
   assert {
@@ -387,4 +427,14 @@ run "invalid_media_retention_is_rejected" {
   }
 
   expect_failures = [var.media_retention_days]
+}
+
+run "oversized_cloud_sql_socket_is_rejected" {
+  command = plan
+
+  variables {
+    cloud_sql_instance_id = "seqret-staging-database-instance-with-a-name-that-exceeds-the-linux-unix-socket-path-limit"
+  }
+
+  expect_failures = [var.cloud_sql_instance_id]
 }

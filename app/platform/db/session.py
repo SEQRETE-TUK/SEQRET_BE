@@ -21,7 +21,7 @@ class DatabaseConfigurationError(ValueError):
     """Raised when runtime database configuration is missing or unsafe."""
 
 
-def _database_url(settings: Settings) -> URL:
+def validated_database_url(settings: Settings) -> URL:
     configured_url = settings.database_url
     if configured_url is None:
         msg = "SEQRET_DATABASE_URL is required before creating a database engine"
@@ -39,6 +39,11 @@ def _database_url(settings: Settings) -> URL:
     if not url.database:
         msg = "SEQRET_DATABASE_URL must select a database"
         raise DatabaseConfigurationError(msg)
+    if settings.database_socket_path is not None and (
+        set(url.query) != {"host"} or url.query["host"] != settings.database_socket_path
+    ):
+        msg = "SEQRET_DATABASE_URL must use SEQRET_DATABASE_SOCKET_PATH"
+        raise DatabaseConfigurationError(msg)
     return url
 
 
@@ -46,7 +51,7 @@ def create_database_engine(settings: Settings) -> AsyncEngine:
     """Create a PostgreSQL async engine without exposing statement parameters."""
 
     return create_async_engine(
-        _database_url(settings),
+        validated_database_url(settings),
         pool_pre_ping=True,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,

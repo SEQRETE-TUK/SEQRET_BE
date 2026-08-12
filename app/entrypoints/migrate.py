@@ -4,6 +4,7 @@ from alembic import command
 from alembic.config import Config
 
 from app.config import Settings
+from app.platform.db.session import validated_database_url
 from app.platform.observability import (
     create_observability,
     new_correlation_context,
@@ -25,6 +26,7 @@ def run(settings: Settings | None = None) -> None:
             use_correlation(new_correlation_context()),
         ):
             config = Config("alembic.ini")
+            validated_database_url(resolved)
             database_url = resolved.database_url.get_secret_value().replace("%", "%%")
             config.set_main_option("sqlalchemy.url", database_url)
             command.upgrade(config, "head")

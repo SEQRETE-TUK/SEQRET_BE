@@ -24,6 +24,7 @@ env:
   ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY }}
   API_DOMAIN: ${{ vars.API_DOMAIN }}
   DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
+  CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
   REDIS_URL_SECRET_ID: ${{ vars.REDIS_URL_SECRET_ID }}
   MONITORING_NOTIFICATION_CHANNELS: ${{ vars.MONITORING_NOTIFICATION_CHANNELS }}
@@ -68,6 +69,7 @@ jobs:
             ARTIFACT_REPOSITORY
             API_DOMAIN
             DATABASE_URL_SECRET_ID
+            CLOUD_SQL_SOURCE_INSTANCE
             MEDIA_RETENTION_DAYS
             MONITORING_NOTIFICATION_CHANNELS
           )
@@ -83,6 +85,10 @@ jobs:
           fi
           if [[ ! "${API_DOMAIN}" =~ ^[a-z0-9.-]+\.[a-z0-9-]+$ ]]; then
             echo "API_DOMAIN must be a lowercase fully-qualified DNS name." >&2
+            exit 1
+          fi
+          if [[ ! "${CLOUD_SQL_SOURCE_INSTANCE}" =~ ^[a-z]([a-z0-9-]{0,96}[a-z0-9])?$ ]]; then
+            echo "CLOUD_SQL_SOURCE_INSTANCE is invalid." >&2
             exit 1
           fi
           if [[ ! "${MEDIA_RETENTION_DAYS}" =~ ^[1-9][0-9]{0,3}$ ]] || \
@@ -148,6 +154,8 @@ jobs:
             -var="api_domain=${API_DOMAIN}" \
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
             -var="container_image=${placeholder_image}" \
+            -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
+            -var="api_max_instances=2" \
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
 
       - name: Build and publish immutable image
@@ -258,6 +266,8 @@ jobs:
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
+            -var="api_max_instances=2"
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="otel_trace_sample_ratio=1"
           )
@@ -292,6 +302,8 @@ jobs:
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
+            -var="api_max_instances=2"
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="monitoring_notification_channel_ids=${channels_json}"
             -var="otel_trace_sample_ratio=1"
@@ -542,6 +554,8 @@ jobs:
               -var="api_domain=${API_DOMAIN}" \
               -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
               -var="container_image=${CONTAINER_IMAGE}" \
+              -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
+              -var="api_max_instances=2" \
               -var="media_retention_days=${MEDIA_RETENTION_DAYS}" \
               -var="public_traffic_enabled=$1"
           }
