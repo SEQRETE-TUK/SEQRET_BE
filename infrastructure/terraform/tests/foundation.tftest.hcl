@@ -12,7 +12,7 @@ variables {
 }
 
 run "staging_runtime_isolation" {
-  command = plan
+  command = apply
 
   assert {
     condition     = google_cloud_run_v2_service.api.name == "seqret-stg-api"
@@ -76,8 +76,10 @@ run "staging_runtime_isolation" {
       google_service_account.worker.account_id,
       google_service_account.job.account_id,
       google_service_account.migration.account_id,
-    ])) == 4
-    error_message = "API, worker, job and migration must use distinct service accounts."
+      google_service_account.outbox_relay.account_id,
+      google_service_account.outbox_scheduler.account_id,
+    ])) == 6
+    error_message = "Every runtime and scheduler caller must use a distinct service account."
   }
 
   assert {
@@ -85,8 +87,10 @@ run "staging_runtime_isolation" {
       toset(keys(google_project_service.required)) ==
       toset([
         "artifactregistry.googleapis.com",
+        "cloudscheduler.googleapis.com",
         "compute.googleapis.com",
         "iam.googleapis.com",
+        "pubsub.googleapis.com",
         "run.googleapis.com",
         "secretmanager.googleapis.com",
         "sqladmin.googleapis.com",
@@ -99,8 +103,50 @@ run "staging_runtime_isolation" {
     condition = alltrue([
       google_cloud_run_v2_service.api.deletion_protection,
       google_cloud_run_v2_job.migration.deletion_protection,
+      google_cloud_run_v2_job.outbox_relay.deletion_protection,
     ])
     error_message = "Deletion protection must default to enabled."
+  }
+
+  assert {
+    condition = alltrue([
+      google_pubsub_topic.events.message_retention_duration == "2678400s",
+      google_pubsub_topic.events.deletion_policy == "PREVENT",
+      google_cloud_run_v2_job.outbox_relay.template[0].task_count == 1,
+      google_cloud_run_v2_job.outbox_relay.template[0].parallelism == 1,
+      google_cloud_run_v2_job.outbox_relay.template[0].template[0].max_retries == 0,
+      google_cloud_run_v2_job.outbox_relay.template[0].template[0].timeout == "60s",
+      join(" ", google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].command) == "python -m app.entrypoints.outbox_relay",
+      google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql",
+      one(google_cloud_run_v2_job.outbox_relay.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == "seqret-staging:asia-northeast3:seqret-stg-db",
+      one([
+        for env in google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].env : env.value
+        if env.name == "SEQRET_PUBSUB_TOPIC_ID"
+      ]) == "seqret-stg-events",
+      google_pubsub_topic_iam_member.outbox_relay_publisher.role == "roles/pubsub.publisher",
+      google_pubsub_topic_iam_member.outbox_relay_publisher.topic == google_pubsub_topic.events.name,
+      google_pubsub_topic_iam_member.outbox_relay_publisher.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_project_iam_member.outbox_relay_cloud_sql_client.role == "roles/cloudsql.client",
+      google_project_iam_member.outbox_relay_cloud_sql_client.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_project_iam_member.outbox_relay_trace_writer.role == "roles/telemetry.tracesWriter",
+      google_project_iam_member.outbox_relay_trace_writer.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_project_iam_member.outbox_relay_telemetry_consumer.role == "roles/serviceusage.serviceUsageConsumer",
+      google_project_iam_member.outbox_relay_telemetry_consumer.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_secret_manager_secret_iam_member.outbox_relay_database.secret_id == "seqret-database-url",
+      google_secret_manager_secret_iam_member.outbox_relay_database.role == "roles/secretmanager.secretAccessor",
+      google_secret_manager_secret_iam_member.outbox_relay_database.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_cloud_run_v2_job.outbox_relay.template[0].template[0].service_account == google_service_account.outbox_relay.email,
+      google_cloud_run_v2_job_iam_member.outbox_scheduler_invoker.role == "roles/run.invoker",
+      google_cloud_run_v2_job_iam_member.outbox_scheduler_invoker.member == "serviceAccount:${google_service_account.outbox_scheduler.email}",
+      google_cloud_scheduler_job.outbox_relay.schedule == "* * * * *",
+      google_cloud_scheduler_job.outbox_relay.deletion_policy == "PREVENT",
+      google_cloud_scheduler_job.outbox_relay.retry_config[0].retry_count == 0,
+      google_cloud_scheduler_job.outbox_relay.http_target[0].http_method == "POST",
+      google_cloud_scheduler_job.outbox_relay.http_target[0].uri == "https://run.googleapis.com/v2/projects/seqret-staging/locations/asia-northeast3/jobs/seqret-stg-relay:run",
+      length(google_cloud_scheduler_job.outbox_relay.http_target[0].oauth_token) == 1,
+      google_cloud_scheduler_job.outbox_relay.http_target[0].oauth_token[0].service_account_email == google_service_account.outbox_scheduler.email,
+    ])
+    error_message = "The scheduled Outbox relay must keep its bounded runtime, retained topic, and least-privilege IAM graph."
   }
 
   assert {
@@ -194,6 +240,8 @@ run "staging_runtime_isolation" {
       google_monitoring_alert_policy.api_server_errors.severity == "ERROR",
       google_monitoring_alert_policy.api_latency.severity == "WARNING",
       google_monitoring_alert_policy.job_failures.severity == "ERROR",
+      google_monitoring_alert_policy.outbox_relay_failures.severity == "ERROR",
+      length(google_monitoring_alert_policy.outbox_relay_failures.conditions) == 2,
       google_monitoring_slo.api_availability.goal == 0.99,
     ])
     error_message = "Core API and job alert policies must remain enabled at explicit severities."

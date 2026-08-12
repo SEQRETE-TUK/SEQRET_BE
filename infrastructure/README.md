@@ -1,13 +1,16 @@
 # Infrastructure
 
-Terraform defines four isolated Cloud Run execution units:
+Terraform defines five isolated Cloud Run execution units:
 
 - an API reached only through an external HTTPS load balancer and Cloud Armor
 - a private worker owned by the media-integration track
 - a completion-oriented media job owned by the media-integration track
 - a migration job with database access and no automatic retries
+- an A-owned scheduled Outbox relay job that publishes committed events to Pub/Sub
 
-The API and migration job are always provisioned. The worker and media job are created only when their owning track supplies an immutable image and explicit entrypoint through `worker_runtime` and `job_runtime`; an API release reuses any existing runtime contracts from Terraform state and never substitutes its image for them. Terraform also refuses to destroy a configured integration runtime implicitly. The API and migration job export OpenTelemetry traces, while integration-runtime telemetry stays disabled until its owners instrument it.
+The API, migration job, and Outbox relay are always provisioned. The worker and media job are created only when their owning track supplies an immutable image and explicit entrypoint through `worker_runtime` and `job_runtime`; an API release reuses any existing runtime contracts from Terraform state and never substitutes its image for them. Terraform also refuses to destroy a configured integration runtime implicitly. The A-owned runtimes export OpenTelemetry traces, while integration-runtime telemetry stays disabled until its owners instrument it.
+
+The Outbox relay runs once per minute with one task and no platform retries. Database leases and idempotency keys make overlapping scheduler deliveries safe. Its topic retains messages for 31 days so a later consumer subscription can seek to events published before that subscription existed; A owns that subscription wiring and must complete the initial seek within 31 days, while the integration track owns its event handler.
 
 ## Security invariants
 
@@ -41,9 +44,9 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `REDIS_URL_SECRET_ID` | Optional Redis URL secret ID |
 | `MONITORING_NOTIFICATION_CHANNELS` | Comma-separated full notification-channel names |
 
-The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, impersonate the four runtime service accounts, and access the state prefix. Enable the Cloud Resource Manager API before the first run because the Terraform provider requires it before Terraform can manage project APIs. Restrict the Workload Identity Provider to this repository and `main`.
+The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, access the state prefix, and have `iam.serviceAccounts.actAs` on the runtime and scheduler-caller service accounts. It needs Pub/Sub topic and IAM plus Cloud Scheduler job management permissions, while the Google-managed Scheduler service agent must retain `roles/cloudscheduler.serviceAgent`; Token Creator is not required. Enable the Cloud Resource Manager API before the first run because the Terraform provider requires it before Terraform can manage project APIs. Restrict the Workload Identity Provider to this repository and `main`.
 
-The runtime module mounts `CLOUD_SQL_SOURCE_INSTANCE` at `/cloudsql` for the Gen2 API and migration gate and grants only those service accounts `roles/cloudsql.client`. This staging path requires a public IPv4 Cloud SQL instance; the authenticated proxy does not need an authorized network. Store a psycopg Unix-socket URL such as `postgresql+psycopg://USER:PASSWORD@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE` in `DATABASE_URL_SECRET_ID`, percent-encoding the URL components, and do not expose the database through an unrestricted authorized network. Both runtimes reject a secret whose socket path does not exactly match the mounted instance. The staging workflow caps the API service at two instances with three database connections each so canary revisions fit a small Cloud SQL connection budget.
+The runtime module mounts `CLOUD_SQL_SOURCE_INSTANCE` at `/cloudsql` for the Gen2 API, migration gate, and Outbox relay and grants only those service accounts `roles/cloudsql.client`. This staging path requires a public IPv4 Cloud SQL instance; the authenticated proxy does not need an authorized network. Store a psycopg Unix-socket URL such as `postgresql+psycopg://USER:PASSWORD@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE` in `DATABASE_URL_SECRET_ID`, percent-encoding the URL components, and do not expose the database through an unrestricted authorized network. All three runtimes reject a secret whose socket path does not exactly match the mounted instance. The staging workflow caps the API service at two instances with three database connections each so canary revisions fit a small Cloud SQL connection budget.
 
 The database-recovery identity is separate from the deployment identity. Restrict its `roles/iam.workloadIdentityUser` binding to this repository, `main`, and the protected `staging` environment, and grant `secretmanager.versions.access` on `DATABASE_URL_SECRET_ID` only. Its project-level custom role needs `cloudsql.instances.clone`, `cloudsql.instances.get`, `cloudsql.instances.list`, `cloudsql.instances.connect`, `cloudsql.instances.update`, and `cloudsql.instances.delete`; it also needs the Cloud SQL operation access used by `gcloud operations get/list/wait/cancel` and `serviceusage.services.use`. Those Cloud SQL permissions are project-wide rather than instance-scoped, so the protected environment and the workflow's generated-target guards are part of the security boundary; use a dedicated staging project. The source instance, SQL Admin API, PITR retention window, quotas, private-service address capacity, organization policies governing authorized networks, and any CMEK service-agent permissions remain externally managed.
 
@@ -84,7 +87,7 @@ If cancellation or runner loss prevents cleanup, first look up the latest `CLONE
 
 The API emits JSON logs containing `request_id`, `trace_id`, optional `job_id`, route, status, and duration. Request headers, query strings, bodies, tokens, addresses, and signed URLs are not recorded. W3C `traceparent` is accepted for correlation while local sampling limits export volume. Traces are exported to the Google Telemetry API.
 
-Cloud Monitoring includes request-rate, p95-latency and job-result charts, a 99% rolling 30-day non-5xx request SLO, and alerts for API 5xx responses, p95 latency, failed media jobs, and failed external `/edgez` checks. That endpoint uses the ordinary policy path, so a closed default policy is reported as unavailable.
+Cloud Monitoring includes request-rate, p95-latency and job-result charts, a 99% rolling 30-day non-5xx request SLO, and alerts for API 5xx responses, p95 latency, failed media jobs, failed or missing Outbox relay executions, and failed external `/edgez` checks. That endpoint uses the ordinary policy path, so a closed default policy is reported as unavailable.
 
 ## Local validation
 

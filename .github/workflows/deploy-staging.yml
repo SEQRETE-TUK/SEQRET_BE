@@ -31,6 +31,7 @@ env:
   CANARY_PERCENT: "10"
   SERVICE: seqret-stg-api
   MIGRATION_JOB: seqret-stg-migrate
+  OUTBOX_RELAY_JOB: seqret-stg-relay
 
 jobs:
   deploy:
@@ -374,6 +375,81 @@ jobs:
           -lock-timeout=5m
           -auto-approve
           "${RUNNER_TEMP}/staging.tfplan"
+
+      - name: Verify the scheduled Outbox relay
+        shell: bash
+        timeout-minutes: 6
+        env:
+          CONTAINER_IMAGE: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          latest_execution() {
+            gcloud run jobs executions list \
+              --job "${OUTBOX_RELAY_JOB}" \
+              --project "${GCP_PROJECT_ID}" \
+              --region "${GCP_REGION}" \
+              --limit 1 \
+              --format=json \
+              | jq -r '.[0].metadata.name // .[0].name // empty'
+          }
+
+          baseline_execution="$(latest_execution)"
+          expected_creator="seqret-stg-cron@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+          execution=""
+          last_observation="none"
+          deadline=$((SECONDS + 300))
+
+          while (( SECONDS < deadline )); do
+            if [[ -z "${execution}" ]]; then
+              candidate="$(latest_execution)"
+              if [[ -z "${candidate}" || "${candidate}" == "${baseline_execution}" ]]; then
+                sleep 5
+                continue
+              fi
+              execution="${candidate}"
+            fi
+
+            execution_json="$(gcloud run jobs executions describe "${execution}" \
+              --project "${GCP_PROJECT_ID}" \
+              --region "${GCP_REGION}" \
+              --format=json)"
+            creator="$(jq -r '
+              .metadata.annotations["run.googleapis.com/creator"]
+              // .creator // empty
+            ' <<< "${execution_json}")"
+            image="$(jq -r '
+              .spec.template.spec.containers[0].image
+              // .template.containers[0].image // empty
+            ' <<< "${execution_json}")"
+            last_observation="execution=${execution},creator=${creator:-missing},image=${image:-missing}"
+            if [[ "${creator}" != "${expected_creator}" || "${image}" != "${CONTAINER_IMAGE}" ]]; then
+              execution=""
+              sleep 5
+              continue
+            fi
+            state="$(jq -r '
+              [((.status.conditions // .conditions // [])[])
+                | select(.type == "Completed")][0] as $condition
+              | $condition.status // $condition.state // empty
+            ' <<< "${execution_json}")"
+            last_observation="${last_observation},state=${state:-pending}"
+
+            case "${state}" in
+              True|CONDITION_SUCCEEDED)
+                echo "- Scheduled Outbox relay execution: ${execution##*/} (succeeded)" \
+                  >> "${GITHUB_STEP_SUMMARY}"
+                exit 0
+                ;;
+              False|CONDITION_FAILED)
+                echo "The scheduled Outbox relay execution failed (${last_observation})." >&2
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+
+          echo "The scheduled Outbox relay did not complete successfully within five minutes (${last_observation})." >&2
+          exit 1
 
       - name: Verify the new revision
         id: revision

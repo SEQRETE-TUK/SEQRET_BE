@@ -167,6 +167,60 @@ resource "google_monitoring_alert_policy" "job_failures" {
   depends_on = [google_project_service.observability]
 }
 
+resource "google_monitoring_alert_policy" "outbox_relay_failures" {
+  project               = var.project_id
+  display_name          = "${local.outbox_relay_name} execution health"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "ERROR"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "At least one failed Outbox relay execution"
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_run_job\"",
+        "resource.label.job_name=\"${local.outbox_relay_name}\"",
+        "metric.type=\"run.googleapis.com/job/completed_execution_count\"",
+        "metric.label.result=\"failed\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "No completed Outbox relay execution for ten minutes"
+    condition_absent {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_run_job\"",
+        "resource.label.job_name=\"${local.outbox_relay_name}\"",
+        "metric.type=\"run.googleapis.com/job/completed_execution_count\"",
+      ])
+      duration = "600s"
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  alert_strategy { auto_close = "1800s" }
+  documentation {
+    subject   = "${local.outbox_relay_name} is failing or not running"
+    content   = "Inspect the scheduler and relay executions. Database leases make a later scheduled execution safe."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
 resource "google_monitoring_alert_policy" "api_uptime" {
   project               = var.project_id
   display_name          = "${local.api_name} external uptime"
