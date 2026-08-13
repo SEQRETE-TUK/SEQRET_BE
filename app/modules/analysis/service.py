@@ -12,6 +12,7 @@ from typing import cast
 from uuid import UUID
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.ai import AnalysisResult, DraftItem
@@ -37,6 +38,18 @@ async def _load_run(session: AsyncSession, analysis_run_id: AnalysisRunId) -> Ai
     return await session.get(AiAnalysisRun, analysis_run_id)
 
 
+async def _load_run_for_update(
+    session: AsyncSession,
+    analysis_run_id: AnalysisRunId,
+) -> AiAnalysisRun | None:
+    return cast(
+        AiAnalysisRun | None,
+        await session.scalar(
+            select(AiAnalysisRun).where(AiAnalysisRun.id == analysis_run_id).with_for_update()
+        ),
+    )
+
+
 async def start_analysis_run(
     session: AsyncSession,
     *,
@@ -47,20 +60,30 @@ async def start_analysis_run(
 ) -> None:
     """Create or restart a run as ``RUNNING`` without duplicating an attempt."""
 
-    run = await _load_run(session, analysis_run_id)
+    run = await _load_run_for_update(session, analysis_run_id)
     if run is None:
-        session.add(
-            AiAnalysisRun(
-                id=analysis_run_id,
-                capture_session_id=capture_session_id,
-                status=AnalysisRunStatus.RUNNING,
-                attempt_count=1,
-                trace_id=trace_id,
-                started_at=now,
-            )
-        )
-        await session.flush()
-        return
+        try:
+            async with session.begin_nested():
+                session.add(
+                    AiAnalysisRun(
+                        id=analysis_run_id,
+                        capture_session_id=capture_session_id,
+                        status=AnalysisRunStatus.RUNNING,
+                        attempt_count=1,
+                        trace_id=trace_id,
+                        started_at=now,
+                    )
+                )
+                await session.flush()
+        except IntegrityError:
+            run = await _load_run_for_update(session, analysis_run_id)
+            if run is None:
+                raise
+        else:
+            return
+
+    if run.capture_session_id != capture_session_id:
+        raise AnalysisRunConflictError("analysis run ID belongs to another capture session")
 
     if run.status is AnalysisRunStatus.RUNNING:
         return
@@ -86,7 +109,7 @@ async def complete_analysis_run(
 ) -> None:
     """Persist detections and mark the run ``COMPLETED``; replay is a no-op."""
 
-    run = await _load_run(session, result.analysis_run_id)
+    run = await _load_run_for_update(session, result.analysis_run_id)
     if run is None:
         raise AnalysisRunNotFoundError(str(result.analysis_run_id))
 
@@ -140,12 +163,14 @@ async def fail_analysis_run(
 ) -> None:
     """Record a provider failure so a human can still work manually."""
 
-    run = await _load_run(session, analysis_run_id)
+    run = await _load_run_for_update(session, analysis_run_id)
     if run is None:
         raise AnalysisRunNotFoundError(str(analysis_run_id))
 
     if run.status is AnalysisRunStatus.FAILED:
-        return
+        if run.failure_code == error_kind.value:
+            return
+        raise AnalysisRunConflictError("failed run does not match the replayed error")
     if run.status is not AnalysisRunStatus.RUNNING:
         raise AnalysisRunConflictError("only a running analysis run can fail")
 

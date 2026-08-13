@@ -36,6 +36,7 @@ from app.contracts.primitives import (
     BackgroundJobId,
     CaptureSessionId,
     MediaAssetId,
+    TraceId,
 )
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.service import (
@@ -44,6 +45,12 @@ from app.modules.access.service import (
     load_access_link,
     revoke_access_link,
     rotate_access_link,
+)
+from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
+from app.modules.analysis.service import (
+    complete_analysis_run,
+    load_analysis_result,
+    start_analysis_run,
 )
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.background_job.service import (
@@ -106,11 +113,13 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
+ALEMBIC_MAIN_HEAD = "a_09_0002"
 ALEMBIC_HEAD = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
+    "ai_analysis_run",
     "background_job",
     "capture_session",
     "job_participant",
@@ -125,6 +134,7 @@ BUSINESS_TABLES = {
     "change_request_evidence",
     "completion_confirmation",
     "completion_evidence",
+    "detection",
     "audit_event",
     "outbox_event",
     "event_consumption",
@@ -242,7 +252,7 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             command.downgrade(configuration, "base")
             assert _current_revision(engine) is None
 
-            command.upgrade(configuration, ALEMBIC_PREVIOUS)
+            command.upgrade(configuration, ALEMBIC_MAIN_HEAD)
             probe.create(engine)
             command.upgrade(configuration, "head")
 
@@ -684,6 +694,105 @@ async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> 
                     assert row.status is BackgroundJobStatus.PENDING
                     assert stored_asset.status is MediaAssetStatus.UPLOADED
                     assert events == []
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_analysis_run_replays_serialize_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        operation_time = datetime.now(UTC)
+        run_id = AnalysisRunId(uuid4())
+        trace_id = TraceId("0123456789abcdef0123456789abcdef")
+        job_command = MoveJobCreate(
+            title="Analysis run race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    created.job.participants[0].id,
+                )
+            capture_id = CaptureSessionId(capture.id)
+            result = AnalysisResult(
+                analysis_run_id=run_id,
+                capture_session_id=capture_id,
+                model_name="fake-vision",
+                model_version="2026-08",
+                prompt_version="inventory-1",
+                draft_items=(DraftItem(item_key="bed", description="퀸 침대", confidence=0.9),),
+            )
+
+            start_barrier = Barrier(2)
+
+            async def start() -> None:
+                async with transactional_session(factory) as session:
+                    await wait_for(start_barrier.wait(), timeout=5)
+                    await start_analysis_run(
+                        session,
+                        analysis_run_id=run_id,
+                        capture_session_id=capture_id,
+                        trace_id=trace_id,
+                        now=operation_time,
+                    )
+
+            await wait_for(gather(start(), start()), timeout=10)
+
+            completion_barrier = Barrier(2)
+
+            async def complete() -> None:
+                async with transactional_session(factory) as session:
+                    await wait_for(completion_barrier.wait(), timeout=5)
+                    await complete_analysis_run(
+                        session,
+                        result=result,
+                        now=operation_time + timedelta(minutes=1),
+                    )
+
+            await wait_for(gather(complete(), complete()), timeout=10)
+
+            async with transactional_session(factory) as session:
+                stored_run = await session.get(AiAnalysisRun, run_id)
+                stored_result = await load_analysis_result(session, analysis_run_id=run_id)
+                detections = (
+                    await session.scalars(
+                        select(Detection).where(Detection.analysis_run_id == run_id)
+                    )
+                ).all()
+
+            assert stored_run is not None
+            assert stored_run.status is AnalysisRunStatus.COMPLETED
+            assert stored_run.attempt_count == 1
+            assert stored_result == result
+            assert len(detections) == 1
         finally:
             await engine.dispose()
 

@@ -3,10 +3,13 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -172,6 +175,74 @@ async def test_start_is_idempotent_while_running(
 
 
 @pytest.mark.anyio
+async def test_start_rejects_capture_mismatch(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = AnalysisRunId(uuid4())
+    capture_id = CaptureSessionId(uuid4())
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=run_id,
+            capture_session_id=capture_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+
+    async with transactional_session(factory) as session:
+        with pytest.raises(AnalysisRunConflictError, match="another capture session"):
+            await start_analysis_run(
+                session,
+                analysis_run_id=run_id,
+                capture_session_id=CaptureSessionId(uuid4()),
+                trace_id=TRACE_ID,
+                now=LATER,
+            )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("concurrent_exists", [True, False])
+async def test_start_handles_concurrent_insert(concurrent_exists: bool) -> None:
+    run_id = AnalysisRunId(uuid4())
+    capture_id = CaptureSessionId(uuid4())
+    concurrent = AiAnalysisRun(
+        id=run_id,
+        capture_session_id=capture_id,
+        status=AnalysisRunStatus.RUNNING,
+        attempt_count=1,
+        trace_id=TRACE_ID,
+        started_at=NOW,
+    )
+    session = MagicMock(spec=AsyncSession)
+    session.scalar = AsyncMock(side_effect=[None, concurrent if concurrent_exists else None])
+    session.flush = AsyncMock(
+        side_effect=IntegrityError("INSERT ai_analysis_run", {}, RuntimeError("duplicate"))
+    )
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested.return_value = nested
+
+    if concurrent_exists:
+        await start_analysis_run(
+            cast(AsyncSession, session),
+            analysis_run_id=run_id,
+            capture_session_id=capture_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+    else:
+        with pytest.raises(IntegrityError):
+            await start_analysis_run(
+                cast(AsyncSession, session),
+                analysis_run_id=run_id,
+                capture_session_id=capture_id,
+                trace_id=TRACE_ID,
+                now=NOW,
+            )
+
+
+@pytest.mark.anyio
 async def test_complete_replay_is_noop(factory: async_sessionmaker[AsyncSession]) -> None:
     run_id = AnalysisRunId(uuid4())
     capture_id = CaptureSessionId(uuid4())
@@ -320,6 +391,37 @@ async def test_fail_rejects_completed_run(factory: async_sessionmaker[AsyncSessi
                 session,
                 analysis_run_id=run_id,
                 error_kind=ProviderErrorKind.UNAVAILABLE,
+                now=LATER,
+            )
+
+
+@pytest.mark.anyio
+async def test_fail_rejects_changed_replay(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = AnalysisRunId(uuid4())
+    capture_id = CaptureSessionId(uuid4())
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=run_id,
+            capture_session_id=capture_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+        await fail_analysis_run(
+            session,
+            analysis_run_id=run_id,
+            error_kind=ProviderErrorKind.UNAVAILABLE,
+            now=LATER,
+        )
+
+    async with transactional_session(factory) as session:
+        with pytest.raises(AnalysisRunConflictError, match="replayed error"):
+            await fail_analysis_run(
+                session,
+                analysis_run_id=run_id,
+                error_kind=ProviderErrorKind.DEADLINE_EXCEEDED,
                 now=LATER,
             )
 

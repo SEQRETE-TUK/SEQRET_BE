@@ -1,7 +1,7 @@
 """ai analysis run and detection
 
 Revision ID: b_03_0001
-Revises: a_12_0001
+Revises: a_09_0002
 Create Date: 2026-08-13 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b_03_0001"
-down_revision: str | Sequence[str] | None = "a_12_0001"
+down_revision: str | Sequence[str] | None = "a_09_0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -147,7 +147,9 @@ def downgrade() -> None:
     connection = op.get_bind()
     if connection.dialect.name == "postgresql":
         connection.execute(
-            sa.text("LOCK TABLE detection, ai_analysis_run IN ACCESS EXCLUSIVE MODE")
+            sa.text(
+                "LOCK TABLE detection, ai_analysis_run, background_job IN ACCESS EXCLUSIVE MODE"
+            )
         )
     # As the head migration, b_03 carries the operational-data guard: once any
     # background job or analysis run exists, keep the extended schema and roll
