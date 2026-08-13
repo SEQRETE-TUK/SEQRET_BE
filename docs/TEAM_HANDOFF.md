@@ -1,17 +1,18 @@
 # 팀 인계 — 현재 `main` 기준
 
 > 작성일: 2026-08-13
-> 기능 기준 커밋: `8180a66`
+> 기능 기준 커밋: `e3f56b6`
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
 이 문서는 현재 구현과 팀 간 경계를 요약한다. 화면 초안이나 미래 API 제안은 실행 계약이 아니며, 제품 결정과 계약 PR을 거쳐 OpenAPI에 반영된 뒤 연동한다.
 
 ## 현재 제공 범위
 
-- route는 26개다: `/api/v1` 업무 route 23개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- OpenAPI operation은 22개 path에 26개다: `/api/v1` 업무 operation 23개와 `/healthz`, `/readyz`, `/edgez` 3개다.
 - 작업 bootstrap, 역할별 access link 인증·회전·철회, 촬영 세션과 미디어 업로드 완료 확인, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
-- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. lease 소유권을 잃은 미확정 event가 있으면 성공으로 숨기지 않고 실패 종료한다.
-- `645313b`부터 `8180a66`까지의 A 변경은 응답 JSON 필드를 제거하거나 이름을 바꾸지 않았다. 촬영·access link·변경요청의 동시성, DB commit 시점과 signed URL 원문 보존을 강화했다.
+- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. lease 소유권을 잃은 미확정 event가 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
+- 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장과 미디어 삭제 handler가 병합됐다. B 모듈은 HTTP route를 추가하지 않았으며 실제 provider runtime 활성화는 별도다.
+- Alembic은 단일 head `a_09_0003`이다. 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
@@ -24,25 +25,28 @@
 - upload 완료 요청에 object generation을 보내지 않는다. FE는 발급받은 URL과 `upload_headers`로 PUT하고, BE가 storage metadata의 object key, MIME type, 크기와 generation을 검증한다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
 
-## 현재 연동 blocker
+## FE 현재 상태와 blocker
 
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
-- GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 upload method·필수 header와 bucket 정책은 B의 Storage adapter가 병합된 뒤 함께 검증한다.
-- 현재 `main`은 production `StoragePort`를 wiring하지 않으므로 media upload/read URL route는 배포 환경에서 `503`을 반환한다. 관련 B PR이 병합되기 전에는 실서버 미디어 연동 완료로 간주하지 않는다.
-- [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)는 현재 Next.js 16·React 19 API 미연동 UI 데모이며 API client, CI와 GitHub 배포 증적이 없다. `docs/TECH_STACK.md`의 React·Vite·TanStack 기준과 실제 FE 저장소가 다르므로 팀 결정 없이 한쪽을 임의로 맞추지 않는다.
+- GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
+- 현재 `main`은 `GoogleCloudStorage`를 production `app.state.storage_port`에 wiring하지 않으므로 media upload/read URL route는 배포 환경에서 `503`을 반환한다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `d3d33a4`(`chore: initial project setup`)다. Next.js 16·React 19 UI 데모만 있고 API client·환경변수·`/api/v1`·Bearer 연동이 없으며 PR, Actions run, deployment와 environment도 없다. FE가 배포됐다고 간주하지 않는다.
+- 로컬 `C:\Users\geonh\Desktop\SEQRET_FE`는 canonical 저장소가 아닌 `SEQRETE/FE.git`을 가리키고 사용자 소유 미추적 `README.md`가 있어 수정·push하지 않았다. `docs/TECH_STACK.md`의 Vite·TanStack 기준과 실제 FE도 다르므로 먼저 기술 결정을 맞춘다.
 
 ## B 트랙 인계
 
-2026-08-13 기준 열린 B PR은 다음과 같다. A ORM과 repository를 B에서 직접 갱신하지 않고, 병합된 `app/contracts` Port와 공개 application command를 사용한다.
+- 병합 완료: GCS SDK [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37), B-01 GCS adapter [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39), B-03 분석 실행 [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35), B-07 삭제 handler [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36).
+- 남은 B 구현은 B-02 Cloud Tasks·private worker runtime, B-04 Vertex AI adapter, B-05 미디어 검증·파생 처리, B-06 worker retry·멱등성과 provider 오류 매핑이다. 이후 INT-01·INT-06과 삭제 runtime 통합을 검증한다.
+- Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막고, B handler는 A ORM을 우회 갱신하지 않는다. 저장된 object generation은 read/delete까지 그대로 전달한다.
 
-| PR | 범위 | 병합 전 확인 |
-| --- | --- | --- |
-| [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37) | GCP SDK 의존성 | 최신 `main` rebase와 full CI 후 B adapter보다 먼저 병합 |
-| [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39) | GCS `StoragePort` adapter | #37과 FND-A03 계약 보강 병합 후 최신 `main`으로 rebase하고 upload target·generation delete 계약 및 full CI 재검증 |
-| [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35) | AI 분석 실행·초안 저장 | 최신 `main` rebase, 단일 Alembic head와 full CI 확인 후 A 승인 |
-| [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36) | 미디어 삭제 handler | 최신 `main` rebase와 full CI 후 독립 병합 가능; runtime 활성화 전 B-01/B-02 배선 확인 |
+## 외부 활성화 전 확인
 
-Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막아야 한다. 저장된 object generation은 read/delete까지 그대로 전달하며, B handler가 A 상태를 우회 갱신하면 안 된다. 공용 `StorageUploadTarget`은 provider header를 해석하지 않으므로, B의 GCS adapter가 `Content-Type`과 `x-goog-if-generation-match: 0`을 V4 서명에 포함하고 같은 값을 target으로 반환하는 adapter contract test를 통과한 뒤 병합한다.
+- **GCS:** private bucket, runtime의 URL 서명 권한과 객체 create/get/delete 권한, 실제 FE origin의 bucket CORS를 준비한다. bucket 이름·timeout 설정과 `GoogleCloudStorage` wiring이 병합된 뒤 adapter contract와 브라우저 upload를 검증한다.
+- **Redis:** `REDIS_URL_SECRET_ID`, `REDIS_VPC_NETWORK`, `REDIS_VPC_SUBNETWORK`을 함께 설정한다. 같은 region의 기존 `/26` 이상 subnet, Memorystore authorized network와 Cloud Run service-agent network 권한을 확인하고, 배포 후 Memorystore metric으로 실제 연결을 증명한다.
+- **DB 역할:** API, migration, Outbox relay와 recovery가 현재 같은 `DATABASE_URL_SECRET_ID`를 사용한다. 별도 DB 사용자·grant·Secret ID와 자격증명이 외부에서 준비되기 전에는 Terraform secret만 나누지 않는다.
+- **DB 연결 경보:** Cloud SQL `num_backends` 임계치는 승인된 instance `max_connections`와 connection budget이 정해진 뒤 추가한다. 임의 임계치로 경보를 만들지 않는다.
+- **Artifact Registry:** 90일 초과 삭제 후보와 최신 50개 보존 정책은 계속 dry-run이다. provider cleanup audit log를 검토한 뒤에만 실제 삭제로 전환한다.
+- **B runtime:** B-02는 Cloud Tasks SDK·queue·OIDC 호출 identity와 private worker entrypoint, B-04는 Vertex AI SDK·runtime IAM과 model 설정이 필요하다.
 
 ## staging 운영 증적
 
@@ -51,6 +55,6 @@ Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` recei
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-위 실행으로 deploy·rollback·PITR 절차는 검증했다. 다만 `645313b`부터 `8180a66`까지의 최신 A correctness 변경은 위 deploy 이후 병합됐으므로, staging의 현재 image와 동일하다고 간주하지 않는다. 다음 배포는 최신 `main`에서 실행하고 workflow summary의 source SHA와 image digest를 증거로 남긴다.
+위 실행은 source SHA `329d386`의 deploy·rollback·PITR 절차 증적이다. 현재 기능 기준 `main`은 그 이후 A·B 코드와 migration을 포함하므로 staging image·schema가 같다고 간주하지 않는다. 다음 배포와 복구 훈련은 최신 `main`에서 다시 실행하고 workflow summary의 source SHA와 image digest를 증거로 남긴다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.
