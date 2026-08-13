@@ -6,6 +6,8 @@ from datetime import timedelta
 
 import pytest
 from google.api_core import exceptions as google_exceptions
+from google.auth import exceptions as auth_exceptions
+from google.auth.credentials import AnonymousCredentials, Credentials, Signing
 
 from app.contracts.ports import (
     ObjectStoragePort,
@@ -27,6 +29,7 @@ class StubBlob:
         signed_url: str = "https://storage.example/signed",
         reload_error: Exception | None = None,
         delete_error: Exception | None = None,
+        signed_url_error: Exception | None = None,
         sleep_seconds: float = 0.0,
     ) -> None:
         self.generation = generation
@@ -35,6 +38,7 @@ class StubBlob:
         self._signed_url = signed_url
         self._reload_error = reload_error
         self._delete_error = delete_error
+        self._signed_url_error = signed_url_error
         self._sleep_seconds = sleep_seconds
         self.signed_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
@@ -49,6 +53,7 @@ class StubBlob:
         content_type: str | None = None,
         generation: str | None = None,
         headers: dict[str, str] | None = None,
+        credentials: Signing | None = None,
     ) -> str:
         self.signed_calls.append(
             {
@@ -58,8 +63,11 @@ class StubBlob:
                 "content_type": content_type,
                 "generation": generation,
                 "headers": headers,
+                "credentials": credentials,
             }
         )
+        if self._signed_url_error is not None:
+            raise self._signed_url_error
         return self._signed_url
 
     def reload(self, *, timeout: float) -> None:
@@ -99,6 +107,28 @@ def _adapter(blob: StubBlob) -> tuple[GoogleCloudStorage, StubBucket]:
     bucket = StubBucket(blob)
     adapter = GoogleCloudStorage("seqret-media", client_factory=lambda: StubClient(bucket))
     return adapter, bucket
+
+
+def _iam_adapter(
+    blob: StubBlob,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[GoogleCloudStorage, StubBucket]:
+    source_credentials: Credentials = AnonymousCredentials()  # type: ignore[no-untyped-call]
+
+    def default_credentials(*, scopes: tuple[str, ...]) -> tuple[Credentials, None]:
+        assert scopes == ("https://www.googleapis.com/auth/cloud-platform",)
+        return source_credentials, None
+
+    monkeypatch.setattr("app.platform.storage.gcs.google.auth.default", default_credentials)
+    bucket = StubBucket(blob)
+    return (
+        GoogleCloudStorage(
+            "seqret-media",
+            signing_service_account_email="seqret-api@seqret-test.iam.gserviceaccount.com",
+            client_factory=lambda: StubClient(bucket),
+        ),
+        bucket,
+    )
 
 
 @pytest.fixture
@@ -152,6 +182,57 @@ async def test_create_read_url_pins_generation() -> None:
     call = blob.signed_calls[0]
     assert call["method"] == "GET"
     assert call["generation"] == "7"
+
+
+@pytest.mark.anyio
+async def test_signed_urls_use_explicit_iam_signing_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blob = StubBlob()
+    adapter, _ = _iam_adapter(blob, monkeypatch)
+
+    await adapter.create_upload_url(
+        object_key="jobs/1/photo.jpg",
+        content_type="image/jpeg",
+        content_length=10,
+        expires_in_seconds=60,
+        timeout_seconds=2,
+    )
+    await adapter.create_read_url(
+        object_key="jobs/1/photo.jpg",
+        generation="7",
+        expires_in_seconds=60,
+        timeout_seconds=2,
+    )
+
+    signing_credentials = blob.signed_calls[0]["credentials"]
+    assert isinstance(signing_credentials, Signing)
+    assert signing_credentials is blob.signed_calls[1]["credentials"]
+    assert signing_credentials.signer_email == "seqret-api@seqret-test.iam.gserviceaccount.com"
+
+
+@pytest.mark.anyio
+async def test_iam_signing_failure_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider_message = "signBlob denied for secret-token"
+    blob = StubBlob(
+        signed_url_error=auth_exceptions.TransportError(  # type: ignore[no-untyped-call]
+            provider_message
+        ),
+    )
+    adapter, _ = _iam_adapter(blob, monkeypatch)
+
+    with pytest.raises(ProviderError, match="storage operation failed") as error_info:
+        await adapter.create_read_url(
+            object_key="jobs/1/photo.jpg",
+            generation="7",
+            expires_in_seconds=60,
+            timeout_seconds=2,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+    assert error_info.value.retryable
+    assert error_info.value.__cause__ is None
+    assert provider_message not in str(error_info.value)
 
 
 @pytest.mark.anyio
