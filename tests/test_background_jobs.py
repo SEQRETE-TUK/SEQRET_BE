@@ -24,6 +24,9 @@ from app.contracts.maintenance import (
     MediaDeletionOutcome,
     MediaDeletionResultV1,
     MediaDeletionTaskV1,
+    MediaValidationOutcome,
+    MediaValidationResultV1,
+    MediaValidationTaskV1,
 )
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind
@@ -35,11 +38,14 @@ from app.modules.background_job.service import (
     BackgroundJobNotFoundError,
     claim_background_jobs,
     complete_media_deletion,
+    complete_media_validation,
+    create_media_validation_background_job,
     create_retention_background_job,
     dispatch_background_jobs_once,
     finalize_background_job_dispatch,
     retry_background_job,
     start_media_deletion,
+    start_media_validation,
 )
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.move_job.models import MoveJob, MoveJobStatus
@@ -155,6 +161,7 @@ async def _seed_media(
     generation: str | None = "7",
 ) -> MediaAsset:
     job_id = UUID(created["job"]["id"])
+    uploaded = status is not MediaAssetStatus.PENDING_UPLOAD
     asset = MediaAsset(
         capture_session_id=uuid4(),
         room_zone_id=UUID(created["job"]["locations"][0]["room_zones"][0]["id"]),
@@ -163,9 +170,9 @@ async def _seed_media(
         object_key=f"jobs/{job_id}/retention/{uuid4()}",
         content_type="image/jpeg",
         expected_size_bytes=10,
-        actual_size_bytes=10,
-        generation=generation,
-        uploaded_at=FIXED_NOW - timedelta(days=40),
+        actual_size_bytes=10 if uploaded else None,
+        generation=generation if uploaded else None,
+        uploaded_at=FIXED_NOW - timedelta(days=40) if uploaded else None,
     )
     capture = CaptureSession(
         id=asset.capture_session_id,
@@ -186,6 +193,254 @@ async def _seed_media(
 def _task(queue: FakeTaskQueue) -> MediaDeletionTaskV1:
     request = next(iter(queue.requests.values()))
     return MediaDeletionTaskV1.model_validate_json(json.dumps(request[2]))
+
+
+@pytest.mark.anyio
+async def test_media_validation_lifecycle_and_retry_boundaries(
+    background_job_api: BackgroundJobApi,
+) -> None:
+    client, factory, queue, _ = background_job_api
+    created = await _create_job(client)
+    asset = await _seed_media(factory, created)
+    async with factory.begin() as session:
+        intent = await create_media_validation_background_job(
+            session,
+            UUID(created["job"]["id"]),
+            asset.id,
+            _participant_id(created, "company_manager"),
+            trace_id=TRACE_ID,
+            scheduled_at=FIXED_NOW,
+        )
+        repeated = await create_media_validation_background_job(
+            session,
+            UUID(created["job"]["id"]),
+            asset.id,
+            _participant_id(created, "company_manager"),
+            trace_id=TRACE_ID,
+            scheduled_at=FIXED_NOW,
+        )
+        assert repeated.id == intent.id
+    missing_asset = await _seed_media(factory, created)
+    with pytest.raises(BackgroundJobNotFoundError):
+        async with factory.begin() as session:
+            await create_media_validation_background_job(
+                session,
+                uuid4(),
+                missing_asset.id,
+                _participant_id(created, "company_manager"),
+                trace_id=TRACE_ID,
+            )
+    with pytest.raises(BackgroundJobNotFoundError):
+        async with factory.begin() as session:
+            await create_media_validation_background_job(
+                session,
+                UUID(created["job"]["id"]),
+                uuid4(),
+                _participant_id(created, "company_manager"),
+                trace_id=TRACE_ID,
+            )
+    pending_asset = await _seed_media(
+        factory,
+        created,
+        status=MediaAssetStatus.PENDING_UPLOAD,
+        generation=None,
+    )
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            await create_media_validation_background_job(
+                session,
+                UUID(created["job"]["id"]),
+                pending_asset.id,
+                _participant_id(created, "company_manager"),
+                trace_id=TRACE_ID,
+            )
+
+    dispatched = await dispatch_background_jobs_once(
+        factory,
+        queue,
+        queue_name="media-maintenance",
+        handler="/tasks/media",
+        now=FIXED_NOW,
+    )
+    assert dispatched == type(dispatched)(claimed=1, queued=1, failed=0)
+    request = next(iter(queue.requests.values()))
+    task = MediaValidationTaskV1.model_validate_json(json.dumps(request[2]))
+    assert task.background_job_id == intent.id
+    assert set(request[2]) == {
+        "schema_version",
+        "background_job_id",
+        "job_type",
+        "attempt_count",
+        "trace_id",
+    }
+
+    async with factory.begin() as session:
+        work = await start_media_validation(session, task, now=FIXED_NOW)
+        assert work is not None
+        assert work.source_generation == "7"
+        assert work.expected_content_type == "image/jpeg"
+        assert work.expected_size_bytes == 10
+        assert await start_media_validation(session, task) == work
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            processing = await session.get(MediaAsset, asset.id)
+            assert processing is not None
+            processing.status = MediaAssetStatus.FAILED
+            await start_media_validation(session, task)
+    async with factory() as session:
+        processing = await session.get(MediaAsset, asset.id)
+        assert processing is not None and processing.status is MediaAssetStatus.PROCESSING
+
+    mismatched = MediaValidationResultV1(
+        background_job_id=task.background_job_id,
+        attempt_count=task.attempt_count,
+        source_generation="7",
+        outcome=MediaValidationOutcome.SUCCEEDED,
+        observed_content_type="image/png",
+        observed_size_bytes=10,
+        sha256_hex="a" * 64,
+    )
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            await complete_media_validation(session, mismatched)
+
+    success = mismatched.model_copy(update={"observed_content_type": "image/jpeg"})
+    async with factory.begin() as session:
+        completed = await complete_media_validation(session, success, completed_at=FIXED_NOW)
+        assert completed.status is BackgroundJobStatus.SUCCEEDED
+        assert (await complete_media_validation(session, success)) == completed
+    async with factory() as session:
+        ready = await session.get(MediaAsset, asset.id)
+        assert ready is not None
+        assert ready.status is MediaAssetStatus.READY
+        assert ready.sha256_hex == "a" * 64
+
+    conflict = success.model_copy(update={"sha256_hex": "b" * 64})
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            await complete_media_validation(session, conflict)
+    async with factory.begin() as session:
+        assert await start_media_validation(session, task) is None
+    invalid_task = task.model_copy(update={"background_job_id": BackgroundJobId(uuid4())})
+    with pytest.raises(BackgroundJobNotFoundError):
+        async with factory.begin() as session:
+            await start_media_validation(session, invalid_task)
+    with pytest.raises(ValueError, match="execution_timeout_seconds"):
+        async with factory.begin() as session:
+            await start_media_validation(session, task, execution_timeout_seconds=0)
+    with pytest.raises(BackgroundJobNotFoundError):
+        async with factory.begin() as session:
+            await complete_media_validation(
+                session,
+                success.model_copy(update={"background_job_id": BackgroundJobId(uuid4())}),
+            )
+
+    failed_asset = await _seed_media(factory, created)
+    async with factory.begin() as session:
+        failed_intent = await create_media_validation_background_job(
+            session,
+            UUID(created["job"]["id"]),
+            failed_asset.id,
+            _participant_id(created, "company_manager"),
+            trace_id=TRACE_ID,
+            scheduled_at=FIXED_NOW,
+        )
+    async with factory.begin() as session:
+        failed_claim = (await claim_background_jobs(session, now=FIXED_NOW))[0]
+        assert isinstance(failed_claim.task, MediaValidationTaskV1)
+        await finalize_background_job_dispatch(
+            session,
+            failed_claim,
+            provider_task_id="validation-task",
+        )
+    with pytest.raises(BackgroundJobNotFoundError):
+        async with factory.begin() as session:
+            await start_media_validation(
+                session,
+                failed_claim.task.model_copy(update={"trace_id": TraceId("f" * 32)}),
+            )
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            queued = await session.get(BackgroundJob, failed_intent.id)
+            assert queued is not None
+            queued.status = BackgroundJobStatus.PENDING
+            await start_media_validation(session, failed_claim.task)
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            queued_asset = await session.get(MediaAsset, failed_asset.id)
+            assert queued_asset is not None
+            queued_asset.content_type = "image/png"
+            await start_media_validation(session, failed_claim.task)
+    queued_failure = MediaValidationResultV1(
+        background_job_id=BackgroundJobId(failed_intent.id),
+        attempt_count=1,
+        source_generation="7",
+        outcome=MediaValidationOutcome.FAILED,
+        error_kind=ProviderErrorKind.UNAVAILABLE,
+    )
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            await complete_media_validation(session, queued_failure)
+    async with factory.begin() as session:
+        await start_media_validation(session, failed_claim.task, now=FIXED_NOW)
+    failure = queued_failure
+    async with factory.begin() as session:
+        terminal = await complete_media_validation(session, failure, completed_at=FIXED_NOW)
+        assert terminal.status is BackgroundJobStatus.FAILED
+        assert (await complete_media_validation(session, failure)) == terminal
+        retried = await retry_background_job(
+            session,
+            UUID(created["job"]["id"]),
+            failed_intent.id,
+            now=FIXED_NOW + timedelta(minutes=1),
+        )
+        assert retried.status is BackgroundJobStatus.PENDING
+    async with factory() as session:
+        failed = await session.get(MediaAsset, failed_asset.id)
+        assert failed is not None and failed.status is MediaAssetStatus.FAILED
+
+    async with factory.begin() as session:
+        retried_claim = (
+            await claim_background_jobs(session, now=FIXED_NOW + timedelta(minutes=1))
+        )[0]
+        assert isinstance(retried_claim.task, MediaValidationTaskV1)
+        assert retried_claim.task.attempt_count == 2
+        await finalize_background_job_dispatch(
+            session,
+            retried_claim,
+            provider_task_id="validation-retry",
+        )
+    async with factory.begin() as session:
+        await start_media_validation(session, retried_claim.task, now=FIXED_NOW)
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            await complete_media_validation(session, failure)
+    with pytest.raises(BackgroundJobConflictError):
+        async with factory.begin() as session:
+            running = await session.get(BackgroundJob, failed_intent.id)
+            running_asset = await session.get(MediaAsset, failed_asset.id)
+            assert running is not None and running_asset is not None
+            running.execution_deadline_at = FIXED_NOW
+            running_asset.status = MediaAssetStatus.READY
+            await retry_background_job(
+                session,
+                UUID(created["job"]["id"]),
+                failed_intent.id,
+                now=FIXED_NOW + timedelta(minutes=2),
+            )
+    async with factory.begin() as session:
+        running = await session.get(BackgroundJob, failed_intent.id)
+        running_asset = await session.get(MediaAsset, failed_asset.id)
+        assert running is not None and running_asset is not None
+        running.execution_deadline_at = FIXED_NOW
+        retried = await retry_background_job(
+            session,
+            UUID(created["job"]["id"]),
+            failed_intent.id,
+            now=FIXED_NOW + timedelta(minutes=2),
+        )
+        assert retried.status is BackgroundJobStatus.PENDING
+        assert running_asset.status is MediaAssetStatus.FAILED
 
 
 @pytest.mark.anyio
@@ -497,6 +752,7 @@ async def test_dispatch_leases_validate_inputs_and_recover_after_expiry(
                 error_code="unexpected",
             )
     async with factory.begin() as session:
+        assert isinstance(reclaimed.task, MediaDeletionTaskV1)
         assert await start_media_deletion(session, reclaimed.task, now=FIXED_NOW) is not None
     async with factory.begin() as session:
         assert not await finalize_background_job_dispatch(
@@ -525,6 +781,7 @@ async def test_dispatch_leases_validate_inputs_and_recover_after_expiry(
 
     with pytest.raises(ValueError, match="execution_timeout_seconds"):
         async with factory.begin() as session:
+            assert isinstance(reclaimed.task, MediaDeletionTaskV1)
             await start_media_deletion(session, reclaimed.task, execution_timeout_seconds=0)
 
     with pytest.raises(ValueError, match="positive"):

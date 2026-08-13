@@ -16,6 +16,7 @@ from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
 from app.contracts.fakes import FakeObjectStorage
+from app.contracts.maintenance import BackgroundJobType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
     ProviderError,
@@ -24,6 +25,7 @@ from app.contracts.ports import (
     StorageUploadTarget,
 )
 from app.main import create_app
+from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
     MAX_IMAGE_BYTES,
@@ -209,7 +211,20 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     assert completed.status_code == 200
     assert completed.json()["status"] == "uploaded"
     assert completed.json()["actual_size_bytes"] == 12
-    assert completed.json()["sha256_hex"] == "a" * 64
+    assert completed.json()["sha256_hex"] is None
+
+    async with factory() as session:
+        validation = await session.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.media_asset_id == asset_id,
+                BackgroundJob.job_type == BackgroundJobType.MEDIA_VALIDATION,
+            )
+        )
+        assert validation is not None
+        assert validation.status is BackgroundJobStatus.PENDING
+        assert validation.target_generation == "1"
+        assert validation.target_content_type == "image/jpeg"
+        assert validation.target_size_bytes == 12
 
     async with factory.begin() as session:
         move_job = await session.get(MoveJob, UUID(job["id"]))
@@ -222,6 +237,18 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     assert repeated.json()["id"] == completed.json()["id"]
     assert repeated.json()["status"] == "uploaded"
     assert repeated.json()["actual_size_bytes"] == 12
+    async with factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(BackgroundJob)
+                .where(
+                    BackgroundJob.media_asset_id == asset_id,
+                    BackgroundJob.job_type == BackgroundJobType.MEDIA_VALIDATION,
+                )
+            )
+            == 1
+        )
 
     async def unexpected_storage(**_kwargs: object) -> object:
         raise AssertionError("terminal capture must not call storage")

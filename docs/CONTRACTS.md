@@ -43,7 +43,8 @@
 - 후속 A command는 result의 generation과 관측 MIME type·크기를 work snapshot과 비교해야 한다. 성공 시 result의 source generation과 SHA-256을 asset에 저장하고 `READY`로 전이하며, 실패 시 `FAILED`로 전이하는 처리를 같은 transaction에서 수행해야 한다.
 - result 멱등성 key는 `(background_job_id, attempt_count)`다. source generation이 다르거나 같은 attempt의 terminal 결과가 상충하면 후속 A command가 거부해야 한다.
 - 이 계약은 파생 파일 형식·저장 모델을 추정하지 않는다. 해당 제품 정책이 확정되면 별도 versioned 계약으로 추가한다.
-- merge 순서는 이 공용 계약 → A의 background job·`UPLOADED → PROCESSING → READY|FAILED` command와 migration → B-05 handler → B-02 private worker wiring → INT-03의 `READY` 증거 강제다. runtime 전에는 상태를 즉시 `READY`로 바꾸지 않는다.
+- 업로드 완료는 generation·MIME type·크기를 고정한 `PENDING` validation intent를 같은 transaction에 만든다. `start_media_validation`과 `complete_media_validation`은 기존 background-job lease·attempt를 재사용해 `UPLOADED|FAILED → PROCESSING → READY|FAILED`를 전이한다.
+- 남은 merge 순서는 B-05 handler → B-02 private worker wiring이다. runtime 전에는 상태를 즉시 `READY`로 바꾸지 않는다.
 
 ## Event envelope
 

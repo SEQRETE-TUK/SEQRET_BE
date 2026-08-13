@@ -45,8 +45,15 @@ class BackgroundJob(Base):
             name="uq_background_job_type_media_asset_id",
         ),
         CheckConstraint(
-            "job_type IN ('MEDIA_RETENTION_DELETE')",
+            "job_type IN ('MEDIA_VALIDATION', 'MEDIA_RETENTION_DELETE')",
             name="background_job_type",
+        ),
+        CheckConstraint(
+            "(job_type = 'MEDIA_VALIDATION' AND target_content_type IS NOT NULL "
+            "AND length(target_content_type) > 0 AND target_size_bytes > 0) OR "
+            "(job_type = 'MEDIA_RETENTION_DELETE' AND target_content_type IS NULL "
+            "AND target_size_bytes IS NULL)",
+            name="background_job_target_shape",
         ),
         CheckConstraint(
             "status IN ('PENDING', 'DISPATCHING', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED')",
@@ -126,6 +133,8 @@ class BackgroundJob(Base):
     )
     target_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     target_generation: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_content_type: Mapped[str | None] = mapped_column(String(255))
+    target_size_bytes: Mapped[int | None] = mapped_column(Integer)
     trace_id: Mapped[str] = mapped_column(String(32), nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     attempt_count: Mapped[int] = mapped_column(

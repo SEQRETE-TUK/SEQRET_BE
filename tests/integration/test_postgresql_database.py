@@ -26,6 +26,7 @@ from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.maintenance import (
+    BackgroundJobType,
     MediaDeletionOutcome,
     MediaDeletionResultV1,
     MediaDeletionTaskV1,
@@ -127,7 +128,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_08_0002"
+ALEMBIC_HEAD = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
@@ -399,7 +400,8 @@ def test_postgresql_event_history_guards() -> None:
                 assert connection.scalar(text("SELECT id FROM audit_event")) == audit_event_id
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(configuration, ALEMBIC_AUDIT_PREVIOUS)
-            assert _current_revision(engine) == ALEMBIC_HEAD
+            assert _current_revision(engine) == "a_08_0002"
+            command.upgrade(configuration, "head")
         finally:
             engine.dispose()
 
@@ -1191,7 +1193,10 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                 loaded = await get_move_job(session, created.job.id)
                 retention_jobs = (
                     await session.scalars(
-                        select(BackgroundJob).where(BackgroundJob.move_job_id == created.job.id)
+                        select(BackgroundJob).where(
+                            BackgroundJob.move_job_id == created.job.id,
+                            BackgroundJob.job_type == BackgroundJobType.MEDIA_RETENTION_DELETE,
+                        )
                     )
                 ).all()
 
@@ -1312,7 +1317,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
 
             assert completed.status is MediaAssetStatus.UPLOADED
             assert completed.actual_size_bytes == 10
-            assert completed.sha256_hex == "b" * 64
+            assert completed.sha256_hex is None
 
             async with transactional_session(factory) as session:
                 completion_upload = await create_media_upload(

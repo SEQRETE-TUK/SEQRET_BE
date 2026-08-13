@@ -24,7 +24,7 @@
 | ID | 작업 | 상태 | 막는 것 / 선행 | 산출물 |
 |---|---|---|---|---|
 | **B-04** | Vertex AI/Gemini adapter | 🚫 | Vertex AI SDK, runtime IAM과 model 설정 | — |
-| **B-05** | 미디어 검증 + 파생 처리 | ⬜ | B-01 이후 지원 format·도구 결정 | — |
+| **B-05** | 미디어 검증 + 파생 처리 | 🚫 | A validation command 병합 / handler·지원 format·도구 결정 필요 | — |
 | **B-06** | worker 멱등성 + 오류 매핑 | 🚫 | B-02 + B-04 | — |
 | **B-07** | GCS 삭제 + 장시간 Job handler | 🟡 | handler 병합 / B-02·Job runtime 배선 필요 | [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36) |
 

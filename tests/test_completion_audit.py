@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 from app.config import AppEnvironment, Settings
 from app.contracts.actor import ParticipantRole
 from app.contracts.fakes import FakeObjectStorage
+from app.contracts.maintenance import BackgroundJobType
 from app.contracts.ports import StorageObjectMetadata
 from app.main import create_app
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
@@ -225,7 +226,9 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
     assert customer.json()["job_status"] == "draft"
     assert customer.json()["completed_at"] is None
     async with factory() as session:
-        assert (await session.scalars(select(BackgroundJob))).all() == []
+        assert {row.job_type for row in (await session.scalars(select(BackgroundJob))).all()} == {
+            BackgroundJobType.MEDIA_VALIDATION
+        }
     duplicate_customer = await client.post(
         confirmation_url,
         headers=_headers(_secret(created, "customer")),
@@ -250,7 +253,9 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
         async with factory() as session:
             job = await session.get(MoveJob, UUID(job_id))
             assert job is not None and job.status is MoveJobStatus.DRAFT
-            assert (await session.scalars(select(BackgroundJob))).all() == []
+            assert {
+                row.job_type for row in (await session.scalars(select(BackgroundJob))).all()
+            } == {BackgroundJobType.MEDIA_VALIDATION}
     async with factory.begin() as session:
         asset = await session.get(MediaAsset, UUID(evidence_id))
         assert asset is not None
@@ -287,7 +292,13 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
 
     completed_at = datetime.fromisoformat(manager.json()["completed_at"])
     async with factory.begin() as session:
-        background_jobs = (await session.scalars(select(BackgroundJob))).all()
+        background_jobs = (
+            await session.scalars(
+                select(BackgroundJob).where(
+                    BackgroundJob.job_type == BackgroundJobType.MEDIA_RETENTION_DELETE
+                )
+            )
+        ).all()
         assert len(background_jobs) == 2
         jobs_by_asset = {row.media_asset_id: row for row in background_jobs}
         assert set(jobs_by_asset) == {UUID(evidence_id), UUID(second_evidence_id)}
@@ -320,18 +331,20 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
     assert manual.json()["id"] == str(background_job.id)
     assert datetime.fromisoformat(manual.json()["scheduled_at"]) == scheduled_at
     async with factory.begin() as session:
-        assert (
-            await claim_background_jobs(
-                session,
-                now=scheduled_at - timedelta(microseconds=1),
-            )
-            == ()
+        early_claims = await claim_background_jobs(
+            session,
+            now=scheduled_at - timedelta(microseconds=1),
+        )
+        assert all(
+            claim.task.job_type == BackgroundJobType.MEDIA_VALIDATION for claim in early_claims
         )
     async with factory.begin() as session:
         claims = await claim_background_jobs(session, now=scheduled_at)
-        assert {UUID(str(claim.task.background_job_id)) for claim in claims} == {
-            row.id for row in background_jobs
-        }
+        assert {
+            UUID(str(claim.task.background_job_id))
+            for claim in (*early_claims, *claims)
+            if claim.task.job_type == BackgroundJobType.MEDIA_RETENTION_DELETE
+        } == {row.id for row in background_jobs}
 
     audit = await client.get(
         f"/api/v1/move-jobs/{job_id}/audit-events",
