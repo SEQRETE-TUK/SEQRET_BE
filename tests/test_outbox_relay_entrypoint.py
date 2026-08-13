@@ -20,17 +20,19 @@ from app.platform.event_bus.service import RelayResult
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("result", "exit_code"),
+    ("result", "exit_code", "saturated"),
     [
-        (RelayResult(claimed=1, published=0, failed=1), 1),
-        (RelayResult(claimed=1, published=0, failed=0), 1),
-        (RelayResult(claimed=1, published=1, failed=0), 0),
+        (RelayResult(claimed=1, published=0, failed=1), 1, False),
+        (RelayResult(claimed=1, published=0, failed=0), 1, False),
+        (RelayResult(claimed=1, published=1, failed=0), 0, False),
+        (RelayResult(claimed=100, published=100, failed=0), 0, True),
     ],
 )
 async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
     monkeypatch: pytest.MonkeyPatch,
     result: RelayResult,
     exit_code: int,
+    saturated: bool,
 ) -> None:
     engine = SimpleNamespace(dispose=AsyncMock())
     factory = object()
@@ -74,6 +76,10 @@ async def test_relay_entrypoint_closes_dependencies_and_reports_failure(
         assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
     else:
         span.set_status.assert_not_called()
+    if saturated:
+        observability.logger.warning.assert_called_once()
+    else:
+        observability.logger.warning.assert_not_called()
     observability.shutdown.assert_called_once_with()
 
 

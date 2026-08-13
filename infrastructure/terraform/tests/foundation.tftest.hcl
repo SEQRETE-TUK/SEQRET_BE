@@ -279,6 +279,11 @@ run "staging_runtime_isolation" {
       google_monitoring_alert_policy.job_failures.severity == "ERROR",
       google_monitoring_alert_policy.outbox_relay_failures.severity == "ERROR",
       length(google_monitoring_alert_policy.outbox_relay_failures.conditions) == 2,
+      google_monitoring_alert_policy.outbox_relay_saturation.severity == "WARNING",
+      length(google_monitoring_alert_policy.outbox_relay_saturation.conditions) == 1,
+      length(google_monitoring_alert_policy.outbox_relay_saturation.conditions[0].condition_matched_log) == 1,
+      strcontains(google_monitoring_alert_policy.outbox_relay_saturation.conditions[0].condition_matched_log[0].filter, "jsonPayload.event=\"outbox_relay_batch_saturated\""),
+      google_monitoring_alert_policy.outbox_relay_saturation.alert_strategy[0].notification_rate_limit[0].period == "900s",
       google_monitoring_slo.api_availability.goal == 0.99,
     ])
     error_message = "Core API and job alert policies must remain enabled at explicit severities."

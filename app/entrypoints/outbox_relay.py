@@ -55,6 +55,14 @@ async def run(settings: Settings | None = None) -> int:
                     "outcome": "error" if failed else "success",
                 },
             )
+            if not failed and result.claimed == resolved.outbox_batch_size:
+                observability.logger.warning(
+                    "Outbox relay reached its batch limit",
+                    extra={
+                        "event": "outbox_relay_batch_saturated",
+                        "outcome": "backlog",
+                    },
+                )
     return int(failed)
 
 
