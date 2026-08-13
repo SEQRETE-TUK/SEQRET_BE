@@ -80,7 +80,12 @@ class ExpectedRollback(RuntimeError):
 
 
 @pytest.fixture
-async def background_job_api(tmp_path: Path) -> AsyncIterator[BackgroundJobApi]:
+async def background_job_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[BackgroundJobApi]:
+    monkeypatch.setattr("app.modules.background_job.service.utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("app.modules.background_job.router.utc_now", lambda: FIXED_NOW)
     database_path = (tmp_path / "background-jobs.sqlite3").as_posix()
     sync_engine = create_engine(f"sqlite+pysqlite:///{database_path}")
     Base.metadata.create_all(sync_engine)
