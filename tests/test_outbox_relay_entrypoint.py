@@ -15,47 +15,61 @@ from pydantic import SecretStr
 
 from app.config import AppEnvironment, Settings
 from app.entrypoints import outbox_relay
+from app.modules.background_job.service import DispatchResult
 from app.modules.notification.consumer import NotificationConsumerResult
 from app.platform.event_bus.service import RelayResult
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("relay_result", "consumer_result", "exit_code", "saturated"),
+    ("relay_result", "consumer_result", "dispatch_result", "exit_code", "saturated"),
     [
         (
             RelayResult(claimed=1, published=0, failed=1),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
         (
             RelayResult(claimed=1, published=0, failed=0),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
         (
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=0, failed=1),
+            DispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
         (
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
         (
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=1, failed=0),
+            DispatchResult(claimed=1, queued=0, failed=1),
+            1,
+            False,
+        ),
+        (
+            RelayResult(claimed=1, published=1, failed=0),
+            NotificationConsumerResult(pulled=1, acknowledged=1, failed=0),
+            DispatchResult(claimed=1, queued=1, failed=0),
             0,
             False,
         ),
         (
             RelayResult(claimed=100, published=100, failed=0),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
             0,
             True,
         ),
@@ -65,6 +79,7 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     monkeypatch: pytest.MonkeyPatch,
     relay_result: RelayResult,
     consumer_result: NotificationConsumerResult,
+    dispatch_result: DispatchResult,
     exit_code: int,
     saturated: bool,
 ) -> None:
@@ -72,8 +87,10 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     factory = object()
     bus = SimpleNamespace(close=Mock())
     subscriber = SimpleNamespace(close=Mock())
+    task_queue = object()
     relay = AsyncMock(return_value=relay_result)
     consume = AsyncMock(return_value=consumer_result)
+    dispatch = AsyncMock(return_value=dispatch_result)
     span = Mock()
     observability = SimpleNamespace(
         tracer=Mock(),
@@ -85,8 +102,10 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     monkeypatch.setattr(outbox_relay, "create_session_factory", lambda _: factory)
     monkeypatch.setattr(outbox_relay, "GooglePubSubEventBus", lambda *_: bus)
     monkeypatch.setattr(outbox_relay, "GooglePubSubPullSubscriber", lambda *_: subscriber)
+    monkeypatch.setattr(outbox_relay, "GoogleCloudTasksQueue", lambda *_: task_queue)
     monkeypatch.setattr(outbox_relay, "relay_outbox_once", relay)
     monkeypatch.setattr(outbox_relay, "consume_notification_events_once", consume)
+    monkeypatch.setattr(outbox_relay, "dispatch_background_jobs_once", dispatch)
     monkeypatch.setattr(
         outbox_relay,
         "create_observability",
@@ -98,6 +117,11 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
         pubsub_project_id="seqret-test",
         pubsub_topic_id="domain-events",
         pubsub_subscription_id="participant-notifications",
+        gcp_project_id="seqret-test",
+        task_queue_location="asia-northeast3",
+        task_queue_name="seqret-test-media",
+        task_worker_url="https://seqret-test-worker.run.app",
+        task_invoker_service_account_email=("seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"),
     )
 
     assert await outbox_relay.run(settings) == exit_code
@@ -114,6 +138,15 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
         batch_size=100,
         pull_timeout_seconds=10.0,
     )
+    dispatch.assert_awaited_once_with(
+        factory,
+        task_queue,
+        queue_name="seqret-test-media",
+        handler="/tasks/media",
+        batch_size=100,
+        lease_seconds=60,
+        enqueue_timeout_seconds=10.0,
+    )
     bus.close.assert_called_once_with()
     subscriber.close.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
@@ -128,6 +161,9 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
         "pulled": consumer_result.pulled,
         "acknowledged": consumer_result.acknowledged,
         "notification_failed": consumer_result.failed,
+        "background_claimed": dispatch_result.claimed,
+        "background_queued": dispatch_result.queued,
+        "background_failed": dispatch_result.failed,
     }
     if exit_code:
         assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
@@ -144,6 +180,16 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
 async def test_relay_entrypoint_requires_pubsub_configuration() -> None:
     with pytest.raises(RuntimeError, match="Pub/Sub publication and subscription"):
         await outbox_relay.run(Settings(environment=AppEnvironment.TEST))
+
+    with pytest.raises(RuntimeError, match="Cloud Tasks dispatch"):
+        await outbox_relay.run(
+            Settings(
+                environment=AppEnvironment.TEST,
+                pubsub_project_id="seqret-test",
+                pubsub_topic_id="domain-events",
+                pubsub_subscription_id="participant-notifications",
+            )
+        )
 
 
 def test_relay_main_exits_with_run_result(monkeypatch: pytest.MonkeyPatch) -> None:

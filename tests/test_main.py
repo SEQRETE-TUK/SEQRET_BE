@@ -185,6 +185,15 @@ def test_deployed_application_requires_frontend_origin(environment: AppEnvironme
             )
         )
 
+    with pytest.raises(ValueError, match="media storage configuration is required"):
+        create_app(
+            Settings(
+                environment=environment,
+                frontend_origin="https://app.example.com",
+                media_bucket_name="seqret-staging-media",
+            )
+        )
+
 
 def test_healthcheck_reports_runtime_without_secrets() -> None:
     settings = Settings(environment=AppEnvironment.TEST)

@@ -12,10 +12,10 @@ from datetime import timedelta
 from typing import BinaryIO, Protocol, cast
 
 import google.auth
+import google.cloud.storage as storage  # type: ignore[import-untyped]
 from google.api_core import exceptions as google_exceptions
 from google.auth import impersonated_credentials
 from google.auth.credentials import Credentials, Signing
-from google.cloud import storage  # type: ignore[import-untyped]
 
 from app.contracts.ports import (
     ProviderError,

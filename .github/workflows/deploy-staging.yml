@@ -369,19 +369,6 @@ jobs:
             terraform_variables+=("-var=stable_api_revision=${STABLE_REVISION}")
           fi
           state_json="$(terraform -chdir="${TF_ROOT}" show -json)"
-          worker_runtime="$(jq -c '
-            ([.values.root_module.resources[]?
-              | select(.type == "google_cloud_run_v2_service" and .name == "worker")][0]
-              | .values.template[0].containers[0]) as $runtime
-            | if $runtime == null then empty
-              elif (($runtime.command // []) | length) == 0
-                then error("The existing worker runtime has no explicit entrypoint.")
-              else {
-                container_image: $runtime.image,
-                command: $runtime.command,
-                args: ($runtime.args // [])
-              }
-              end' <<< "${state_json}")"
           job_runtime="$(jq -c '
             ([.values.root_module.resources[]?
               | select(.type == "google_cloud_run_v2_job" and .name == "job")][0]
@@ -395,9 +382,6 @@ jobs:
                 args: ($runtime.args // [])
               }
               end' <<< "${state_json}")"
-          if [[ -n "${worker_runtime}" ]]; then
-            terraform_variables+=("-var=worker_runtime=${worker_runtime}")
-          fi
           if [[ -n "${job_runtime}" ]]; then
             terraform_variables+=("-var=job_runtime=${job_runtime}")
           fi

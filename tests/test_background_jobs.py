@@ -36,6 +36,7 @@ from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.background_job.service import (
     BackgroundJobConflictError,
     BackgroundJobNotFoundError,
+    ClaimedBackgroundJob,
     claim_background_jobs,
     complete_media_deletion,
     complete_media_validation,
@@ -742,6 +743,14 @@ async def test_dispatch_leases_validate_inputs_and_recover_after_expiry(
             first,
             provider_task_id="stale-task",
         )
+        assert not await finalize_background_job_dispatch(
+            session,
+            ClaimedBackgroundJob(
+                task=first.task.model_copy(update={"background_job_id": BackgroundJobId(uuid4())}),
+                dispatch_token=first.dispatch_token,
+            ),
+            provider_task_id="missing-task",
+        )
         with pytest.raises(ValueError, match="exactly one"):
             await finalize_background_job_dispatch(session, reclaimed)
         with pytest.raises(ValueError, match="exactly one"):
@@ -755,11 +764,14 @@ async def test_dispatch_leases_validate_inputs_and_recover_after_expiry(
         assert isinstance(reclaimed.task, MediaDeletionTaskV1)
         assert await start_media_deletion(session, reclaimed.task, now=FIXED_NOW) is not None
     async with factory.begin() as session:
-        assert not await finalize_background_job_dispatch(
+        assert await finalize_background_job_dispatch(
             session,
             reclaimed,
             provider_task_id="task",
         )
+    async with factory() as session:
+        started = await session.get(BackgroundJob, reclaimed.task.background_job_id)
+        assert started is not None and started.provider_task_id == "task"
 
     job_id = UUID(created["job"]["id"])
     with pytest.raises(BackgroundJobConflictError):

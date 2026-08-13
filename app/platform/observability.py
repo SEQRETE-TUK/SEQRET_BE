@@ -97,6 +97,9 @@ class JsonFormatter(logging.Formatter):
             "pulled",
             "acknowledged",
             "notification_failed",
+            "background_claimed",
+            "background_queued",
+            "background_failed",
         ):
             value = getattr(record, key, None)
             if isinstance(value, str | int | float):

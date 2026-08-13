@@ -74,6 +74,9 @@ def test_json_formatter_emits_only_safe_correlation_fields() -> None:
                 "pulled": 4,
                 "acknowledged": 3,
                 "notification_failed": 1,
+                "background_claimed": 5,
+                "background_queued": 4,
+                "background_failed": 1,
             },
         )
 
@@ -90,6 +93,9 @@ def test_json_formatter_emits_only_safe_correlation_fields() -> None:
     assert payload["pulled"] == 4
     assert payload["acknowledged"] == 3
     assert payload["notification_failed"] == 1
+    assert payload["background_claimed"] == 5
+    assert payload["background_queued"] == 4
+    assert payload["background_failed"] == 1
     assert "authorization" not in stream.getvalue().lower()
     assert current_correlation() is None
 

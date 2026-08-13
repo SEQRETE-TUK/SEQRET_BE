@@ -2,6 +2,7 @@ resource "google_project_service" "required" {
   for_each = toset([
     "artifactregistry.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtasks.googleapis.com",
     "compute.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -49,6 +50,45 @@ resource "google_service_account" "worker" {
   display_name = "SEQRET ${var.environment} private worker runtime"
 
   depends_on = [google_project_service.required]
+}
+
+resource "google_service_account" "task_invoker" {
+  project      = var.project_id
+  account_id   = local.task_invoker_name
+  display_name = "SEQRET ${var.environment} private worker caller"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "worker_cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_project_iam_member" "worker_trace_writer" {
+  project = var.project_id
+  role    = "roles/telemetry.tracesWriter"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_project_iam_member" "worker_telemetry_consumer" {
+  project = var.project_id
+  role    = "roles/serviceusage.serviceUsageConsumer"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_database" {
+  project   = var.project_id
+  secret_id = var.database_url_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_storage_bucket_iam_member" "worker_media_objects" {
+  bucket = var.media_bucket_name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.worker.email}"
 }
 
 resource "google_service_account" "job" {
@@ -320,8 +360,6 @@ resource "google_cloud_run_v2_job" "migration" {
 }
 
 resource "google_cloud_run_v2_service" "worker" {
-  count = var.worker_runtime == null ? 0 : 1
-
   project             = var.project_id
   name                = local.worker_name
   location            = var.region
@@ -334,7 +372,9 @@ resource "google_cloud_run_v2_service" "worker" {
   }
 
   template {
-    service_account = google_service_account.worker.email
+    service_account                  = google_service_account.worker.email
+    timeout                          = "900s"
+    max_instance_request_concurrency = 1
 
     scaling {
       min_instance_count = 0
@@ -342,9 +382,9 @@ resource "google_cloud_run_v2_service" "worker" {
     }
 
     containers {
-      image   = var.worker_runtime.container_image
-      command = var.worker_runtime.command
-      args    = var.worker_runtime.args
+      image   = var.container_image
+      command = ["python", "-m", "uvicorn", "app.entrypoints.worker:app"]
+      args    = ["--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
       ports {
         name           = "http1"
@@ -352,11 +392,26 @@ resource "google_cloud_run_v2_service" "worker" {
       }
 
       dynamic "env" {
-        for_each = local.runtime_environment
+        for_each = local.worker_environment
         content {
           name  = env.key
           value = env.value
         }
+      }
+
+      env {
+        name = "SEQRET_DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = var.database_url_secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
       }
 
       resources {
@@ -365,10 +420,36 @@ resource "google_cloud_run_v2_service" "worker" {
           memory = "1Gi"
         }
       }
+
+      startup_probe {
+        initial_delay_seconds = 1
+        timeout_seconds       = 3
+        period_seconds        = 3
+        failure_threshold     = 10
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+      }
+    }
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [local.cloud_sql_instance_connection_name]
+      }
     }
   }
 
-  depends_on = [google_project_service.required]
+  depends_on = [
+    google_project_service.required,
+    google_project_service.observability,
+    google_project_iam_member.worker_cloud_sql_client,
+    google_project_iam_member.worker_trace_writer,
+    google_project_iam_member.worker_telemetry_consumer,
+    google_secret_manager_secret_iam_member.worker_database,
+    google_storage_bucket_iam_member.worker_media_objects,
+  ]
 }
 
 resource "google_cloud_run_v2_job" "job" {
@@ -420,8 +501,8 @@ resource "google_cloud_run_v2_job" "job" {
 }
 
 moved {
-  from = google_cloud_run_v2_service.worker
-  to   = google_cloud_run_v2_service.worker[0]
+  from = google_cloud_run_v2_service.worker[0]
+  to   = google_cloud_run_v2_service.worker
 }
 
 moved {

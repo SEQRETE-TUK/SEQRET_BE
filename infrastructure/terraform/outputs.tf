@@ -5,12 +5,12 @@ output "api_service_name" {
 
 output "worker_service_name" {
   description = "Private Cloud Run worker service name."
-  value       = one(google_cloud_run_v2_service.worker[*].name)
+  value       = google_cloud_run_v2_service.worker.name
 }
 
 output "worker_service_uri" {
   description = "Private Cloud Run worker URI."
-  value       = one(google_cloud_run_v2_service.worker[*].uri)
+  value       = google_cloud_run_v2_service.worker.uri
 }
 
 output "job_name" {
@@ -56,5 +56,6 @@ output "runtime_service_accounts" {
     job       = google_service_account.job.email
     migration = google_service_account.migration.email
     relay     = google_service_account.outbox_relay.email
+    task      = google_service_account.task_invoker.email
   }
 }
