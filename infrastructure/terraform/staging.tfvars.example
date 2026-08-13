@@ -17,5 +17,10 @@ monitoring_notification_channel_ids = [
   "projects/PROJECT_ID/notificationChannels/1234567890",
 ]
 
+# Set all three values when the API must reach Memorystore over Direct VPC.
+# redis_url_secret_id   = "seqret-redis-url"
+# redis_vpc_network     = "projects/PROJECT_ID/global/networks/NETWORK"
+# redis_vpc_subnetwork  = "projects/PROJECT_ID/regions/asia-northeast3/subnetworks/SUBNETWORK"
+
 # Replace PROJECT_ID, REPOSITORY and the digest before planning.
 container_image = "asia-northeast3-docker.pkg.dev/PROJECT_ID/REPOSITORY/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"
