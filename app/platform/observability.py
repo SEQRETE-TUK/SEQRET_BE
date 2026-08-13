@@ -85,7 +85,19 @@ class JsonFormatter(logging.Formatter):
         event = getattr(record, "event", None)
         if isinstance(event, str):
             payload["event"] = event
-        for key in ("http_method", "http_route", "http_status", "duration_ms", "outcome"):
+        for key in (
+            "http_method",
+            "http_route",
+            "http_status",
+            "duration_ms",
+            "outcome",
+            "claimed",
+            "published",
+            "relay_failed",
+            "pulled",
+            "acknowledged",
+            "notification_failed",
+        ):
             value = getattr(record, key, None)
             if isinstance(value, str | int | float):
                 payload[key] = value

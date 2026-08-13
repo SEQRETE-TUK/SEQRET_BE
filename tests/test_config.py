@@ -153,14 +153,19 @@ def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
     settings = Settings(
         pubsub_project_id="seqret-test",
         pubsub_topic_id="domain-events.v1",
+        pubsub_subscription_id="participant-notifications.v1",
         outbox_batch_size=25,
         outbox_lease_seconds=30,
         event_publish_timeout_seconds=5,
+        notification_batch_size=20,
+        notification_pull_timeout_seconds=4,
     )
 
     assert settings.pubsub_project_id == "seqret-test"
     assert settings.pubsub_topic_id == "domain-events.v1"
+    assert settings.pubsub_subscription_id == "participant-notifications.v1"
     assert settings.outbox_batch_size == 25
+    assert settings.notification_batch_size == 20
 
 
 @pytest.mark.parametrize(
@@ -168,9 +173,20 @@ def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
     [
         {"pubsub_project_id": "seqret-test"},
         {"pubsub_topic_id": "domain-events"},
+        {"pubsub_subscription_id": "participant-notifications"},
         {"pubsub_project_id": "INVALID", "pubsub_topic_id": "domain-events"},
         {"pubsub_project_id": "seqret-test", "pubsub_topic_id": "no spaces"},
         {"pubsub_project_id": "seqret-test", "pubsub_topic_id": "goog-events"},
+        {
+            "pubsub_project_id": "seqret-test",
+            "pubsub_topic_id": "domain-events",
+            "pubsub_subscription_id": "no spaces",
+        },
+        {
+            "pubsub_project_id": "seqret-test",
+            "pubsub_topic_id": "domain-events",
+            "pubsub_subscription_id": "goog-notifications",
+        },
         {"outbox_lease_seconds": 10, "event_publish_timeout_seconds": 10},
     ],
 )

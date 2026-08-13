@@ -129,7 +129,7 @@ run "staging_runtime_isolation" {
       google_cloud_run_v2_job.outbox_relay.template[0].task_count == 1,
       google_cloud_run_v2_job.outbox_relay.template[0].parallelism == 1,
       google_cloud_run_v2_job.outbox_relay.template[0].template[0].max_retries == 0,
-      google_cloud_run_v2_job.outbox_relay.template[0].template[0].timeout == "60s",
+      google_cloud_run_v2_job.outbox_relay.template[0].template[0].timeout == "240s",
       join(" ", google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].command) == "python -m app.entrypoints.outbox_relay",
       google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql",
       one(google_cloud_run_v2_job.outbox_relay.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == "seqret-staging:asia-northeast3:seqret-stg-db",

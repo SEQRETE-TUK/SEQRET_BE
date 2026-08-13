@@ -1,0 +1,121 @@
+name: Initialize staging notification replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type INITIALIZE_31_DAY_REPLAY
+        required: true
+        type: string
+      container_image:
+        description: Exact digest deployed by the preceding main deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+  EVENT_PUMP_JOB: seqret-stg-relay
+  NOTIFICATION_SUBSCRIPTION: seqret-stg-notify
+  EVENTS_TOPIC: seqret-stg-events
+  CONFIRMATION: ${{ inputs.confirmation }}
+  EXPECTED_CONTAINER_IMAGE: ${{ inputs.container_image }}
+
+jobs:
+  initialize:
+    name: Seek retained events once and run an event-pump smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate protected initialization inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Notification replay initialization must run from main." >&2
+            exit 1
+          fi
+          git fetch --quiet origin main:refs/remotes/origin/main
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo "The checked-out commit must be the current origin/main commit." >&2
+            exit 1
+          fi
+          if [[ "${CONFIRMATION}" != "INITIALIZE_31_DAY_REPLAY" ]]; then
+            echo "The explicit replay confirmation does not match." >&2
+            exit 1
+          fi
+          expected_image_prefix="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/"
+          if [[ "${EXPECTED_CONTAINER_IMAGE}" != "${expected_image_prefix}"* ]] \
+            || [[ ! "${EXPECTED_CONTAINER_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            echo "container_image must be an immutable image in the staging project and region." >&2
+            exit 1
+          fi
+          for variable_name in GCP_PROJECT_ID GCP_REGION GCP_WORKLOAD_IDENTITY_PROVIDER GCP_DEPLOY_SERVICE_ACCOUNT; do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "Required staging variable ${variable_name} is not configured." >&2
+              exit 1
+            fi
+          done
+
+      - name: Authenticate to Google Cloud with OIDC
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Seek the retained topic once
+        shell: bash
+        run: |
+          set -euo pipefail
+          job_image="$(gcloud run jobs describe "${EVENT_PUMP_JOB}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --format=json \
+            | jq -r '
+              .spec.template.spec.template.spec.containers[0].image
+              // .spec.template.spec.containers[0].image
+              // .template.template.containers[0].image
+              // .template.containers[0].image // empty
+            ')"
+          if [[ "${job_image}" != "${EXPECTED_CONTAINER_IMAGE}" ]]; then
+            echo "The relay event-pump Job is not using the confirmed deployment digest." >&2
+            exit 1
+          fi
+          infrastructure/scripts/initialize_notification_replay.sh \
+            "${GCP_PROJECT_ID}" \
+            "${NOTIFICATION_SUBSCRIPTION}" \
+            "${EVENTS_TOPIC}"
+
+      - name: Smoke test the initialized event pump
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${EVENT_PUMP_JOB}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --wait \
+            --quiet

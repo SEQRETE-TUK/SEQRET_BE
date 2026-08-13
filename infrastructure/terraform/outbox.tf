@@ -70,7 +70,7 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
     template {
       service_account = google_service_account.outbox_relay.email
       max_retries     = 0
-      timeout         = "60s"
+      timeout         = "240s"
 
       containers {
         name    = "relay"
@@ -83,6 +83,11 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
             name  = env.key
             value = env.value
           }
+        }
+
+        env {
+          name  = "SEQRET_PUBSUB_SUBSCRIPTION_ID"
+          value = local.notification_subscription_name
         }
 
         env {
@@ -123,6 +128,8 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
     google_project_iam_member.outbox_relay_cloud_sql_client,
     google_project_iam_member.outbox_relay_trace_writer,
     google_project_iam_member.outbox_relay_telemetry_consumer,
+    google_pubsub_subscription_iam_member.outbox_relay_notification_subscriber,
+    google_pubsub_subscription_iam_member.outbox_relay_notification_viewer,
     google_pubsub_topic_iam_member.outbox_relay_publisher,
     google_secret_manager_secret_iam_member.outbox_relay_database,
   ]
