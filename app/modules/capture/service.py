@@ -1,5 +1,6 @@
 """Capture session and storage-port application commands."""
 
+import secrets
 from datetime import timedelta
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -11,6 +12,7 @@ from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.contracts.primitives import utc_now
+from app.modules.background_job.service import create_media_validation_background_job
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
     CaptureSessionResponse,
@@ -218,6 +220,13 @@ async def complete_media_upload(
     if asset is None:
         raise CaptureResourceNotFoundError(media_asset_id)
     if asset.status is MediaAssetStatus.UPLOADED:
+        await create_media_validation_background_job(
+            session,
+            job_id,
+            asset.id,
+            participant_id,
+            trace_id=trace_id or secrets.token_hex(16),
+        )
         return _asset_response(asset)
     if asset.status is not MediaAssetStatus.PENDING_UPLOAD:
         raise MediaUploadStateConflictError(media_asset_id)
@@ -254,15 +263,30 @@ async def complete_media_upload(
         )
     ).one()
     if asset.status is MediaAssetStatus.UPLOADED:
+        await create_media_validation_background_job(
+            session,
+            job_id,
+            asset.id,
+            participant_id,
+            trace_id=trace_id or secrets.token_hex(16),
+        )
         return _asset_response(asset)
     if asset.status is not MediaAssetStatus.PENDING_UPLOAD:
         raise MediaUploadStateConflictError(media_asset_id)
 
     asset.status = MediaAssetStatus.UPLOADED
     asset.actual_size_bytes = metadata.size_bytes
-    asset.sha256_hex = metadata.sha256_hex
+    asset.sha256_hex = None
     asset.generation = metadata.generation
     asset.uploaded_at = utc_now()
+    operation_trace_id = trace_id or secrets.token_hex(16)
+    await create_media_validation_background_job(
+        session,
+        job_id,
+        asset.id,
+        participant_id,
+        trace_id=operation_trace_id,
+    )
     if asset.media_purpose is MediaPurpose.COMPLETION:
         add_audit_event(
             session,
@@ -280,7 +304,7 @@ async def complete_media_upload(
             DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
             job_id,
             actor_id=participant_id,
-            trace_id=trace_id,
+            trace_id=operation_trace_id,
             payload={
                 "capture_session_id": str(capture_session_id),
                 "media_asset_id": str(asset.id),

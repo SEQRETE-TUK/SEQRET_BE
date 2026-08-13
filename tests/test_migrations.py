@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_08_0002"
+ALEMBIC_HEAD = "int_03_0001"
+ALEMBIC_MEDIA_VALIDATION_PREVIOUS = "a_08_0002"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
@@ -120,7 +121,8 @@ def test_audit_invariants_on_sqlite(
 
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_AUDIT_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_MEDIA_VALIDATION_PREVIOUS
+        command.upgrade(configuration, "head")
     finally:
         engine.dispose()
 
@@ -243,6 +245,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             "background_job_execution_deadline",
             "background_job_generation_present",
             "background_job_status",
+            "background_job_target_shape",
         } <= background_checks
         background_indexes = {
             index["name"] for index in inspect(engine).get_indexes("background_job")
@@ -426,6 +429,23 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         assert preserved_generation == "7"
 
+        command.upgrade(configuration, "head")
+        migrated_metadata = MetaData()
+        migrated_metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "location",
+                "room_zone",
+                "capture_session",
+                "media_asset",
+                "outbox_event",
+                "scope_version",
+                "background_job",
+            ),
+        )
+
         invalid_media_assets = (
             {
                 "status": "PENDING_UPLOAD",
@@ -485,6 +505,42 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert _current_revision(engine) == ALEMBIC_OPERATIONAL_EVENT_PREVIOUS
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["background_job"].delete())
+
+        command.upgrade(configuration, "head")
+        migrated_metadata = MetaData()
+        migrated_metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "location",
+                "room_zone",
+                "capture_session",
+                "media_asset",
+                "outbox_event",
+                "scope_version",
+                "background_job",
+            ),
+        )
+        validation_background_job = valid_background_job | {
+            "id": uuid4().hex,
+            "job_type": "MEDIA_VALIDATION",
+            "target_content_type": "image/jpeg",
+            "target_size_bytes": 10,
+        }
+        with engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["background_job"].insert(),
+                validation_background_job,
+            )
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_MEDIA_VALIDATION_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.begin() as connection:
+            connection.execute(migrated_metadata.tables["background_job"].delete())
+        command.downgrade(configuration, ALEMBIC_MEDIA_VALIDATION_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_MEDIA_VALIDATION_PREVIOUS
+        command.upgrade(configuration, "head")
 
         command.downgrade(configuration, ALEMBIC_OUTBOX_PREVIOUS)
         assert "outbox_event" not in inspect(engine).get_table_names()

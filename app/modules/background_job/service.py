@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, or_, select
@@ -16,6 +17,10 @@ from app.contracts.maintenance import (
     MediaDeletionResultV1,
     MediaDeletionTaskV1,
     MediaDeletionWorkV1,
+    MediaValidationOutcome,
+    MediaValidationResultV1,
+    MediaValidationTaskV1,
+    MediaValidationWorkV1,
 )
 from app.contracts.media import MediaAssetStatus
 from app.contracts.ports import ProviderError, TaskQueuePort
@@ -58,7 +63,7 @@ class BackgroundJobConflictError(ValueError):
 class ClaimedBackgroundJob:
     """One task and lease token carried outside the claim transaction."""
 
-    task: MediaDeletionTaskV1
+    task: MediaDeletionTaskV1 | MediaValidationTaskV1
     dispatch_token: UUID
 
 
@@ -171,6 +176,60 @@ async def create_retention_background_job(
     return _response(row)
 
 
+async def create_media_validation_background_job(
+    session: AsyncSession,
+    job_id: UUID,
+    media_asset_id: UUID,
+    participant_id: UUID,
+    *,
+    trace_id: str,
+    scheduled_at: datetime | None = None,
+) -> BackgroundJobResponse:
+    """Persist exactly one generation-pinned validation intent for an uploaded asset."""
+
+    asset = await session.scalar(
+        select(MediaAsset).where(MediaAsset.id == media_asset_id).with_for_update()
+    )
+    if asset is None:
+        raise BackgroundJobNotFoundError(media_asset_id)
+    asset_job_id = await session.scalar(
+        select(CaptureSession.job_id).where(CaptureSession.id == asset.capture_session_id)
+    )
+    if asset_job_id != job_id:
+        raise BackgroundJobNotFoundError(media_asset_id)
+    existing = await session.scalar(
+        select(BackgroundJob).where(
+            BackgroundJob.job_type == BackgroundJobType.MEDIA_VALIDATION,
+            BackgroundJob.media_asset_id == asset.id,
+        )
+    )
+    if existing is not None:
+        return _response(existing)
+    if (
+        asset.status is not MediaAssetStatus.UPLOADED
+        or not asset.generation
+        or asset.generation != asset.generation.strip()
+        or asset.actual_size_bytes is None
+    ):
+        raise BackgroundJobConflictError(asset.id)
+
+    row = BackgroundJob(
+        move_job_id=job_id,
+        media_asset_id=asset.id,
+        job_type=BackgroundJobType.MEDIA_VALIDATION,
+        target_object_key=asset.object_key,
+        target_generation=asset.generation,
+        target_content_type=asset.content_type,
+        target_size_bytes=asset.actual_size_bytes,
+        trace_id=trace_id,
+        scheduled_at=scheduled_at or utc_now(),
+        created_by_participant_id=participant_id,
+    )
+    session.add(row)
+    await session.flush()
+    return _response(row)
+
+
 async def list_background_jobs(
     session: AsyncSession,
     job_id: UUID,
@@ -210,6 +269,18 @@ async def retry_background_job(
     )
     if row.status is not BackgroundJobStatus.FAILED and not execution_expired:
         raise BackgroundJobConflictError(background_job_id)
+
+    if row.job_type is BackgroundJobType.MEDIA_VALIDATION:
+        asset = (
+            await session.scalars(
+                select(MediaAsset).where(MediaAsset.id == row.media_asset_id).with_for_update()
+            )
+        ).one()
+        if execution_expired:
+            if asset.status is not MediaAssetStatus.PROCESSING:
+                raise BackgroundJobConflictError(background_job_id)
+            asset.status = MediaAssetStatus.FAILED
+            asset.sha256_hex = None
 
     row.status = BackgroundJobStatus.PENDING
     row.scheduled_at = operation_time
@@ -262,16 +333,20 @@ async def claim_background_jobs(
         row.status = BackgroundJobStatus.DISPATCHING
         row.dispatch_token = token
         row.dispatch_locked_until = claimed_at + timedelta(seconds=lease_seconds)
-        claims.append(
-            ClaimedBackgroundJob(
-                task=MediaDeletionTaskV1(
-                    background_job_id=BackgroundJobId(row.id),
-                    attempt_count=row.attempt_count,
-                    trace_id=row.trace_id,
-                ),
-                dispatch_token=token,
+        task = (
+            MediaValidationTaskV1(
+                background_job_id=BackgroundJobId(row.id),
+                attempt_count=row.attempt_count,
+                trace_id=row.trace_id,
+            )
+            if row.job_type is BackgroundJobType.MEDIA_VALIDATION
+            else MediaDeletionTaskV1(
+                background_job_id=BackgroundJobId(row.id),
+                attempt_count=row.attempt_count,
+                trace_id=row.trace_id,
             )
         )
+        claims.append(ClaimedBackgroundJob(task=task, dispatch_token=token))
     await session.flush()
     return tuple(claims)
 
@@ -389,6 +464,145 @@ def _work(row: BackgroundJob) -> MediaDeletionWorkV1:
     )
 
 
+def _validation_work(row: BackgroundJob) -> MediaValidationWorkV1:
+    return MediaValidationWorkV1(
+        background_job_id=BackgroundJobId(row.id),
+        attempt_count=row.attempt_count,
+        object_key=row.target_object_key,
+        source_generation=row.target_generation,
+        expected_content_type=cast(str, row.target_content_type),
+        expected_size_bytes=cast(int, row.target_size_bytes),
+    )
+
+
+async def start_media_validation(
+    session: AsyncSession,
+    task: MediaValidationTaskV1,
+    *,
+    now: datetime | None = None,
+    execution_timeout_seconds: int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
+) -> MediaValidationWorkV1 | None:
+    """Start or replay one current validation attempt without exposing A-owned rows."""
+
+    if execution_timeout_seconds <= 0:
+        raise ValueError("execution_timeout_seconds must be positive")
+    selected = (
+        await session.execute(
+            select(BackgroundJob, MediaAsset)
+            .join(MediaAsset, MediaAsset.id == BackgroundJob.media_asset_id)
+            .where(BackgroundJob.id == task.background_job_id)
+            .with_for_update()
+        )
+    ).one_or_none()
+    if selected is None:
+        raise BackgroundJobNotFoundError(task.background_job_id)
+    row, asset = selected
+    if (
+        row.job_type is not BackgroundJobType.MEDIA_VALIDATION
+        or row.attempt_count != task.attempt_count
+        or row.trace_id != task.trace_id
+    ):
+        raise BackgroundJobNotFoundError(task.background_job_id)
+    if row.status in {BackgroundJobStatus.SUCCEEDED, BackgroundJobStatus.FAILED}:
+        return None
+    if row.status is BackgroundJobStatus.RUNNING:
+        if asset.status is not MediaAssetStatus.PROCESSING:
+            raise BackgroundJobConflictError(task.background_job_id)
+        return _validation_work(row)
+    if row.status not in {BackgroundJobStatus.DISPATCHING, BackgroundJobStatus.QUEUED}:
+        raise BackgroundJobConflictError(task.background_job_id)
+    if (
+        asset.status not in {MediaAssetStatus.UPLOADED, MediaAssetStatus.FAILED}
+        or asset.object_key != row.target_object_key
+        or asset.generation != row.target_generation
+        or asset.content_type != row.target_content_type
+        or asset.actual_size_bytes != row.target_size_bytes
+    ):
+        raise BackgroundJobConflictError(task.background_job_id)
+
+    row.dispatch_token = None
+    row.dispatch_locked_until = None
+    row.status = BackgroundJobStatus.RUNNING
+    row.execution_deadline_at = (now or utc_now()) + timedelta(seconds=execution_timeout_seconds)
+    asset.status = MediaAssetStatus.PROCESSING
+    asset.sha256_hex = None
+    await session.flush()
+    return _validation_work(row)
+
+
+async def complete_media_validation(
+    session: AsyncSession,
+    result: MediaValidationResultV1,
+    *,
+    completed_at: datetime | None = None,
+) -> BackgroundJobResponse:
+    """Apply one attempt-scoped validation result and asset state atomically."""
+
+    selected = (
+        await session.execute(
+            select(BackgroundJob, MediaAsset)
+            .join(MediaAsset, MediaAsset.id == BackgroundJob.media_asset_id)
+            .where(BackgroundJob.id == result.background_job_id)
+            .with_for_update()
+        )
+    ).one_or_none()
+    if selected is None:
+        raise BackgroundJobNotFoundError(result.background_job_id)
+    row, asset = selected
+    if (
+        row.job_type is not BackgroundJobType.MEDIA_VALIDATION
+        or row.attempt_count != result.attempt_count
+        or row.target_generation != result.source_generation
+        or asset.object_key != row.target_object_key
+        or asset.generation != row.target_generation
+        or asset.content_type != row.target_content_type
+        or asset.actual_size_bytes != row.target_size_bytes
+    ):
+        raise BackgroundJobConflictError(result.background_job_id)
+    if result.outcome is MediaValidationOutcome.SUCCEEDED and (
+        result.observed_content_type != row.target_content_type
+        or result.observed_size_bytes != row.target_size_bytes
+    ):
+        raise BackgroundJobConflictError(result.background_job_id)
+    if row.status in {BackgroundJobStatus.SUCCEEDED, BackgroundJobStatus.FAILED}:
+        same_result = (
+            row.status is BackgroundJobStatus.SUCCEEDED
+            and result.outcome is MediaValidationOutcome.SUCCEEDED
+            and asset.sha256_hex == result.sha256_hex
+        ) or (
+            row.status is BackgroundJobStatus.FAILED
+            and result.outcome is MediaValidationOutcome.FAILED
+            and result.error_kind is not None
+            and row.last_error_code == result.error_kind.value
+        )
+        if not same_result:
+            raise BackgroundJobConflictError(result.background_job_id)
+        return _response(row)
+    if (
+        row.status is not BackgroundJobStatus.RUNNING
+        or asset.status is not MediaAssetStatus.PROCESSING
+    ):
+        raise BackgroundJobConflictError(result.background_job_id)
+
+    row.completed_at = completed_at or utc_now()
+    row.execution_deadline_at = None
+    if result.outcome is MediaValidationOutcome.FAILED:
+        assert result.error_kind is not None
+        row.status = BackgroundJobStatus.FAILED
+        row.last_error_code = result.error_kind.value
+        asset.status = MediaAssetStatus.FAILED
+        asset.sha256_hex = None
+    else:
+        assert result.sha256_hex is not None
+        row.status = BackgroundJobStatus.SUCCEEDED
+        asset.status = MediaAssetStatus.READY
+        asset.generation = result.source_generation
+        asset.actual_size_bytes = cast(int, result.observed_size_bytes)
+        asset.sha256_hex = result.sha256_hex
+    await session.flush()
+    return _response(row)
+
+
 async def start_media_deletion(
     session: AsyncSession,
     task: MediaDeletionTaskV1,
@@ -442,7 +656,10 @@ async def complete_media_deletion(
     if selected is None:
         raise BackgroundJobNotFoundError(result.background_job_id)
     row, asset = selected
-    if row.attempt_count != result.attempt_count:
+    if (
+        row.job_type is not BackgroundJobType.MEDIA_RETENTION_DELETE
+        or row.attempt_count != result.attempt_count
+    ):
         raise BackgroundJobConflictError(result.background_job_id)
     if row.status in {BackgroundJobStatus.SUCCEEDED, BackgroundJobStatus.FAILED}:
         same_result = (
