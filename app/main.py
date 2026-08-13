@@ -20,6 +20,7 @@ from app.platform.cache import create_redis_cache
 from app.platform.db import create_database_engine, create_session_factory
 from app.platform.http_observability import HttpObservabilityMiddleware
 from app.platform.observability import create_observability
+from app.platform.storage.gcs import GoogleCloudStorage
 from app.runtime import RuntimeKind, create_runtime_context
 
 
@@ -32,6 +33,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         and runtime_context.settings.frontend_origin is None
     ):
         raise ValueError("frontend_origin is required for a deployed API")
+    if (
+        runtime_context.settings.environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
+        and runtime_context.settings.media_bucket_name is None
+    ):
+        raise ValueError("media storage configuration is required for a deployed API")
     observability = create_observability(runtime_context)
     expose_api_docs = runtime_context.settings.environment is not AppEnvironment.PRODUCTION
 
@@ -47,6 +53,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cache = create_redis_cache(runtime_context.settings)
                 resources.push_async_callback(cache.close)
                 app.state.cache_port = cache
+            if runtime_context.settings.media_bucket_name is not None:
+                app.state.storage_port = GoogleCloudStorage(
+                    runtime_context.settings.media_bucket_name,
+                    signing_service_account_email=(
+                        runtime_context.settings.storage_signing_service_account_email
+                    ),
+                )
             yield
 
     application = FastAPI(
@@ -62,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.observability = observability
     application.state.cache_port = None
     application.state.database_session_factory = None
+    application.state.storage_port = None
     application.include_router(system_router)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(access_router, prefix=runtime_context.settings.api_prefix)

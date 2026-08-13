@@ -30,7 +30,7 @@
 
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
-- 현재 `main`은 `GoogleCloudStorage`를 production `app.state.storage_port`에 wiring하지 않으므로 media upload/read URL route는 배포 환경에서 `503`을 반환한다.
+- 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
 - canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `d3d33a4`(`chore: initial project setup`)다. Next.js 16·React 19 UI 데모만 있고 API client·환경변수·`/api/v1`·Bearer 연동이 없으며 PR, Actions run, deployment와 environment도 없다. FE가 배포됐다고 간주하지 않는다.
 - 로컬 `C:\Users\geonh\Desktop\SEQRET_FE`는 canonical 저장소가 아닌 `SEQRETE/FE.git`을 가리키고 사용자 소유 미추적 `README.md`가 있어 수정·push하지 않았다. `docs/TECH_STACK.md`의 Vite·TanStack 기준과 실제 FE도 다르므로 먼저 기술 결정을 맞춘다.
 
@@ -42,7 +42,7 @@
 
 ## 외부 활성화 전 확인
 
-- **GCS:** private bucket, runtime의 URL 서명 권한과 객체 create/get/delete 권한, 실제 FE origin의 bucket CORS를 준비한다. bucket 이름·timeout 설정과 `GoogleCloudStorage` wiring이 병합된 뒤 adapter contract와 브라우저 upload를 검증한다.
+- **GCS:** 기존 private bucket과 `MEDIA_BUCKET_NAME`을 준비하고 실제 FE origin의 bucket CORS를 설정한다. Terraform은 API runtime에 URL 서명과 객체 create/get 권한만 연결한다. 물리 삭제 runtime의 delete 권한은 B-02/B-07 활성화 때 별도로 부여한다.
 - **Redis:** `REDIS_URL_SECRET_ID`, `REDIS_VPC_NETWORK`, `REDIS_VPC_SUBNETWORK`을 함께 설정한다. 같은 region의 기존 `/26` 이상 subnet, Memorystore authorized network와 Cloud Run service-agent network 권한을 확인하고, 배포 후 Memorystore metric으로 실제 연결을 증명한다.
 - **DB 역할:** API, migration, Outbox relay와 recovery가 현재 같은 `DATABASE_URL_SECRET_ID`를 사용한다. `audit_event` mutation trigger는 이 owner의 일반 DML도 거부하지만 owner는 DDL로 우회할 수 있으므로 tamper-proof 권한 경계로 간주하지 않는다. 별도 DB 사용자·grant·Secret ID와 자격증명이 외부에서 준비되기 전에는 Terraform secret만 나누지 않는다.
 - **DB 연결 경보:** Cloud SQL `num_backends` 임계치는 승인된 instance `max_connections`와 connection budget이 정해진 뒤 추가한다. 임의 임계치로 경보를 만들지 않는다.

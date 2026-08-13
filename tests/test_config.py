@@ -171,6 +171,28 @@ def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
 @pytest.mark.parametrize(
     "values",
     [
+        {"media_bucket_name": "seqret-stg-media"},
+        {
+            "storage_signing_service_account_email": "seqret-stg-api@seqret-staging.iam.gserviceaccount.com"
+        },
+        {
+            "media_bucket_name": "INVALID",
+            "storage_signing_service_account_email": "seqret-stg-api@seqret-staging.iam.gserviceaccount.com",
+        },
+        {
+            "media_bucket_name": "seqret-stg-media",
+            "storage_signing_service_account_email": "not-a-service-account@example.com",
+        },
+    ],
+)
+def test_settings_reject_incomplete_or_invalid_media_storage(values: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
         {"pubsub_project_id": "seqret-test"},
         {"pubsub_topic_id": "domain-events"},
         {"pubsub_subscription_id": "participant-notifications"},

@@ -36,6 +36,11 @@ FRONTEND_HOST_PATTERN = re.compile(
     r"\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
 PUBSUB_TOPIC_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._~+%-]{2,254}$")
+MEDIA_BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{1,61}[a-z0-9])$")
+SERVICE_ACCOUNT_EMAIL_PATTERN = re.compile(
+    r"^[a-z][a-z0-9-]{4,28}[a-z0-9]@"
+    r"[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$"
+)
 
 
 class Settings(BaseSettings):
@@ -77,6 +82,8 @@ class Settings(BaseSettings):
     notification_batch_size: int = Field(default=100, ge=1, le=100)
     notification_pull_timeout_seconds: float = Field(default=10.0, gt=0, le=30.0)
     media_retention_days: int | None = Field(default=None, ge=1, le=3_650)
+    media_bucket_name: str | None = Field(default=None, min_length=3, max_length=63)
+    storage_signing_service_account_email: str | None = Field(default=None, max_length=100)
     otel_enabled: bool = False
     otel_exporter_otlp_traces_endpoint: AnyHttpUrl | None = None
     otel_trace_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
@@ -157,6 +164,25 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.pubsub_subscription_id is not None and self.pubsub_topic_id is None:
             msg = "pubsub_subscription_id requires pubsub_project_id and pubsub_topic_id"
+            raise ValueError(msg)
+        if (self.media_bucket_name is None) != (self.storage_signing_service_account_email is None):
+            msg = (
+                "media_bucket_name and storage_signing_service_account_email "
+                "must be configured together"
+            )
+            raise ValueError(msg)
+        if (
+            self.media_bucket_name is not None
+            and MEDIA_BUCKET_NAME_PATTERN.fullmatch(self.media_bucket_name) is None
+        ):
+            msg = "media_bucket_name must be a canonical Cloud Storage bucket name"
+            raise ValueError(msg)
+        if (
+            self.storage_signing_service_account_email is not None
+            and SERVICE_ACCOUNT_EMAIL_PATTERN.fullmatch(self.storage_signing_service_account_email)
+            is None
+        ):
+            msg = "storage_signing_service_account_email must be a service-account email"
             raise ValueError(msg)
         if (
             self.pubsub_project_id is not None

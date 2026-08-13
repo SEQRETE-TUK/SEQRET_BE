@@ -4,10 +4,12 @@ resource "google_project_service" "required" {
     "cloudscheduler.googleapis.com",
     "compute.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
     "pubsub.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "sqladmin.googleapis.com",
+    "storage.googleapis.com",
   ])
 
   project            = var.project_id
@@ -21,6 +23,24 @@ resource "google_service_account" "api" {
   display_name = "SEQRET ${var.environment} API runtime"
 
   depends_on = [google_project_service.required]
+}
+
+resource "google_storage_bucket_iam_member" "api_media_object_creator" {
+  bucket = var.media_bucket_name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_storage_bucket_iam_member" "api_media_object_viewer" {
+  bucket = var.media_bucket_name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_service_account_iam_member" "api_self_token_creator" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.api_name}@${var.project_id}.iam.gserviceaccount.com"
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.api.email}"
 }
 
 resource "google_service_account" "worker" {
@@ -166,8 +186,11 @@ resource "google_cloud_run_v2_service" "api" {
     google_project_iam_member.api_trace_writer,
     google_project_iam_member.api_telemetry_consumer,
     google_project_iam_member.api_cloud_sql_client,
+    google_service_account_iam_member.api_self_token_creator,
     google_secret_manager_secret_iam_member.api_database,
     google_secret_manager_secret_iam_member.api_redis,
+    google_storage_bucket_iam_member.api_media_object_creator,
+    google_storage_bucket_iam_member.api_media_object_viewer,
   ]
 }
 

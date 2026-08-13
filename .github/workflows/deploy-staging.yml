@@ -24,6 +24,7 @@ env:
   ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY }}
   API_DOMAIN: ${{ vars.API_DOMAIN }}
   FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
+  MEDIA_BUCKET_NAME: ${{ vars.MEDIA_BUCKET_NAME }}
   DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
   CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
@@ -73,6 +74,7 @@ jobs:
             ARTIFACT_REPOSITORY
             API_DOMAIN
             FRONTEND_ORIGIN
+            MEDIA_BUCKET_NAME
             DATABASE_URL_SECRET_ID
             CLOUD_SQL_SOURCE_INSTANCE
             MEDIA_RETENTION_DAYS
@@ -94,6 +96,10 @@ jobs:
           fi
           if [[ ! "${FRONTEND_ORIGIN}" =~ ^https://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
             echo "FRONTEND_ORIGIN must be one canonical HTTPS origin without a port or path." >&2
+            exit 1
+          fi
+          if [[ ! "${MEDIA_BUCKET_NAME}" =~ ^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$ ]]; then
+            echo "MEDIA_BUCKET_NAME must be a 3 to 63 character lowercase Cloud Storage bucket name." >&2
             exit 1
           fi
           if [[ ! "${CLOUD_SQL_SOURCE_INSTANCE}" =~ ^[a-z]([a-z0-9-]{0,96}[a-z0-9])?$ ]]; then
@@ -182,6 +188,7 @@ jobs:
             -var="environment=staging" \
             -var="api_domain=${API_DOMAIN}" \
             -var="frontend_origin=${FRONTEND_ORIGIN}" \
+            -var="media_bucket_name=${MEDIA_BUCKET_NAME}" \
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
             -var="container_image=${placeholder_image}" \
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
@@ -294,6 +301,7 @@ jobs:
             -var="environment=staging"
             -var="api_domain=${API_DOMAIN}"
             -var="frontend_origin=${FRONTEND_ORIGIN}"
+            -var="media_bucket_name=${MEDIA_BUCKET_NAME}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
@@ -337,6 +345,7 @@ jobs:
             -var="environment=staging"
             -var="api_domain=${API_DOMAIN}"
             -var="frontend_origin=${FRONTEND_ORIGIN}"
+            -var="media_bucket_name=${MEDIA_BUCKET_NAME}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
@@ -674,6 +683,7 @@ jobs:
               -var="environment=staging" \
               -var="api_domain=${API_DOMAIN}" \
               -var="frontend_origin=${FRONTEND_ORIGIN}" \
+              -var="media_bucket_name=${MEDIA_BUCKET_NAME}" \
               -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
               -var="container_image=${CONTAINER_IMAGE}" \
               -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \

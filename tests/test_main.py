@@ -177,6 +177,14 @@ def test_deployed_application_requires_frontend_origin(environment: AppEnvironme
     with pytest.raises(ValueError, match="frontend_origin is required"):
         create_app(Settings(environment=environment))
 
+    with pytest.raises(ValueError, match="media storage configuration is required"):
+        create_app(
+            Settings(
+                environment=environment,
+                frontend_origin="https://app.example.com",
+            )
+        )
+
 
 def test_healthcheck_reports_runtime_without_secrets() -> None:
     settings = Settings(environment=AppEnvironment.TEST)
@@ -266,10 +274,18 @@ def test_streaming_error_does_not_start_a_second_response() -> None:
     assert response.headers["x-request-id"]
 
 
-def test_production_application_disables_api_documentation_routes() -> None:
+def test_production_application_uses_storage_and_disables_documentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = Mock()
+    monkeypatch.setattr("app.main.GoogleCloudStorage", Mock(return_value=storage))
     settings = Settings(
         environment=AppEnvironment.PRODUCTION,
         frontend_origin="https://app.example.com",
+        media_bucket_name="seqret-production-media",
+        storage_signing_service_account_email=(
+            "seqret-prd-api@seqret-production.iam.gserviceaccount.com"
+        ),
     )
     application = create_app(settings)
 
@@ -278,6 +294,7 @@ def test_production_application_disables_api_documentation_routes() -> None:
     assert application.openapi_url is None
 
     with TestClient(application) as client:
+        assert application.state.storage_port is storage
         assert client.get("/docs").status_code == 404
         assert client.get("/redoc").status_code == 404
         assert client.get("/openapi.json").status_code == 404
