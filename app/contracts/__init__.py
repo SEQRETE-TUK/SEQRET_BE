@@ -9,6 +9,10 @@ from app.contracts.maintenance import (
     MediaDeletionResultV1,
     MediaDeletionTaskV1,
     MediaDeletionWorkV1,
+    MediaValidationOutcome,
+    MediaValidationResultV1,
+    MediaValidationTaskV1,
+    MediaValidationWorkV1,
 )
 from app.contracts.media import MediaAssetRef, MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
@@ -67,6 +71,10 @@ __all__ = [
     "MediaDeletionTaskV1",
     "MediaDeletionWorkV1",
     "MediaPurpose",
+    "MediaValidationOutcome",
+    "MediaValidationResultV1",
+    "MediaValidationTaskV1",
+    "MediaValidationWorkV1",
     "ObjectStoragePort",
     "ParticipantId",
     "ParticipantRole",

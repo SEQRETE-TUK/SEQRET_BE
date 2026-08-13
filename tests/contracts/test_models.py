@@ -10,12 +10,19 @@ from app.contracts import (
     ActorContext,
     ActorKind,
     AggregateId,
+    BackgroundJobId,
+    BackgroundJobType,
     DomainEvent,
     DomainEventType,
     EventId,
     JobId,
+    MediaValidationOutcome,
+    MediaValidationResultV1,
+    MediaValidationTaskV1,
+    MediaValidationWorkV1,
     ParticipantId,
     ParticipantRole,
+    ProviderErrorKind,
     RequestId,
 )
 
@@ -246,3 +253,148 @@ def test_documented_v1_event_payloads_reject_drift_and_invalid_values(
 def test_trace_id_requires_lowercase_hex(trace_id: str) -> None:
     with pytest.raises(ValidationError):
         _actor_context(trace_id=trace_id)
+
+
+def _validation_result(**overrides: object) -> MediaValidationResultV1:
+    values: dict[str, object] = {
+        "background_job_id": BackgroundJobId(uuid4()),
+        "attempt_count": 1,
+        "source_generation": "7",
+        "outcome": MediaValidationOutcome.SUCCEEDED,
+        "observed_content_type": "image/jpeg",
+        "observed_size_bytes": 12,
+        "sha256_hex": "a" * 64,
+    }
+    values.update(overrides)
+    return MediaValidationResultV1.model_validate(values)
+
+
+def test_media_validation_task_and_work_keep_provider_details_scoped() -> None:
+    background_job_id = BackgroundJobId(uuid4())
+    task = MediaValidationTaskV1(
+        background_job_id=background_job_id,
+        attempt_count=2,
+        trace_id="0123456789abcdef0123456789abcdef",
+    )
+    work = MediaValidationWorkV1(
+        background_job_id=background_job_id,
+        attempt_count=2,
+        object_key="jobs/1/captures/1/photo.jpg",
+        source_generation="7",
+        expected_content_type="image/jpeg",
+        expected_size_bytes=12,
+    )
+
+    assert task.model_dump(mode="json") == {
+        "schema_version": 1,
+        "background_job_id": str(background_job_id),
+        "job_type": BackgroundJobType.MEDIA_VALIDATION.value,
+        "attempt_count": 2,
+        "trace_id": "0123456789abcdef0123456789abcdef",
+    }
+    assert work.model_dump(mode="json") == {
+        "schema_version": 1,
+        "background_job_id": str(background_job_id),
+        "attempt_count": 2,
+        "object_key": "jobs/1/captures/1/photo.jpg",
+        "source_generation": "7",
+        "expected_content_type": "image/jpeg",
+        "expected_size_bytes": 12,
+    }
+    assert "photo.jpg" not in repr(work)
+
+
+def test_media_validation_result_accepts_exact_success_and_failure_shapes() -> None:
+    succeeded = _validation_result()
+    failed = _validation_result(
+        outcome=MediaValidationOutcome.FAILED,
+        observed_content_type=None,
+        observed_size_bytes=None,
+        sha256_hex=None,
+        error_kind=ProviderErrorKind.INVALID_INPUT,
+    )
+
+    assert succeeded.model_dump(mode="json") == {
+        "schema_version": 1,
+        "background_job_id": str(succeeded.background_job_id),
+        "attempt_count": 1,
+        "source_generation": "7",
+        "outcome": "succeeded",
+        "observed_content_type": "image/jpeg",
+        "observed_size_bytes": 12,
+        "sha256_hex": "a" * 64,
+        "error_kind": None,
+    }
+    assert failed.model_dump(mode="json") == {
+        "schema_version": 1,
+        "background_job_id": str(failed.background_job_id),
+        "attempt_count": 1,
+        "source_generation": "7",
+        "outcome": "failed",
+        "observed_content_type": None,
+        "observed_size_bytes": None,
+        "sha256_hex": None,
+        "error_kind": "invalid_input",
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"observed_content_type": None},
+        {"error_kind": ProviderErrorKind.CONFLICT},
+        {
+            "outcome": MediaValidationOutcome.FAILED,
+            "observed_content_type": None,
+            "observed_size_bytes": None,
+            "sha256_hex": None,
+        },
+        {
+            "outcome": MediaValidationOutcome.FAILED,
+            "error_kind": ProviderErrorKind.INVALID_INPUT,
+        },
+    ],
+)
+def test_media_validation_result_rejects_mixed_terminal_shapes(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="media validation results require"):
+        _validation_result(**overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_generation": ""},
+        {"source_generation": " "},
+        {"source_generation": "7" * 256},
+        {"sha256_hex": "a" * 63},
+        {"sha256_hex": "A" * 64},
+        {"sha256_hex": "g" * 64},
+    ],
+)
+def test_media_validation_result_rejects_invalid_generation_and_hash(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        _validation_result(**overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_generation": " 7"},
+        {"observed_content_type": "image/jpeg "},
+        {"sha256_hex": f"{'a' * 64} "},
+    ],
+)
+def test_media_validation_result_rejects_padded_provider_values_before_normalization(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="must not contain surrounding whitespace"):
+        _validation_result(**overrides)
+
+
+def test_media_validation_result_rejects_non_object_input() -> None:
+    with pytest.raises(ValidationError):
+        MediaValidationResultV1.model_validate([])
