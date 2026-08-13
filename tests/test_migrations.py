@@ -17,11 +17,13 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_09_0002"
+ALEMBIC_MAIN_HEAD = "a_09_0002"
+ALEMBIC_HEAD = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
+    "ai_analysis_run",
     "background_job",
     "capture_session",
     "job_participant",
@@ -36,6 +38,7 @@ BUSINESS_TABLES = {
     "change_request_evidence",
     "completion_confirmation",
     "completion_evidence",
+    "detection",
     "audit_event",
     "outbox_event",
     "event_consumption",
@@ -102,7 +105,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
 
-        command.upgrade(configuration, ALEMBIC_PREVIOUS)
+        command.upgrade(configuration, ALEMBIC_MAIN_HEAD)
         probe_metadata.create_all(engine)
         command.upgrade(configuration, "head")
 
@@ -321,7 +324,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
-        assert _current_revision(engine) == "a_12_0001"
+        assert _current_revision(engine) == ALEMBIC_HEAD
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["background_job"].delete())
 

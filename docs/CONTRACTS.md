@@ -55,6 +55,13 @@
 - `completion_media_submitted.v1`: 문자열 `capture_session_id`, 문자열 `media_asset_id`, 문자열 `room_zone_id`
 - `media_deleted.v1`: 문자열 `background_job_id`, 문자열 `media_asset_id`
 
+## AI 분석 실행
+
+- `ai_analysis_run`과 `detection`은 사람이 검토할 파생 초안만 저장한다. B는 `scope_version`을 생성·수정·잠금하지 않고, 확정 범위 반영은 A의 `ImportAnalysisDraft` command만 수행한다.
+- `analysis_run_id`가 실행 멱등성 key다. start·complete·fail은 해당 run을 잠그며, 같은 start·결과·오류 replay는 no-op이고 capture session이나 terminal 결과가 다르면 `AnalysisRunConflictError`다.
+- B-03의 기존 run start는 terminal 상태에서도 no-op이다. 새 attempt를 여는 명시적 retry와 stale attempt 차단 token은 worker retry 정책을 소유하는 B-06에서 추가한다.
+- analysis run이 생성된 뒤에는 파생 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
+
 ## 미디어 보존 작업
 
 - 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 완료 확인과 삭제 작업 생성 API는 fail-closed로 동작한다.
