@@ -34,6 +34,17 @@
 
 - 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부된 `READY` 상태의 `change_evidence` 미디어와 저장된 generation만 허용한다.
 
+## 미디어 검증 작업
+
+- A는 `MEDIA_VALIDATION` background job의 생성·attempt·상태 전이를 소유하고, B는 A ORM 대신 version 1 task·work·result 계약과 후속 application command만 사용한다.
+- `MediaValidationTaskV1` queue payload는 `background_job_id`, `job_type`, `attempt_count`, `schema_version`, `trace_id`만 포함한다. object key와 미디어 ID는 queue에 넣지 않는다.
+- 후속 A command가 반환할 `MediaValidationWorkV1`은 object key, source generation, 기대 MIME type·크기를 한 attempt의 immutable 입력으로 고정한다. B는 반드시 그 generation의 객체만 읽는다.
+- `MediaValidationResultV1`은 성공 시 관측 MIME type·크기와 64자 소문자 SHA-256을 모두 포함하고 오류를 포함하지 않는다. 실패 시 관측 metadata·hash 없이 정제된 `ProviderErrorKind` 하나만 포함한다. B는 A 소유 `MediaAssetStatus`를 결과로 결정하지 않는다.
+- 후속 A command는 result의 generation과 관측 MIME type·크기를 work snapshot과 비교해야 한다. 성공 시 result의 source generation과 SHA-256을 asset에 저장하고 `READY`로 전이하며, 실패 시 `FAILED`로 전이하는 처리를 같은 transaction에서 수행해야 한다.
+- result 멱등성 key는 `(background_job_id, attempt_count)`다. source generation이 다르거나 같은 attempt의 terminal 결과가 상충하면 후속 A command가 거부해야 한다.
+- 이 계약은 파생 파일 형식·저장 모델을 추정하지 않는다. 해당 제품 정책이 확정되면 별도 versioned 계약으로 추가한다.
+- merge 순서는 이 공용 계약 → A의 background job·`UPLOADED → PROCESSING → READY|FAILED` command와 migration → B-05 handler → B-02 private worker wiring → INT-03의 `READY` 증거 강제다. runtime 전에는 상태를 즉시 `READY`로 바꾸지 않는다.
+
 ## Event envelope
 
 `DomainEvent`는 `event_id`, version이 포함된 `event_type`, `schema_version`, `aggregate_id`, `occurred_at`, 선택적 `actor_id`, `trace_id`, JSON `payload`로 구성한다. consumer는 `event_id`를 기준으로 중복 처리를 막는다.
