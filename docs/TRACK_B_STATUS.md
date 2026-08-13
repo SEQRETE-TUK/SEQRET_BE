@@ -12,9 +12,9 @@
 
 | ID | 작업 | 상태 | 막는 것 / 선행 | 산출물 |
 |---|---|---|---|---|
-| **B-01** | GCS StoragePort adapter | 🚫 | **의존성 PR**: `google-cloud-storage` (공용 lockfile) | — |
+| **B-01** | GCS StoragePort adapter | ✅ | (없음) | PR #39 병합 완료 |
 | **B-02** | Cloud Tasks adapter + worker runtime | 🚫 | **의존성 PR**: `google-cloud-tasks` + Cloud Tasks 큐/OIDC 인프라(A) | — |
-| **B-03** | AnalysisRun + fake AI pipeline | ✅ | (없음) | `feat/b-03-analysis-run` (push됨, PR 대기) |
+| **B-03** | AnalysisRun + fake AI pipeline | 🟡 | migration 순서 조정·A 리뷰 | PR #35 |
 
 **B-03 상세:** `app/modules/analysis/{models,service}.py`. 검증: ruff/mypy strict/12 tests/모듈 branch 100%/alembic 단일 head `b_03_0001`. A 리뷰 필요: `alembic/env.py`·마이그레이션·`ALEMBIC_HEAD`. ⚠️ postgres migration은 CI 검증 필요.
 
@@ -27,7 +27,7 @@
 | **B-04** | Vertex AI/Gemini adapter | 🚫 | **의존성 PR**: `google-cloud-aiplatform` + `aiplatform.user` IAM(A). B-03✅ 위에서 진행 | — |
 | **B-05** | 미디어 검증 + 파생 처리(썸네일) | 🚫 | B-01 선행 + Pillow/ffmpeg **의존성** | — |
 | **B-06** | worker 멱등성 + 오류 매핑 | 🚫 | B-02 + B-04 선행 | — |
-| **B-07** | GCS 삭제 + 장시간 Job handler | ✅🟡 | (핸들러 완료 / 런타임 배선은 B-02 인프라) | `feat/b-07-media-deletion-handler` (push됨, PR 대기) |
+| **B-07** | GCS 삭제 + 장시간 Job handler | 🟡 | 핸들러 완료 / 런타임 배선은 B-02 인프라 | PR #36 |
 
 **B-07 상세:** `app/modules/media_processing/deletion.py`. 검증: ruff/mypy strict/3 tests/핸들러 branch 100%. 공용파일·마이그레이션·새 의존성 0. **남은 것:** Cloud Run Job 런타임(=B-02)에서 이 핸들러를 실제 호출하는 배선.
 
@@ -49,19 +49,18 @@
 
 ## 한눈에 요약
 
-- **완료(2):** B-03 ✅, B-07 ✅(핸들러) — 둘 다 A-독립, push 완료, PR 대기
-- **A-독립으로 더 가능한 것:** 현재 **없음** — 나머지 B는 전부 GCP SDK 의존성 또는 B-01/B-02에 막힘
-- **잠금 해제 열쇠 🔑:** **GCP SDK 의존성 PR** (`google-cloud-storage` / `google-cloud-tasks` / `google-cloud-aiplatform`)
-  - 공용 lockfile이라 A와 **merge 순서만 합의**하면 B가 올릴 수 있음
-  - 이게 병합되면 → B-01, B-02, B-04 착수 가능 → 이어서 B-05/B-06 → INT-01/INT-06
+- **병합 완료:** B-01 PR #39
+- **리뷰 중:** B-03 PR #35, B-07 PR #36
+- **의존성:** GCS SDK PR #37은 병합 완료. Cloud Tasks·Vertex AI SDK와 A 인프라는 아직 필요
+- **다음 순서:** B-01 → B-07 런타임 배선, B-02·B-04 → B-06 → INT-01/INT-06
 
 ## 의존성 흐름
 
 ```
-[GCP SDK 의존성 PR]  ──┬─→ B-01 ─┬─→ B-05
-                       │         └─→ B-07 런타임 배선
-                       ├─→ B-02 ─┬─→ B-06 ─┐
-                       └─→ B-04 ─┴─────────┼─→ INT-06
-                                B-04 ──────┴─→ INT-01
-B-03 ✅ ─────────────────────────────────────→ INT-01
+[GCS SDK #37 + B-01 #39 ✅] ─┬─→ B-05
+                            └─→ B-07 런타임 배선
+[Cloud Tasks SDK + A 인프라] ─→ B-02 ─┬─→ B-06 ─┐
+[Vertex AI SDK] ───────────────→ B-04 ─┴─────────┼─→ INT-06
+                                      B-04 ──────┴─→ INT-01
+B-03 #35 ──────────────────────────────────────────→ INT-01
 ```
