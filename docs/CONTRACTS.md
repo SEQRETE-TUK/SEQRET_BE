@@ -86,6 +86,7 @@
 - consumer는 `(consumer_name, event_id)` receipt를 먼저 기록하고, 같은 event의 중복 효과를 만들지 않는다.
 - Outbox 실패는 정제된 오류 분류와 시도 횟수만 저장하고 1초부터 최대 300초까지 지수 backoff로 다시 시도한다. payload나 provider 오류 원문은 운영 오류 필드에 복제하지 않는다.
 - `outbox_event`는 현재 지원하는 `schema_version = 1`과 JSON object payload만 저장한다. event별 정확한 payload shape 검증은 `DomainEvent` 계약이 담당한다.
+- Outbox·알림·소비 receipt가 하나라도 생성된 뒤에는 운영 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 schema를 유지한 채 이전 application revision으로 되돌린다.
 
 ## 오류와 호환성
 
