@@ -30,7 +30,7 @@
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 현재 `main`은 `GoogleCloudStorage`를 production `app.state.storage_port`에 wiring하지 않으므로 media upload/read URL route는 배포 환경에서 `503`을 반환한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `d3d33a4`(`chore: initial project setup`)다. Next.js 16·React 19 UI 데모만 있고 API client·환경변수·`/api/v1`·Bearer 연동이 없으며 PR, Actions run, deployment와 environment도 없다. FE가 배포됐다고 간주하지 않는다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `d3d33a4`(`chore: initial project setup`)다. [FE-01 Draft PR #1](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/1)은 Next.js 16·React 19 UI 상태 데모이며 `pnpm lint`와 `pnpm build`를 통과했다. API client·환경변수·`/api/v1`·Bearer 연동은 없고 Actions run, deployment와 environment도 없으므로 FE가 배포됐다고 간주하지 않는다.
 - 로컬 `C:\Users\geonh\Desktop\SEQRET_FE`는 canonical 저장소가 아닌 `SEQRETE/FE.git`을 가리키고 사용자 소유 미추적 `README.md`가 있어 수정·push하지 않았다. `docs/TECH_STACK.md`의 Vite·TanStack 기준과 실제 FE도 다르므로 먼저 기술 결정을 맞춘다.
 
 ## B 트랙 인계
