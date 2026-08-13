@@ -221,6 +221,40 @@ resource "google_monitoring_alert_policy" "outbox_relay_failures" {
   depends_on = [google_project_service.observability]
 }
 
+resource "google_monitoring_alert_policy" "outbox_relay_saturation" {
+  project               = var.project_id
+  display_name          = "${local.outbox_relay_name} batch saturation"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "WARNING"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "Outbox relay reached its configured batch limit"
+    condition_matched_log {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_run_job\"",
+        "resource.labels.job_name=\"${local.outbox_relay_name}\"",
+        "resource.labels.location=\"${var.region}\"",
+        "jsonPayload.event=\"outbox_relay_batch_saturated\"",
+      ])
+    }
+  }
+
+  alert_strategy {
+    auto_close = "1800s"
+    notification_rate_limit {
+      period = "900s"
+    }
+  }
+  documentation {
+    subject   = "${local.outbox_relay_name} reached its batch limit"
+    content   = "A successful execution claimed the configured maximum batch. Inspect repeated executions before increasing capacity; one saturated batch does not prove that rows remain."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
 resource "google_monitoring_alert_policy" "api_uptime" {
   project               = var.project_id
   display_name          = "${local.api_name} external uptime"

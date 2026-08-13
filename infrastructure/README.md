@@ -90,7 +90,7 @@ If cancellation or runner loss prevents cleanup, first look up the latest `CLONE
 
 The API emits JSON logs containing `request_id`, `trace_id`, optional `job_id`, route, status, and duration. Request headers, query strings, bodies, tokens, addresses, and signed URLs are not recorded. W3C `traceparent` is accepted for correlation while local sampling limits export volume. Traces are exported to the Google Telemetry API.
 
-Cloud Monitoring includes request-rate, p95-latency and job-result charts, a 99% rolling 30-day non-5xx request SLO, and alerts for API 5xx responses, p95 latency, failed media jobs, failed or missing Outbox relay executions, and failed external `/edgez` checks. That endpoint uses the ordinary policy path, so a closed default policy is reported as unavailable.
+Cloud Monitoring includes request-rate, p95-latency and job-result charts, a 99% rolling 30-day non-5xx request SLO, and alerts for API 5xx responses, p95 latency, failed media jobs, failed or missing Outbox relay executions, saturated Outbox relay batches, and failed external `/edgez` checks. A saturated batch only means the relay claimed its configured limit; repeated warnings are the signal to inspect backlog and capacity. The `/edgez` endpoint uses the ordinary policy path, so a closed default policy is reported as unavailable.
 
 The public HTTPS proxy enforces the managed `MODERN` profile with TLS 1.2 as its minimum. Artifact Registry deploys by immutable digest while repository cleanup remains in dry-run: versions older than 90 days are deletion candidates and the newest 50 versions are retained. Review the provider cleanup audit logs before changing dry-run to active deletion.
 
