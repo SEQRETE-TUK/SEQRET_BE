@@ -74,6 +74,14 @@ class MediaAsset(Base):
             "status IN ('PENDING_UPLOAD', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'DELETED')",
             name="media_asset_status",
         ),
+        CheckConstraint(
+            "(status = 'PENDING_UPLOAD' AND actual_size_bytes IS NULL "
+            "AND sha256_hex IS NULL AND generation IS NULL AND uploaded_at IS NULL) OR "
+            "(status <> 'PENDING_UPLOAD' AND actual_size_bytes IS NOT NULL "
+            "AND generation IS NOT NULL AND length(trim(generation)) > 0 "
+            "AND uploaded_at IS NOT NULL)",
+            name="media_asset_metadata_state",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

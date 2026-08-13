@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -105,6 +106,9 @@ async def _seed_analysis(factory: AnalysisDatabase) -> AnalysisSeed:
             object_key=f"analysis/{uuid4()}",
             content_type="image/jpeg",
             expected_size_bytes=10,
+            actual_size_bytes=10,
+            generation="1",
+            uploaded_at=datetime.now(UTC),
         )
         asset_b = MediaAsset(
             capture_session_id=capture.id,
@@ -114,6 +118,9 @@ async def _seed_analysis(factory: AnalysisDatabase) -> AnalysisSeed:
             object_key=f"analysis/{uuid4()}",
             content_type="image/jpeg",
             expected_size_bytes=10,
+            actual_size_bytes=10,
+            generation="2",
+            uploaded_at=datetime.now(UTC),
         )
         session.add_all((asset_a, asset_b))
         await session.flush()
@@ -308,6 +315,9 @@ async def test_analysis_import_rejects_invalid_capture_items_and_media(
         pending = await session.get(MediaAsset, asset_a_id)
         assert pending is not None
         pending.status = MediaAssetStatus.PENDING_UPLOAD
+        pending.actual_size_bytes = None
+        pending.generation = None
+        pending.uploaded_at = None
         await session.flush()
         with pytest.raises(AnalysisDraftInvalidError):
             await import_analysis_draft(session, job_id, result_with(valid_item))

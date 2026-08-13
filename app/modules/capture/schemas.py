@@ -53,6 +53,9 @@ class MediaUploadResponse(ContractModel):
     model_config = ConfigDict(str_strip_whitespace=False)
 
     asset: MediaAssetResponse
-    upload_url: Annotated[str, Field(min_length=1, repr=False)]
+    upload_url: Annotated[
+        str,
+        Field(min_length=1, repr=False, json_schema_extra={"format": "uri"}),
+    ]
     upload_headers: Annotated[dict[str, str], Field(min_length=1, repr=False)]
     expires_at: datetime

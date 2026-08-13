@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from httpx2 import ASGITransport, AsyncClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -603,14 +603,26 @@ async def test_change_evidence_read_url_hides_resources_and_rejects_unreadable_m
             assert asset is not None
             asset.media_purpose = MediaPurpose.CHANGE_EVIDENCE
             asset.status = unreadable_status
+            if unreadable_status is MediaAssetStatus.PENDING_UPLOAD:
+                asset.actual_size_bytes = None
+                asset.sha256_hex = None
+                asset.generation = None
+                asset.uploaded_at = None
+            else:
+                asset.actual_size_bytes = 10
+                asset.generation = "7"
+                asset.uploaded_at = datetime.now(UTC)
         assert (await client.get(read_url, headers=customer_headers)).status_code == 409
 
     for invalid_generation in (None, " "):
         async with factory.begin() as session:
+            await session.execute(text("PRAGMA ignore_check_constraints = ON"))
             asset = await session.get(MediaAsset, UUID(evidence_id))
             assert asset is not None
             asset.status = MediaAssetStatus.READY
             asset.generation = invalid_generation
+            await session.flush()
+            await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
         assert (await client.get(read_url, headers=customer_headers)).status_code == 409
 
     async with factory.begin() as session:
