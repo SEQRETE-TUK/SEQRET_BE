@@ -60,6 +60,17 @@ resource "google_cloud_run_v2_service" "api" {
     execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
     max_instance_request_concurrency = 3
 
+    dynamic "vpc_access" {
+      for_each = var.redis_url_secret_id != null && var.redis_vpc_network != null ? [true] : []
+      content {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network    = var.redis_vpc_network
+          subnetwork = var.redis_vpc_subnetwork
+        }
+      }
+    }
+
     containers {
       name    = "api"
       image   = var.container_image

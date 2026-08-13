@@ -181,6 +181,36 @@ variable "redis_url_secret_id" {
   }
 }
 
+variable "redis_vpc_network" {
+  description = "Optional existing VPC network used by the API for direct Redis egress."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      (
+        var.redis_url_secret_id == null &&
+        var.redis_vpc_network == null &&
+        var.redis_vpc_subnetwork == null
+      ) ||
+      (
+        var.redis_url_secret_id != null &&
+        try(trimspace(var.redis_vpc_network) != "", false) &&
+        try(trimspace(var.redis_vpc_subnetwork) != "", false)
+      )
+    )
+    error_message = "redis_url_secret_id, redis_vpc_network, and redis_vpc_subnetwork must all be null or all be non-empty."
+  }
+}
+
+variable "redis_vpc_subnetwork" {
+  description = "Optional existing same-region subnet used by the API for direct Redis egress."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
 variable "monitoring_notification_channel_ids" {
   description = "Existing Cloud Monitoring notification channel resource names."
   type        = list(string)

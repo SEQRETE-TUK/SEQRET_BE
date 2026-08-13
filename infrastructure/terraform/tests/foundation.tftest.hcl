@@ -80,6 +80,11 @@ run "staging_runtime_isolation" {
   }
 
   assert {
+    condition     = length(google_cloud_run_v2_service.api.template[0].vpc_access) == 0
+    error_message = "The API must not use VPC egress when Redis is not configured."
+  }
+
+  assert {
     condition = length(toset([
       google_service_account.api.account_id,
       google_service_account.worker.account_id,
@@ -450,6 +455,68 @@ run "integration_runtimes_require_explicit_contracts" {
     ])
     error_message = "B-owned runtimes must keep their explicit images and exclude A-owned settings."
   }
+}
+
+run "redis_secret_without_vpc_is_rejected" {
+  command = plan
+
+  variables {
+    redis_url_secret_id = "seqret-redis-url"
+  }
+
+  expect_failures = [var.redis_vpc_network]
+}
+
+run "redis_vpc_without_secret_is_rejected" {
+  command = plan
+
+  variables {
+    redis_vpc_network    = "projects/seqret-staging/global/networks/seqret-stg"
+    redis_vpc_subnetwork = "projects/seqret-staging/regions/asia-northeast3/subnetworks/seqret-stg-run"
+  }
+
+  expect_failures = [var.redis_vpc_network]
+}
+
+run "redis_direct_vpc_is_exact" {
+  command = plan
+
+  variables {
+    redis_url_secret_id  = "seqret-redis-url"
+    redis_vpc_network    = "projects/seqret-staging/global/networks/seqret-stg"
+    redis_vpc_subnetwork = "projects/seqret-staging/regions/asia-northeast3/subnetworks/seqret-stg-run"
+  }
+
+  assert {
+    condition = alltrue([
+      length(google_cloud_run_v2_service.api.template[0].vpc_access) == 1,
+      google_cloud_run_v2_service.api.template[0].vpc_access[0].egress == "PRIVATE_RANGES_ONLY",
+      length(google_cloud_run_v2_service.api.template[0].vpc_access[0].network_interfaces) == 1,
+      google_cloud_run_v2_service.api.template[0].vpc_access[0].network_interfaces[0].network == var.redis_vpc_network,
+      google_cloud_run_v2_service.api.template[0].vpc_access[0].network_interfaces[0].subnetwork == var.redis_vpc_subnetwork,
+    ])
+    error_message = "Redis must add exactly one private-ranges-only Direct VPC interface to the API."
+  }
+}
+
+run "redis_network_without_subnetwork_is_rejected" {
+  command = plan
+
+  variables {
+    redis_vpc_network = "projects/seqret-staging/global/networks/seqret-stg"
+  }
+
+  expect_failures = [var.redis_vpc_network]
+}
+
+run "redis_subnetwork_without_network_is_rejected" {
+  command = plan
+
+  variables {
+    redis_vpc_subnetwork = "projects/seqret-staging/regions/asia-northeast3/subnetworks/seqret-stg-run"
+  }
+
+  expect_failures = [var.redis_vpc_network]
 }
 
 run "invalid_observability_inputs_are_rejected" {

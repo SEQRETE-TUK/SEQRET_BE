@@ -28,6 +28,8 @@ env:
   CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
   REDIS_URL_SECRET_ID: ${{ vars.REDIS_URL_SECRET_ID }}
+  REDIS_VPC_NETWORK: ${{ vars.REDIS_VPC_NETWORK }}
+  REDIS_VPC_SUBNETWORK: ${{ vars.REDIS_VPC_SUBNETWORK }}
   MONITORING_NOTIFICATION_CHANNELS: ${{ vars.MONITORING_NOTIFICATION_CHANNELS }}
   CANARY_PERCENT: "10"
   SERVICE: seqret-stg-api
@@ -101,6 +103,11 @@ jobs:
           if [[ ! "${MEDIA_RETENTION_DAYS}" =~ ^[1-9][0-9]{0,3}$ ]] || \
             (( 10#${MEDIA_RETENTION_DAYS} > 3650 )); then
             echo "MEDIA_RETENTION_DAYS must be a whole number from 1 through 3650." >&2
+            exit 1
+          fi
+          if [[ -n "${REDIS_URL_SECRET_ID}" || -n "${REDIS_VPC_NETWORK}" || -n "${REDIS_VPC_SUBNETWORK}" ]] && \
+            [[ -z "${REDIS_URL_SECRET_ID}" || -z "${REDIS_VPC_NETWORK}" || -z "${REDIS_VPC_SUBNETWORK}" ]]; then
+            echo "REDIS_URL_SECRET_ID, REDIS_VPC_NETWORK, and REDIS_VPC_SUBNETWORK must be configured together." >&2
             exit 1
           fi
           IFS=',' read -ra channels <<< "${MONITORING_NOTIFICATION_CHANNELS}"
@@ -298,6 +305,12 @@ jobs:
           if [[ -n "${REDIS_URL_SECRET_ID}" ]]; then
             terraform_variables+=("-var=redis_url_secret_id=${REDIS_URL_SECRET_ID}")
           fi
+          if [[ -n "${REDIS_VPC_NETWORK}" ]]; then
+            terraform_variables+=(
+              "-var=redis_vpc_network=${REDIS_VPC_NETWORK}"
+              "-var=redis_vpc_subnetwork=${REDIS_VPC_SUBNETWORK}"
+            )
+          fi
           terraform -chdir="${TF_ROOT}" apply \
             -lock-timeout=5m \
             -auto-approve \
@@ -336,6 +349,12 @@ jobs:
           )
           if [[ -n "${REDIS_URL_SECRET_ID}" ]]; then
             terraform_variables+=("-var=redis_url_secret_id=${REDIS_URL_SECRET_ID}")
+          fi
+          if [[ -n "${REDIS_VPC_NETWORK}" ]]; then
+            terraform_variables+=(
+              "-var=redis_vpc_network=${REDIS_VPC_NETWORK}"
+              "-var=redis_vpc_subnetwork=${REDIS_VPC_SUBNETWORK}"
+            )
           fi
           if [[ -n "${STABLE_REVISION}" ]]; then
             terraform_variables+=("-var=stable_api_revision=${STABLE_REVISION}")
