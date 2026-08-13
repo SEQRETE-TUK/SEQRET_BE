@@ -73,6 +73,13 @@
 - B-03의 기존 run start는 terminal 상태에서도 no-op이다. 새 attempt를 여는 명시적 retry와 stale attempt 차단 token은 worker retry 정책을 소유하는 B-06에서 추가한다.
 - analysis run이 생성된 뒤에는 파생 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
 
+## 완료와 감사 이력
+
+- 유효한 access link의 `last_used_at`이 처음 기록되는 인증 transaction은 `PARTICIPANT_CONNECTED` 감사 event를 정확히 한 번 함께 기록한다. 이후 같은 link 사용은 시각만 갱신한다.
+- `PARTICIPANT_CONNECTED`의 actor는 해당 참여자이며 payload는 문자열 `access_link_id`, 문자열 `participant_id`, 역할 `role`만 포함한다. bearer secret, token hash와 request 식별자는 넣지 않는다.
+- `audit_event`는 DB에서 UPDATE·DELETE를 거부하고 PostgreSQL에서는 TRUNCATE도 거부한다. application에는 수정·삭제 command를 두지 않는다.
+- 감사 event, 완료 확인 또는 완료 증거가 하나라도 생성된 뒤에는 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 schema를 유지한 채 이전 application revision으로 되돌린다.
+
 ## 미디어 보존 작업
 
 - 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 완료 확인과 삭제 작업 생성 API는 fail-closed로 동작한다.

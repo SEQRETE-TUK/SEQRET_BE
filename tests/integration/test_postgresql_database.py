@@ -1,5 +1,6 @@
 """PostgreSQL integration tests for migrations and async connectivity."""
 
+import logging
 import os
 import sys
 from asyncio import Barrier, Event, SelectorEventLoop, create_task, gather, wait_for
@@ -16,7 +17,7 @@ from alembic.config import Config
 from pydantic import SecretStr
 from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import URL, Engine, make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
@@ -42,6 +43,7 @@ from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.service import (
     InvalidAccessTokenError,
     _increment_database_rate_window,
+    authenticate_access_token,
     load_access_link,
     revoke_access_link,
     rotate_access_link,
@@ -114,7 +116,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_09_0003"
+ALEMBIC_HEAD = "a_08_0002"
+ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
@@ -306,7 +309,7 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             engine.dispose()
 
 
-def test_postgresql_operational_event_rows_block_schema_downgrade() -> None:
+def test_postgresql_event_history_guards() -> None:
     url = _test_database_url()
     with _isolated_test_schema(url) as schema_url:
         engine = create_engine(schema_url)
@@ -330,7 +333,7 @@ def test_postgresql_operational_event_rows_block_schema_downgrade() -> None:
 
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
-            assert _current_revision(engine) == ALEMBIC_HEAD
+            assert _current_revision(engine) == ALEMBIC_AUDIT_PREVIOUS
             with engine.begin() as connection:
                 assert (
                     connection.scalar(
@@ -344,6 +347,47 @@ def test_postgresql_operational_event_rows_block_schema_downgrade() -> None:
             command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
             assert _current_revision(engine) == ALEMBIC_OPERATIONAL_EVENT_PREVIOUS
             command.upgrade(configuration, "head")
+            assert _current_revision(engine) == ALEMBIC_HEAD
+            job_id = uuid4()
+            audit_event_id = uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO move_job "
+                        "(id, title, status, created_at, updated_at) "
+                        "VALUES (:id, :title, 'DRAFT', :created_at, :created_at)"
+                    ),
+                    {
+                        "id": job_id,
+                        "title": "append-only audit",
+                        "created_at": datetime.now(UTC),
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO audit_event "
+                        "(id, job_id, event_type, payload, occurred_at) "
+                        "VALUES (:id, :job_id, 'JOB_CREATED', '{}', :occurred_at)"
+                    ),
+                    {
+                        "id": audit_event_id,
+                        "job_id": job_id,
+                        "occurred_at": datetime.now(UTC),
+                    },
+                )
+
+            for mutation in (
+                "UPDATE audit_event SET payload = '{\"changed\": true}'",
+                "DELETE FROM audit_event",
+                "TRUNCATE audit_event",
+            ):
+                with pytest.raises(DBAPIError, match="append-only"), engine.begin() as connection:
+                    connection.execute(text(mutation))
+
+            with engine.connect() as connection:
+                assert connection.scalar(text("SELECT id FROM audit_event")) == audit_event_id
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(configuration, ALEMBIC_AUDIT_PREVIOUS)
             assert _current_revision(engine) == ALEMBIC_HEAD
         finally:
             engine.dispose()
@@ -446,7 +490,7 @@ async def test_database_rate_fallback_increments_atomically_on_postgresql() -> N
 
 
 @pytest.mark.anyio
-async def test_concurrent_access_link_revocation_records_one_audit_on_postgresql() -> None:
+async def test_concurrent_access_link_use_and_revocation_record_one_audit_each() -> None:
     url = _test_database_url()
     with _isolated_test_schema(url) as schema_url:
         command.upgrade(_alembic_config(schema_url), "head")
@@ -480,8 +524,26 @@ async def test_concurrent_access_link_revocation_records_one_audit_on_postgresql
         try:
             async with transactional_session(factory) as session:
                 created = await create_move_job(session, command_data)
-                access_link_id = created.access_links[0].id
-                actor_participant_id = created.access_links[0].participant_id
+                access_link = created.access_links[0]
+                access_link_id = access_link.id
+                actor_participant_id = access_link.participant_id
+
+            authentication_barrier = Barrier(2)
+
+            async def authenticate() -> None:
+                async with transactional_session(factory) as session:
+                    await wait_for(authentication_barrier.wait(), timeout=5)
+                    await authenticate_access_token(
+                        session,
+                        access_link.secret,
+                        cache=None,
+                        logger=logging.getLogger(__name__),
+                        rate_limit_requests=100,
+                        rate_limit_window_seconds=60,
+                        cache_timeout_seconds=0.1,
+                    )
+
+            await wait_for(gather(authenticate(), authenticate()), timeout=10)
 
             revoke_barrier = Barrier(2)
 
@@ -504,9 +566,24 @@ async def test_concurrent_access_link_revocation_records_one_audit_on_postgresql
 
             assert stored is not None
             assert stored.revoked_at is not None
+            assert stored.last_used_at is not None
+            assert stored.rate_window_count == 2
             assert [event.event_type for event in events].count(
                 AuditEventType.ACCESS_LINK_REVOKED
             ) == 1
+            connected_events = [
+                event
+                for event in events
+                if event.event_type is AuditEventType.PARTICIPANT_CONNECTED
+            ]
+            assert len(connected_events) == 1
+            assert connected_events[0].actor_participant_id == access_link.participant_id
+            assert connected_events[0].payload == {
+                "access_link_id": str(access_link.id),
+                "participant_id": str(access_link.participant_id),
+                "role": access_link.role.value,
+            }
+            assert access_link.secret not in repr(connected_events[0].payload)
         finally:
             await engine.dispose()
 
@@ -1063,6 +1140,26 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
         finally:
             await engine.dispose()
 
+        guard_engine = create_engine(schema_url)
+        try:
+            with guard_engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE audit_event DISABLE TRIGGER audit_event_append_only")
+                )
+                connection.execute(text("DELETE FROM audit_event"))
+                connection.execute(
+                    text("ALTER TABLE audit_event ENABLE TRIGGER audit_event_append_only")
+                )
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(_alembic_config(schema_url), ALEMBIC_AUDIT_PREVIOUS)
+            assert _current_revision(guard_engine) == ALEMBIC_HEAD
+            with guard_engine.connect() as connection:
+                assert connection.scalar(text("SELECT count(*) FROM audit_event")) == 0
+                assert connection.scalar(text("SELECT count(*) FROM completion_confirmation")) == 2
+                assert connection.scalar(text("SELECT count(*) FROM completion_evidence")) == 2
+        finally:
+            guard_engine.dispose()
+
 
 @pytest.mark.anyio
 async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
@@ -1261,15 +1358,17 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
                 connection.execute(text("DELETE FROM event_consumption"))
                 connection.execute(text("DELETE FROM notification_delivery"))
                 connection.execute(text("DELETE FROM outbox_event"))
-            command.downgrade(_alembic_config(schema_url), ALEMBIC_ANALYSIS_PREVIOUS)
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(_alembic_config(schema_url), ALEMBIC_ANALYSIS_PREVIOUS)
+            assert _current_revision(downgraded_engine) == ALEMBIC_HEAD
             scope_version = Table("scope_version", MetaData(), autoload_with=downgraded_engine)
             with downgraded_engine.connect() as connection:
-                restored_creator = connection.scalar(
+                preserved_creator = connection.scalar(
                     select(scope_version.c.created_by_participant_id).where(
                         scope_version.c.id == imported.id
                     )
                 )
-            assert restored_creator == customer.id
+            assert preserved_creator is None
         finally:
             downgraded_engine.dispose()
 
