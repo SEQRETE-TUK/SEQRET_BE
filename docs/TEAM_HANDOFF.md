@@ -55,6 +55,6 @@
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-위 실행은 source SHA `329d386`의 deploy·rollback·PITR 절차 증적이다. 현재 기능 기준 `main`은 그 이후 A·B 코드와 migration을 포함하므로 staging image·schema가 같다고 간주하지 않는다. 다음 배포와 복구 훈련은 최신 `main`에서 다시 실행하고 workflow summary의 source SHA와 image digest를 증거로 남긴다.
+Deploy는 `329d386`, rollback은 `f1d454a`, roll-forward와 PITR은 `9bb6b9e`에서 실행한 증적이다. 현재 기능 기준 `main`은 그 이후 A·B 코드와 migration을 포함하므로 staging image·schema가 같다고 간주하지 않는다. 다음 배포와 복구 훈련은 최신 `main`에서 다시 실행하고 workflow summary의 source SHA와 image digest를 증거로 남긴다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.
