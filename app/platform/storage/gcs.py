@@ -10,7 +10,10 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Protocol, cast
 
+import google.auth
 from google.api_core import exceptions as google_exceptions
+from google.auth import impersonated_credentials
+from google.auth.credentials import Credentials, Signing
 from google.cloud import storage  # type: ignore[import-untyped]
 
 from app.contracts.ports import (
@@ -20,6 +23,8 @@ from app.contracts.ports import (
     StorageUploadTarget,
 )
 from app.contracts.primitives import IdempotencyKey
+
+CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 
 class Blob(Protocol):
@@ -38,6 +43,7 @@ class Blob(Protocol):
         content_type: str | None = None,
         generation: str | None = None,
         headers: dict[str, str] | None = None,
+        credentials: Signing | None = None,
     ) -> str: ...
 
     def reload(self, *, timeout: float) -> None: ...
@@ -83,10 +89,19 @@ class GoogleCloudStorage:
         self,
         bucket_name: str,
         *,
+        signing_service_account_email: str | None = None,
         client_factory: Callable[[], StorageClient] | None = None,
     ) -> None:
         factory = client_factory or (lambda: cast(StorageClient, storage.Client()))
         self._bucket = factory().bucket(bucket_name)
+        self._signing_credentials: Signing | None = None
+        if signing_service_account_email is not None:
+            source_credentials: Credentials = google.auth.default(scopes=(CLOUD_PLATFORM_SCOPE,))[0]
+            self._signing_credentials = impersonated_credentials.Credentials(
+                source_credentials=source_credentials,
+                target_principal=signing_service_account_email,
+                target_scopes=(CLOUD_PLATFORM_SCOPE,),
+            )  # type: ignore[no-untyped-call]
 
     @staticmethod
     def _require_positive(value: int | float, name: str) -> None:
@@ -140,6 +155,7 @@ class GoogleCloudStorage:
                     method="PUT",
                     content_type=content_type,
                     headers={"x-goog-if-generation-match": "0"},
+                    credentials=self._signing_credentials,
                 ),
                 headers=(
                     ("Content-Type", content_type),
@@ -166,6 +182,7 @@ class GoogleCloudStorage:
                 expiration=timedelta(seconds=expires_in_seconds),
                 method="GET",
                 generation=generation,
+                credentials=self._signing_credentials,
             )
 
         return await self._run(timeout_seconds, operation)
