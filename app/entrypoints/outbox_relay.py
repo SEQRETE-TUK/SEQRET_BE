@@ -2,10 +2,12 @@
 
 import asyncio
 from contextlib import AsyncExitStack
+from typing import cast
 
 from opentelemetry.trace import Status, StatusCode
 
 from app.config import Settings
+from app.modules.background_job.service import dispatch_background_jobs_once
 from app.modules.notification.consumer import consume_notification_events_once
 from app.platform.db import create_database_engine, create_session_factory
 from app.platform.event_bus.google_pubsub import GooglePubSubEventBus
@@ -16,6 +18,7 @@ from app.platform.observability import (
     new_correlation_context,
     use_correlation,
 )
+from app.platform.task_queue import GoogleCloudTasksQueue
 from app.runtime import RuntimeKind, create_runtime_context
 
 
@@ -29,6 +32,15 @@ async def run(settings: Settings | None = None) -> int:
         or resolved.pubsub_subscription_id is None
     ):
         raise RuntimeError("Pub/Sub publication and subscription configuration is required")
+    task_settings = (
+        resolved.gcp_project_id,
+        resolved.task_queue_location,
+        resolved.task_queue_name,
+        resolved.task_worker_url,
+        resolved.task_invoker_service_account_email,
+    )
+    if any(value is None for value in task_settings):
+        raise RuntimeError("Cloud Tasks dispatch configuration is required")
     observability = create_observability(create_runtime_context(RuntimeKind.JOB, resolved))
     async with AsyncExitStack() as resources:
         resources.callback(observability.shutdown)
@@ -46,6 +58,12 @@ async def run(settings: Settings | None = None) -> int:
             resolved.pubsub_topic_id,
         )
         resources.callback(subscriber.close)
+        task_queue = GoogleCloudTasksQueue(
+            cast(str, resolved.gcp_project_id),
+            cast(str, resolved.task_queue_location),
+            cast(str, resolved.task_worker_url),
+            cast(str, resolved.task_invoker_service_account_email),
+        )
         with (
             observability.tracer.start_as_current_span("outbox.event_pump_once") as span,
             use_correlation(new_correlation_context()),
@@ -63,11 +81,22 @@ async def run(settings: Settings | None = None) -> int:
                 batch_size=resolved.notification_batch_size,
                 pull_timeout_seconds=resolved.notification_pull_timeout_seconds,
             )
+            dispatch_result = await dispatch_background_jobs_once(
+                session_factory,
+                task_queue,
+                queue_name=cast(str, resolved.task_queue_name),
+                handler="/tasks/media",
+                batch_size=resolved.background_job_batch_size,
+                lease_seconds=resolved.background_job_lease_seconds,
+                enqueue_timeout_seconds=resolved.task_enqueue_timeout_seconds,
+            )
             failed = (
                 relay_result.failed > 0
                 or relay_result.claimed != relay_result.published + relay_result.failed
                 or consumer_result.failed > 0
                 or consumer_result.pulled != consumer_result.acknowledged + consumer_result.failed
+                or dispatch_result.failed > 0
+                or dispatch_result.claimed != dispatch_result.queued + dispatch_result.failed
             )
             if failed:
                 span.set_status(Status(StatusCode.ERROR))
@@ -83,6 +112,9 @@ async def run(settings: Settings | None = None) -> int:
                     "pulled": consumer_result.pulled,
                     "acknowledged": consumer_result.acknowledged,
                     "notification_failed": consumer_result.failed,
+                    "background_claimed": dispatch_result.claimed,
+                    "background_queued": dispatch_result.queued,
+                    "background_failed": dispatch_result.failed,
                 },
             )
             if not failed and relay_result.claimed == resolved.outbox_batch_size:

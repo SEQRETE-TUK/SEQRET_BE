@@ -24,6 +24,76 @@ resource "google_service_account" "outbox_scheduler" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_cloud_tasks_queue" "media" {
+  project  = var.project_id
+  location = var.region
+  name     = local.task_queue_name
+
+  rate_limits {
+    max_concurrent_dispatches = var.worker_max_instances
+    max_dispatches_per_second = var.worker_max_instances
+  }
+
+  retry_config {
+    max_attempts       = 5
+    max_retry_duration = "0s"
+    min_backoff        = "10s"
+    max_backoff        = "600s"
+    max_doublings      = 5
+  }
+
+  stackdriver_logging_config { sampling_ratio = 1 }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "cloud_tasks_service_agent" {
+  project = var.project_id
+  role    = "roles/cloudtasks.serviceAgent"
+  member  = local.cloud_tasks_service_agent
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_cloud_tasks_queue_iam_member" "outbox_relay_enqueuer" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_tasks_queue.media.name
+  role     = "roles/cloudtasks.enqueuer"
+  member   = "serviceAccount:${google_service_account.outbox_relay.email}"
+}
+
+resource "google_service_account_iam_member" "outbox_relay_task_invoker_user" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.task_invoker_name}@${var.project_id}.iam.gserviceaccount.com"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.outbox_relay.email}"
+
+  depends_on = [google_service_account.task_invoker]
+}
+
+resource "google_service_account_iam_member" "cloud_tasks_task_invoker_user" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.task_invoker_name}@${var.project_id}.iam.gserviceaccount.com"
+  role               = "roles/iam.serviceAccountUser"
+  member             = local.cloud_tasks_service_agent
+
+  depends_on = [
+    google_project_iam_member.cloud_tasks_service_agent,
+    google_service_account.task_invoker,
+  ]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "task_invoker_worker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.worker.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.task_invoker.email}"
+}
+
 resource "google_pubsub_topic_iam_member" "outbox_relay_publisher" {
   project = var.project_id
   topic   = google_pubsub_topic.events.name
@@ -132,6 +202,9 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
     google_pubsub_subscription_iam_member.outbox_relay_notification_viewer,
     google_pubsub_topic_iam_member.outbox_relay_publisher,
     google_secret_manager_secret_iam_member.outbox_relay_database,
+    google_cloud_tasks_queue_iam_member.outbox_relay_enqueuer,
+    google_service_account_iam_member.outbox_relay_task_invoker_user,
+    google_cloud_run_v2_service_iam_member.task_invoker_worker,
   ]
 }
 

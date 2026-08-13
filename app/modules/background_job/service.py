@@ -363,15 +363,33 @@ async def finalize_background_job_dispatch(
         raise ValueError("dispatch outcome requires exactly one task ID or error code")
     row = await session.scalar(
         select(BackgroundJob)
-        .where(
-            BackgroundJob.id == claim.task.background_job_id,
-            BackgroundJob.status == BackgroundJobStatus.DISPATCHING,
-            BackgroundJob.dispatch_token == claim.dispatch_token,
-        )
+        .where(BackgroundJob.id == claim.task.background_job_id)
         .with_for_update()
     )
     if row is None:
         return False
+    if not (
+        row.status is BackgroundJobStatus.DISPATCHING and row.dispatch_token == claim.dispatch_token
+    ):
+        already_accepted = (
+            provider_task_id is not None
+            and row.attempt_count == claim.task.attempt_count
+            and row.trace_id == claim.task.trace_id
+            and row.status
+            in {
+                BackgroundJobStatus.QUEUED,
+                BackgroundJobStatus.RUNNING,
+                BackgroundJobStatus.SUCCEEDED,
+                BackgroundJobStatus.FAILED,
+            }
+            and row.dispatch_token is None
+            and row.provider_task_id in {None, provider_task_id}
+        )
+        if not already_accepted:
+            return False
+        row.provider_task_id = provider_task_id
+        await session.flush()
+        return True
     row.dispatch_token = None
     row.dispatch_locked_until = None
     if error_code is None:

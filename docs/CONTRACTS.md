@@ -46,7 +46,7 @@
 - 이 계약은 파생 파일 형식·저장 모델을 추정하지 않는다. 해당 제품 정책이 확정되면 별도 versioned 계약으로 추가한다.
 - 업로드 완료는 generation·MIME type·크기를 고정한 `PENDING` validation intent를 같은 transaction에 만든다. `start_media_validation`과 `complete_media_validation`은 기존 background-job lease·attempt를 재사용해 `UPLOADED|FAILED → PROCESSING → READY|FAILED`를 전이한다.
 - B-05 handler는 A command로 attempt를 시작하고, StoragePort로 같은 generation의 metadata와 스트리밍 SHA-256을 확인한 뒤 정제된 result만 A command에 반환한다. object identity·MIME type·크기 불일치는 `INVALID_INPUT`, provider 오류는 해당 `ProviderErrorKind`로 실패 처리한다.
-- 파생 파일 형식·저장 정책은 아직 결정되지 않았다. 남은 merge 순서는 B-02 private worker wiring이며, runtime 전에는 상태를 즉시 `READY`로 바꾸지 않는다.
+- 파생 파일 형식·저장 정책은 아직 결정되지 않았다. media validation은 Cloud Tasks OIDC private worker가 version 1 task를 받아 이 handler를 실행한다.
 
 ## Event envelope
 
@@ -96,7 +96,7 @@
 - B는 실제 삭제를 시도한 `RUNNING` attempt의 `MediaDeletionResultV1`을 `complete_media_deletion` command에 반환한다. 같은 결과 replay는 no-op이고 stale·상충 result는 `BackgroundJobConflictError`다. 성공 시 A가 미디어 상태와 `media_deleted.v1` Outbox를 한 transaction에서 반영한다. 작업 생성자·시도 횟수·마지막 오류·terminal 상태는 `background_job`에 보존한다.
 - 물리 객체 목록이 필요한 고아 탐지는 B의 listing 계약이 생기기 전까지 추정하지 않는다. Outbox 정합성 재시도는 기존 relay를 사용한다.
 - background job row가 생성된 뒤에는 운영 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다. 기존 감사 enum을 확장하지 않아 직전 application revision도 기존 감사 이력을 계속 읽을 수 있다.
-- 실제 queue adapter와 private handler runtime은 B-02/B-07 소유다. A가 제공하는 `dispatch_background_jobs_once` 호출은 그 adapter가 병합될 때 scheduled runtime에 연결하며, 그 전에는 durable `PENDING` intent를 잃지 않는다.
+- 실제 queue adapter와 private handler runtime은 B-02/B-07 소유다. 매분 scheduled relay가 `dispatch_background_jobs_once`를 호출하고 Cloud Tasks의 OIDC identity만 internal private worker를 호출한다. worker는 validation·retention task를 versioned discriminator로 검증한 뒤 해당 B handler를 실행한다.
 
 ## Outbox와 소비 멱등성
 

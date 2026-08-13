@@ -82,7 +82,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 현장 작업자는 잠긴 현재 범위를 기준으로 자신이 촬영한 `change_evidence` 미디어와 변경안을 제출할 수 있습니다. 고객 또는 회사 관리자는 한 번 설명을 요청한 뒤 승인하거나 사유와 함께 거절합니다. 승인된 요청만 기준 범위의 결과 버전을 만들며, 결과 버전은 다시 양측 확인을 받아야 잠깁니다.
 
-현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 실제 dispatch와 물리 삭제는 B runtime 연결 뒤 수행됩니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
+현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 매분 relay가 due 작업을 Cloud Tasks에 넣고 OIDC private worker가 generation-pinned validation·삭제를 수행합니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
 
 범위 잠금, 현장 변경요청, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행한 뒤 알림 subscription의 bounded batch를 pull하는 event pump로 동작합니다. 실패한 발행 event는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
 
@@ -128,6 +128,13 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_EVENT_PUBLISH_TIMEOUT_SECONDS` | `10` | 개별 Pub/Sub 발행 완료를 기다리는 최대 시간 |
 | `SEQRET_NOTIFICATION_BATCH_SIZE` | `100` | event pump 한 번에 pull할 최대 notification event 수 |
 | `SEQRET_NOTIFICATION_PULL_TIMEOUT_SECONDS` | `10` | notification pull이 빈 batch를 기다리는 최대 시간 |
+| `SEQRET_TASK_QUEUE_LOCATION` | 없음 | Cloud Tasks queue region. task 설정과 함께 relay에 구성 |
+| `SEQRET_TASK_QUEUE_NAME` | 없음 | media validation·retention task queue ID |
+| `SEQRET_TASK_WORKER_URL` | 없음 | OIDC로 호출하는 canonical HTTPS private worker origin |
+| `SEQRET_TASK_INVOKER_SERVICE_ACCOUNT_EMAIL` | 없음 | Cloud Tasks OIDC 전용 service account |
+| `SEQRET_BACKGROUND_JOB_BATCH_SIZE` | `100` | relay 실행당 enqueue할 최대 background job 수 |
+| `SEQRET_BACKGROUND_JOB_LEASE_SECONDS` | `60` | enqueue 소유권 lease. enqueue timeout보다 길어야 함 |
+| `SEQRET_TASK_ENQUEUE_TIMEOUT_SECONDS` | `10` | 개별 Cloud Tasks 생성 제한 시간 |
 | `SEQRET_MEDIA_RETENTION_DAYS` | 없음 | 완료 작업 미디어의 승인된 보존기간. 비설정 시 완료 확인과 삭제 작업 생성을 차단함 |
 
 ```bash

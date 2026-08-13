@@ -99,8 +99,14 @@ run "staging_runtime_isolation" {
   }
 
   assert {
-    condition     = length(google_cloud_run_v2_service.worker) == 0 && length(google_cloud_run_v2_job.job) == 0
-    error_message = "B-owned runtimes must not be provisioned without their explicit image and entrypoint contracts."
+    condition = alltrue([
+      length(google_cloud_run_v2_job.job) == 0,
+      google_cloud_run_v2_service.worker.ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY",
+      google_cloud_run_v2_service.worker.template[0].containers[0].image == var.container_image,
+      join(" ", google_cloud_run_v2_service.worker.template[0].containers[0].command) == "python -m uvicorn app.entrypoints.worker:app",
+      google_cloud_run_v2_service.worker.deletion_protection,
+    ])
+    error_message = "The private media worker must be provisioned with the current immutable application image."
   }
 
   assert {
@@ -116,7 +122,8 @@ run "staging_runtime_isolation" {
       google_service_account.migration.account_id,
       google_service_account.outbox_relay.account_id,
       google_service_account.outbox_scheduler.account_id,
-    ])) == 6
+      google_service_account.task_invoker.account_id,
+    ])) == 7
     error_message = "Every runtime and scheduler caller must use a distinct service account."
   }
 
@@ -126,6 +133,7 @@ run "staging_runtime_isolation" {
       toset([
         "artifactregistry.googleapis.com",
         "cloudscheduler.googleapis.com",
+        "cloudtasks.googleapis.com",
         "compute.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
@@ -142,6 +150,7 @@ run "staging_runtime_isolation" {
   assert {
     condition = alltrue([
       google_cloud_run_v2_service.api.deletion_protection,
+      google_cloud_run_v2_service.worker.deletion_protection,
       google_cloud_run_v2_job.migration.deletion_protection,
       google_cloud_run_v2_job.outbox_relay.deletion_protection,
     ])
@@ -163,6 +172,27 @@ run "staging_runtime_isolation" {
         for env in google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].env : env.value
         if env.name == "SEQRET_PUBSUB_TOPIC_ID"
       ]) == "seqret-stg-events",
+      one([
+        for env in google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].env : env.value
+        if env.name == "SEQRET_TASK_QUEUE_NAME"
+      ]) == google_cloud_tasks_queue.media.name,
+      one([
+        for env in google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].env : env.value
+        if env.name == "SEQRET_TASK_WORKER_URL"
+      ]) == google_cloud_run_v2_service.worker.uri,
+      google_cloud_tasks_queue.media.rate_limits[0].max_concurrent_dispatches == var.worker_max_instances,
+      google_cloud_tasks_queue.media.retry_config[0].max_attempts == 5,
+      google_cloud_tasks_queue.media.retry_config[0].max_retry_duration == "0s",
+      google_cloud_tasks_queue_iam_member.outbox_relay_enqueuer.role == "roles/cloudtasks.enqueuer",
+      google_cloud_tasks_queue_iam_member.outbox_relay_enqueuer.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_service_account_iam_member.outbox_relay_task_invoker_user.role == "roles/iam.serviceAccountUser",
+      google_service_account_iam_member.outbox_relay_task_invoker_user.member == "serviceAccount:${google_service_account.outbox_relay.email}",
+      google_service_account_iam_member.cloud_tasks_task_invoker_user.role == "roles/iam.serviceAccountUser",
+      google_service_account_iam_member.cloud_tasks_task_invoker_user.member == local.cloud_tasks_service_agent,
+      google_project_iam_member.cloud_tasks_service_agent.role == "roles/cloudtasks.serviceAgent",
+      google_project_iam_member.cloud_tasks_service_agent.member == local.cloud_tasks_service_agent,
+      google_cloud_run_v2_service_iam_member.task_invoker_worker.role == "roles/run.invoker",
+      google_cloud_run_v2_service_iam_member.task_invoker_worker.member == "serviceAccount:${google_service_account.task_invoker.email}",
       google_pubsub_topic_iam_member.outbox_relay_publisher.role == "roles/pubsub.publisher",
       google_pubsub_topic_iam_member.outbox_relay_publisher.topic == google_pubsub_topic.events.name,
       google_pubsub_topic_iam_member.outbox_relay_publisher.member == "serviceAccount:${google_service_account.outbox_relay.email}",
@@ -196,7 +226,14 @@ run "staging_runtime_isolation" {
       google_cloud_run_v2_job.migration.template[0].template[0].containers[0].volume_mounts[0].mount_path == "/cloudsql",
       one(google_cloud_run_v2_job.migration.template[0].template[0].volumes[0].cloud_sql_instance[0].instances) == "seqret-staging:asia-northeast3:seqret-stg-db",
       google_project_iam_member.api_cloud_sql_client.role == "roles/cloudsql.client",
+      google_project_iam_member.worker_cloud_sql_client.role == "roles/cloudsql.client",
+      google_project_iam_member.worker_cloud_sql_client.member == "serviceAccount:${google_service_account.worker.email}",
       google_project_iam_member.migration_cloud_sql_client.role == "roles/cloudsql.client",
+      google_secret_manager_secret_iam_member.worker_database.role == "roles/secretmanager.secretAccessor",
+      google_secret_manager_secret_iam_member.worker_database.member == "serviceAccount:${google_service_account.worker.email}",
+      google_storage_bucket_iam_member.worker_media_objects.role == "roles/storage.objectUser",
+      google_storage_bucket_iam_member.worker_media_objects.bucket == var.media_bucket_name,
+      google_storage_bucket_iam_member.worker_media_objects.member == "serviceAccount:${google_service_account.worker.email}",
     ])
     error_message = "The API and migration gate must use the same authenticated Cloud SQL Unix socket."
   }
@@ -296,8 +333,10 @@ run "staging_runtime_isolation" {
   assert {
     condition = alltrue([
       google_project_iam_member.api_trace_writer.role == "roles/telemetry.tracesWriter",
+      google_project_iam_member.worker_trace_writer.role == "roles/telemetry.tracesWriter",
       google_project_iam_member.migration_trace_writer.role == "roles/telemetry.tracesWriter",
       google_project_iam_member.api_telemetry_consumer.role == "roles/serviceusage.serviceUsageConsumer",
+      google_project_iam_member.worker_telemetry_consumer.role == "roles/serviceusage.serviceUsageConsumer",
       google_project_iam_member.migration_telemetry_consumer.role == "roles/serviceusage.serviceUsageConsumer",
     ])
     error_message = "Only runtimes that emit traces receive the telemetry writer role."
@@ -319,6 +358,16 @@ run "staging_runtime_isolation" {
       length(google_monitoring_alert_policy.outbox_relay_saturation.conditions[0].condition_matched_log) == 1,
       strcontains(google_monitoring_alert_policy.outbox_relay_saturation.conditions[0].condition_matched_log[0].filter, "jsonPayload.event=\"outbox_relay_batch_saturated\""),
       google_monitoring_alert_policy.outbox_relay_saturation.alert_strategy[0].notification_rate_limit[0].period == "900s",
+      google_monitoring_alert_policy.media_task_backlog.severity == "WARNING",
+      google_monitoring_alert_policy.media_task_backlog.conditions[0].condition_threshold[0].threshold_value == 0,
+      google_monitoring_alert_policy.media_task_backlog.conditions[0].condition_threshold[0].duration == "900s",
+      google_monitoring_alert_policy.media_task_backlog.conditions[0].condition_threshold[0].aggregations[0].per_series_aligner == "ALIGN_MIN",
+      strcontains(google_monitoring_alert_policy.media_task_backlog.conditions[0].condition_threshold[0].filter, "cloudtasks.googleapis.com/queue/depth"),
+      google_monitoring_alert_policy.media_task_failures.severity == "ERROR",
+      google_monitoring_alert_policy.media_task_failures.conditions[0].condition_threshold[0].duration == "0s",
+      google_monitoring_alert_policy.media_task_failures.alert_strategy[0].notification_rate_limit[0].period == "900s",
+      strcontains(google_monitoring_alert_policy.media_task_failures.conditions[0].condition_threshold[0].filter, "cloudtasks.googleapis.com/queue/task_attempt_count"),
+      strcontains(google_monitoring_alert_policy.media_task_failures.conditions[0].condition_threshold[0].filter, "response_code!=\"ok\""),
       google_monitoring_slo.api_availability.goal == 0.99,
     ])
     error_message = "Core API and job alert policies must remain enabled at explicit severities."
@@ -457,10 +506,6 @@ run "integration_runtimes_require_explicit_contracts" {
   command = plan
 
   variables {
-    worker_runtime = {
-      container_image = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/worker@sha256:1111111111111111111111111111111111111111111111111111111111111111"
-      command         = ["python", "-m", "app.entrypoints.worker"]
-    }
     job_runtime = {
       container_image = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/job@sha256:2222222222222222222222222222222222222222222222222222222222222222"
       command         = ["python", "-m", "app.entrypoints.media_jobs"]
@@ -469,13 +514,13 @@ run "integration_runtimes_require_explicit_contracts" {
 
   assert {
     condition = alltrue([
-      google_cloud_run_v2_service.worker[0].ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY",
-      google_cloud_run_v2_service.worker[0].template[0].containers[0].image == var.worker_runtime.container_image,
+      google_cloud_run_v2_service.worker.ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY",
+      google_cloud_run_v2_service.worker.template[0].containers[0].image == var.container_image,
       google_cloud_run_v2_job.job[0].template[0].template[0].containers[0].image == var.job_runtime.container_image,
-      google_cloud_run_v2_service.worker[0].deletion_protection,
+      google_cloud_run_v2_service.worker.deletion_protection,
       google_cloud_run_v2_job.job[0].deletion_protection,
       length([
-        for env in google_cloud_run_v2_service.worker[0].template[0].containers[0].env : env
+        for env in google_cloud_run_v2_service.worker.template[0].containers[0].env : env
         if env.name == "SEQRET_MEDIA_RETENTION_DAYS"
       ]) == 0,
       length([

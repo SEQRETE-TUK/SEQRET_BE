@@ -289,6 +289,85 @@ resource "google_monitoring_alert_policy" "outbox_relay_saturation" {
   depends_on = [google_project_service.observability]
 }
 
+resource "google_monitoring_alert_policy" "media_task_backlog" {
+  project               = var.project_id
+  display_name          = "${local.task_queue_name} sustained backlog"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "WARNING"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "Media tasks remain queued for fifteen minutes"
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_tasks_queue\"",
+        "resource.label.queue_id=\"${local.task_queue_name}\"",
+        "resource.label.location=\"${var.region}\"",
+        "metric.type=\"cloudtasks.googleapis.com/queue/depth\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "900s"
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_MIN"
+      }
+    }
+  }
+
+  alert_strategy {
+    auto_close = "1800s"
+    notification_rate_limit { period = "900s" }
+  }
+  documentation {
+    subject   = "${local.task_queue_name} has a sustained backlog"
+    content   = "Inspect Cloud Tasks attempt logs, the private worker revision, and worker database or storage errors before changing queue capacity."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
+resource "google_monitoring_alert_policy" "media_task_failures" {
+  project               = var.project_id
+  display_name          = "${local.task_queue_name} failed attempts"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "ERROR"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "Media task attempt failed"
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_tasks_queue\"",
+        "resource.label.queue_id=\"${local.task_queue_name}\"",
+        "resource.label.location=\"${var.region}\"",
+        "metric.type=\"cloudtasks.googleapis.com/queue/task_attempt_count\"",
+        "metric.label.response_code!=\"ok\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  alert_strategy {
+    auto_close = "1800s"
+    notification_rate_limit { period = "900s" }
+  }
+  documentation {
+    subject   = "${local.task_queue_name} has a failed attempt"
+    content   = "Inspect the Cloud Tasks response code and private worker logs. Retry a failed background job only after its execution lease expires."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
 resource "google_monitoring_alert_policy" "api_uptime" {
   project               = var.project_id
   display_name          = "${local.api_name} external uptime"

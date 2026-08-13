@@ -36,6 +36,7 @@ FRONTEND_HOST_PATTERN = re.compile(
     r"\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
 PUBSUB_TOPIC_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._~+%-]{2,254}$")
+TASK_QUEUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$")
 MEDIA_BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{1,61}[a-z0-9])$")
 SERVICE_ACCOUNT_EMAIL_PATTERN = re.compile(
     r"^[a-z][a-z0-9-]{4,28}[a-z0-9]@"
@@ -81,6 +82,13 @@ class Settings(BaseSettings):
     event_publish_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
     notification_batch_size: int = Field(default=100, ge=1, le=100)
     notification_pull_timeout_seconds: float = Field(default=10.0, gt=0, le=30.0)
+    task_queue_location: str | None = None
+    task_queue_name: str | None = None
+    task_worker_url: str | None = None
+    task_invoker_service_account_email: str | None = Field(default=None, max_length=100)
+    background_job_batch_size: int = Field(default=100, ge=1, le=100)
+    background_job_lease_seconds: int = Field(default=60, ge=1, le=600)
+    task_enqueue_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
     media_retention_days: int | None = Field(default=None, ge=1, le=3_650)
     media_bucket_name: str | None = Field(default=None, min_length=3, max_length=63)
     storage_signing_service_account_email: str | None = Field(default=None, max_length=100)
@@ -165,11 +173,11 @@ class Settings(BaseSettings):
         if self.pubsub_subscription_id is not None and self.pubsub_topic_id is None:
             msg = "pubsub_subscription_id requires pubsub_project_id and pubsub_topic_id"
             raise ValueError(msg)
-        if (self.media_bucket_name is None) != (self.storage_signing_service_account_email is None):
-            msg = (
-                "media_bucket_name and storage_signing_service_account_email "
-                "must be configured together"
-            )
+        if (
+            self.storage_signing_service_account_email is not None
+            and self.media_bucket_name is None
+        ):
+            msg = "storage_signing_service_account_email requires media_bucket_name"
             raise ValueError(msg)
         if (
             self.media_bucket_name is not None
@@ -184,6 +192,50 @@ class Settings(BaseSettings):
         ):
             msg = "storage_signing_service_account_email must be a service-account email"
             raise ValueError(msg)
+        task_settings = (
+            self.task_queue_location,
+            self.task_queue_name,
+            self.task_worker_url,
+            self.task_invoker_service_account_email,
+        )
+        if any(value is not None for value in task_settings) and (
+            self.gcp_project_id is None or any(value is None for value in task_settings)
+        ):
+            msg = "Cloud Tasks runtime settings and gcp_project_id must be configured together"
+            raise ValueError(msg)
+        if self.task_queue_location is not None and not re.fullmatch(
+            r"[a-z]+-[a-z]+[0-9]+", self.task_queue_location
+        ):
+            raise ValueError("task_queue_location must be a canonical GCP region")
+        if (
+            self.task_queue_name is not None
+            and TASK_QUEUE_ID_PATTERN.fullmatch(self.task_queue_name) is None
+        ):
+            raise ValueError("task_queue_name must be a valid Cloud Tasks queue ID")
+        if self.task_worker_url is not None:
+            worker_origin = urlsplit(self.task_worker_url)
+            try:
+                worker_port = worker_origin.port
+            except ValueError as error:
+                raise ValueError("task_worker_url must be one canonical HTTPS origin") from error
+            if (
+                worker_origin.scheme != "https"
+                or worker_origin.hostname is None
+                or worker_origin.path
+                or worker_origin.query
+                or worker_origin.fragment
+                or worker_origin.username is not None
+                or worker_origin.password is not None
+                or worker_port is not None
+                or self.task_worker_url != f"https://{worker_origin.hostname}"
+            ):
+                raise ValueError("task_worker_url must be one canonical HTTPS origin")
+        if (
+            self.task_invoker_service_account_email is not None
+            and SERVICE_ACCOUNT_EMAIL_PATTERN.fullmatch(self.task_invoker_service_account_email)
+            is None
+        ):
+            raise ValueError("task_invoker_service_account_email must be a service-account email")
         if (
             self.pubsub_project_id is not None
             and GCP_PROJECT_ID_PATTERN.fullmatch(self.pubsub_project_id) is None
@@ -229,6 +281,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.outbox_lease_seconds <= self.event_publish_timeout_seconds:
             msg = "outbox_lease_seconds must exceed event_publish_timeout_seconds"
+            raise ValueError(msg)
+        if self.background_job_lease_seconds <= self.task_enqueue_timeout_seconds:
+            msg = "background_job_lease_seconds must exceed task_enqueue_timeout_seconds"
             raise ValueError(msg)
         return self
 

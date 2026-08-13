@@ -7,6 +7,9 @@ locals {
   resource_stem                      = "${var.name_prefix}-${local.environment_abbreviation}"
   api_name                           = "${local.resource_stem}-api"
   worker_name                        = "${local.resource_stem}-worker"
+  task_queue_name                    = "${local.resource_stem}-media"
+  task_invoker_name                  = "${local.resource_stem}-tasks"
+  cloud_tasks_service_agent          = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
   job_name                           = "${local.resource_stem}-job"
   migration_name                     = "${local.resource_stem}-migrate"
   outbox_relay_name                  = "${local.resource_stem}-relay"
@@ -48,10 +51,20 @@ locals {
   })
 
   outbox_relay_environment = merge(local.observed_runtime_environment, {
+    SEQRET_DATABASE_MAX_OVERFLOW              = "0"
+    SEQRET_DATABASE_POOL_SIZE                 = "1"
+    SEQRET_PUBSUB_PROJECT_ID                  = var.project_id
+    SEQRET_PUBSUB_TOPIC_ID                    = local.events_topic_name
+    SEQRET_TASK_QUEUE_LOCATION                = var.region
+    SEQRET_TASK_QUEUE_NAME                    = local.task_queue_name
+    SEQRET_TASK_WORKER_URL                    = google_cloud_run_v2_service.worker.uri
+    SEQRET_TASK_INVOKER_SERVICE_ACCOUNT_EMAIL = google_service_account.task_invoker.email
+  })
+
+  worker_environment = merge(local.observed_runtime_environment, {
     SEQRET_DATABASE_MAX_OVERFLOW = "0"
     SEQRET_DATABASE_POOL_SIZE    = "1"
-    SEQRET_PUBSUB_PROJECT_ID     = var.project_id
-    SEQRET_PUBSUB_TOPIC_ID       = local.events_topic_name
+    SEQRET_MEDIA_BUCKET_NAME     = var.media_bucket_name
   })
 
   api_secret_environment = merge(
@@ -82,6 +95,7 @@ check "service_account_name_lengths" {
       length(local.migration_name) <= 30,
       length(local.outbox_relay_name) <= 30,
       length(local.outbox_scheduler_name) <= 30,
+      length(local.task_invoker_name) <= 30,
     ])
     error_message = "Runtime service account IDs must not exceed 30 characters."
   }

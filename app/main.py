@@ -33,9 +33,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         and runtime_context.settings.frontend_origin is None
     ):
         raise ValueError("frontend_origin is required for a deployed API")
-    if (
-        runtime_context.settings.environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
-        and runtime_context.settings.media_bucket_name is None
+    if runtime_context.settings.environment in {
+        AppEnvironment.STAGING,
+        AppEnvironment.PRODUCTION,
+    } and (
+        runtime_context.settings.media_bucket_name is None
+        or runtime_context.settings.storage_signing_service_account_email is None
     ):
         raise ValueError("media storage configuration is required for a deployed API")
     observability = create_observability(runtime_context)

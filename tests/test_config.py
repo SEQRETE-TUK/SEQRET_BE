@@ -168,10 +168,28 @@ def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
     assert settings.notification_batch_size == 20
 
 
+def test_settings_accept_worker_storage_and_complete_task_dispatch_configuration() -> None:
+    worker = Settings(media_bucket_name="seqret-stg-media")
+    relay = Settings(
+        gcp_project_id="seqret-test",
+        task_queue_location="asia-northeast3",
+        task_queue_name="seqret-stg-media",
+        task_worker_url="https://seqret-stg-worker.run.app",
+        task_invoker_service_account_email=("seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"),
+        background_job_batch_size=25,
+        background_job_lease_seconds=30,
+        task_enqueue_timeout_seconds=5,
+    )
+
+    assert worker.media_bucket_name == "seqret-stg-media"
+    assert worker.storage_signing_service_account_email is None
+    assert relay.task_queue_name == "seqret-stg-media"
+    assert relay.background_job_batch_size == 25
+
+
 @pytest.mark.parametrize(
     "values",
     [
-        {"media_bucket_name": "seqret-stg-media"},
         {
             "storage_signing_service_account_email": "seqret-stg-api@seqret-staging.iam.gserviceaccount.com"
         },
@@ -213,6 +231,72 @@ def test_settings_reject_incomplete_or_invalid_media_storage(values: dict[str, s
     ],
 )
 def test_settings_reject_invalid_pubsub_and_relay_configuration(
+    values: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"gcp_project_id": "seqret-test", "task_queue_name": "seqret-stg-media"},
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "not-a-region",
+            "task_queue_name": "seqret-stg-media",
+            "task_worker_url": "https://seqret-stg-worker.run.app",
+            "task_invoker_service_account_email": (
+                "seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"
+            ),
+        },
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "asia-northeast3",
+            "task_queue_name": "invalid_queue",
+            "task_worker_url": "https://seqret-stg-worker.run.app",
+            "task_invoker_service_account_email": (
+                "seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"
+            ),
+        },
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "asia-northeast3",
+            "task_queue_name": "seqret-stg-media",
+            "task_worker_url": "http://seqret-stg-worker.run.app",
+            "task_invoker_service_account_email": (
+                "seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"
+            ),
+        },
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "asia-northeast3",
+            "task_queue_name": "seqret-stg-media",
+            "task_worker_url": "https://seqret-stg-worker.run.app:not-a-port",
+            "task_invoker_service_account_email": (
+                "seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"
+            ),
+        },
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "asia-northeast3",
+            "task_queue_name": "seqret-stg-media",
+            "task_worker_url": "https://seqret-stg-worker.run.app/path",
+            "task_invoker_service_account_email": (
+                "seqret-stg-tasks@seqret-test.iam.gserviceaccount.com"
+            ),
+        },
+        {
+            "gcp_project_id": "seqret-test",
+            "task_queue_location": "asia-northeast3",
+            "task_queue_name": "seqret-stg-media",
+            "task_worker_url": "https://seqret-stg-worker.run.app",
+            "task_invoker_service_account_email": "invalid",
+        },
+        {"background_job_lease_seconds": 10, "task_enqueue_timeout_seconds": 10},
+    ],
+)
+def test_settings_reject_incomplete_or_invalid_task_dispatch(
     values: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):

@@ -309,7 +309,7 @@ variable "api_max_instances" {
 variable "worker_max_instances" {
   description = "Maximum number of private worker instances."
   type        = number
-  default     = 10
+  default     = 2
 
   validation {
     condition     = var.worker_max_instances >= 1
@@ -327,27 +327,6 @@ variable "api_args" {
   description = "Optional API container argument override."
   type        = list(string)
   default     = []
-}
-
-variable "worker_runtime" {
-  description = "B-owned worker image and entrypoint; null leaves the runtime unprovisioned."
-  type = object({
-    container_image = string
-    command         = list(string)
-    args            = optional(list(string), [])
-  })
-  default  = null
-  nullable = true
-
-  validation {
-    condition = var.worker_runtime == null || try(
-      length(var.worker_runtime.command) > 0 &&
-      startswith(var.worker_runtime.container_image, "${var.region}-docker.pkg.dev/${var.project_id}/") &&
-      can(regex("@sha256:[0-9a-f]{64}$", var.worker_runtime.container_image)),
-      false,
-    )
-    error_message = "worker_runtime must use an explicit command and immutable same-project Artifact Registry digest."
-  }
 }
 
 variable "job_runtime" {

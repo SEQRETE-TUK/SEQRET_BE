@@ -6,8 +6,8 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Protocol, cast
 
+import google.cloud.pubsub_v1 as pubsub_v1  # type: ignore[import-untyped]
 from google.api_core import exceptions as google_exceptions
-from google.cloud import pubsub_v1  # type: ignore[import-untyped]
 
 from app.contracts.events import DomainEvent
 from app.contracts.ports import ProviderError, ProviderErrorKind
