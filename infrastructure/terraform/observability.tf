@@ -130,6 +130,40 @@ resource "google_monitoring_alert_policy" "api_latency" {
   depends_on = [google_project_service.observability]
 }
 
+resource "google_monitoring_alert_policy" "access_rate_limit_cache_fallback" {
+  project               = var.project_id
+  display_name          = "${local.api_name} Redis rate-limit fallback"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "WARNING"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "API used the database rate limit after a Redis failure"
+    condition_matched_log {
+      filter = join(" AND ", [
+        "resource.type=\"cloud_run_revision\"",
+        "resource.labels.service_name=\"${local.api_name}\"",
+        "resource.labels.location=\"${var.region}\"",
+        "jsonPayload.event=\"access_rate_limit_cache_fallback\"",
+      ])
+    }
+  }
+
+  alert_strategy {
+    auto_close = "1800s"
+    notification_rate_limit {
+      period = "900s"
+    }
+  }
+  documentation {
+    subject   = "${local.api_name} is using the database rate-limit fallback"
+    content   = "The database limit remains active. Inspect the Redis secret, Direct VPC path, and Memorystore availability before changing traffic."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
 resource "google_monitoring_alert_policy" "job_failures" {
   project               = var.project_id
   display_name          = "${local.job_name} execution failures"

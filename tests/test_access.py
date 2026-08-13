@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -460,10 +461,13 @@ class MisconfiguredCache:
 @pytest.mark.anyio
 async def test_redis_outage_uses_database_fallback_but_configuration_error_propagates(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(environment=AppEnvironment.TEST, access_rate_limit_requests=1)
     client, factory, resources = await _access_api_with_settings(tmp_path, settings)
     application, engine = resources
+    fallback_warning = Mock()
+    monkeypatch.setattr(application.state.observability.logger, "warning", fallback_warning)
     try:
         created = await _create_job(client)
         customer_link = created["access_links"][0]
@@ -496,6 +500,13 @@ async def test_redis_outage_uses_database_fallback_but_configuration_error_propa
         with pytest.raises(ProviderError) as error_info:
             await client.get(url, headers=_bearer(manager_link["secret"]))
         assert error_info.value.kind is ProviderErrorKind.PERMISSION_DENIED
+        fallback_warning.assert_called_once_with(
+            "Redis access rate limit unavailable; using database limit",
+            extra={
+                "event": "access_rate_limit_cache_fallback",
+                "outcome": "fallback",
+            },
+        )
     finally:
         await client.aclose()
         await engine.dispose()
