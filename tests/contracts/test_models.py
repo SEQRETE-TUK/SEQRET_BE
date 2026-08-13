@@ -163,7 +163,7 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
         ),
     ],
 )
-def test_documented_v1_event_payloads_require_minimum_key_types(
+def test_documented_v1_event_payloads_accept_exact_producer_shape(
     event_type: DomainEventType,
     payload: dict[str, object],
 ) -> None:
@@ -183,6 +183,41 @@ def test_documented_v1_event_payloads_require_minimum_key_types(
             },
         ),
         (
+            DomainEventType.CHANGE_REQUESTED_V1,
+            {
+                "change_request_id": str(uuid4()),
+                "base_scope_version_id": str(uuid4()),
+                "evidence_media_asset_ids": [],
+            },
+        ),
+        (
+            DomainEventType.CHANGE_REQUESTED_V1,
+            {
+                "change_request_id": str(uuid4()),
+                "base_scope_version_id": str(uuid4()),
+                "evidence_media_asset_ids": [
+                    "00000000-0000-4000-8000-000000000000",
+                    "00000000-0000-4000-8000-000000000000",
+                ],
+            },
+        ),
+        (
+            DomainEventType.SCOPE_LOCKED_V1,
+            {
+                "scope_version_id": str(uuid4()),
+                "content_hash": "a" * 64,
+                "signed_url": "https://storage.invalid/read?signature=must-not-leak",
+            },
+        ),
+        (
+            DomainEventType.SCOPE_LOCKED_V1,
+            {"scope_version_id": str(uuid4()), "content_hash": "A" * 64},
+        ),
+        (
+            DomainEventType.SCOPE_LOCKED_V1,
+            {"scope_version_id": "not-a-uuid", "content_hash": "a" * 64},
+        ),
+        (
             DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
             {"capture_session_id": str(uuid4()), "media_asset_id": str(uuid4())},
         ),
@@ -192,11 +227,11 @@ def test_documented_v1_event_payloads_require_minimum_key_types(
         ),
     ],
 )
-def test_documented_v1_event_payloads_reject_missing_or_wrong_types(
+def test_documented_v1_event_payloads_reject_drift_and_invalid_values(
     event_type: DomainEventType,
     payload: dict[str, object],
 ) -> None:
-    with pytest.raises(ValidationError, match="minimum contract"):
+    with pytest.raises(ValidationError, match="contract"):
         _event(event_type=event_type, payload=payload)
 
 

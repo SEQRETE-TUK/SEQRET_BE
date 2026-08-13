@@ -9,7 +9,6 @@ from pydantic import JsonValue
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
 from app.contracts.ports import (
-    CREATE_ONLY_UPLOAD_HEADER,
     ProviderError,
     ProviderErrorKind,
     StorageObjectGeneration,
@@ -52,7 +51,10 @@ class FakeObjectStorage:
         self._require_positive(timeout_seconds, "timeout_seconds")
         return StorageUploadTarget(
             url=f"https://storage.invalid/upload/{object_key}",
-            headers=(CREATE_ONLY_UPLOAD_HEADER,),
+            headers=(
+                ("Content-Type", content_type),
+                ("x-goog-if-generation-match", "0"),
+            ),
         )
 
     async def create_read_url(

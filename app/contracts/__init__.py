@@ -12,7 +12,6 @@ from app.contracts.maintenance import (
 )
 from app.contracts.media import MediaAssetRef, MediaAssetStatus, MediaPurpose
 from app.contracts.ports import (
-    CREATE_ONLY_UPLOAD_HEADER,
     AIProviderPort,
     CachePort,
     EventBusPort,
@@ -42,7 +41,6 @@ from app.contracts.primitives import (
 )
 
 __all__ = [
-    "CREATE_ONLY_UPLOAD_HEADER",
     "AIProviderPort",
     "ActorContext",
     "ActorKind",
