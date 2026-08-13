@@ -628,7 +628,10 @@ async def test_change_evidence_read_url_hides_resources_and_rejects_unreadable_m
     async with factory.begin() as session:
         asset = await session.get(MediaAsset, UUID(evidence_id))
         assert asset is not None
+        asset.status = MediaAssetStatus.READY
+        asset.actual_size_bytes = 10
         asset.generation = "7"
+        asset.uploaded_at = datetime.now(UTC)
 
     async def unavailable(**_kwargs: object) -> str:
         raise ProviderError(
