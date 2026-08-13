@@ -39,6 +39,7 @@ Create the database secret and at least one Cloud Monitoring notification channe
 | `TF_STATE_BUCKET` | Existing Terraform state bucket |
 | `ARTIFACT_REPOSITORY` | Artifact Registry repository ID |
 | `API_DOMAIN` | Public lowercase API DNS name |
+| `FRONTEND_ORIGIN` | Exact canonical HTTPS browser origin allowed by API CORS; no port, path, or wildcard |
 | `DATABASE_URL_SECRET_ID` | Existing database URL secret ID |
 | `CLOUD_SQL_SOURCE_INSTANCE` | Fixed same-project, same-region staging PostgreSQL primary instance ID used by deploy and recovery |
 | `DB_RECOVERY_CONNECTION_MODE` | Cloud SQL Auth Proxy route: `public` or `private` |

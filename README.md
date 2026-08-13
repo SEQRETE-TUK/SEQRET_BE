@@ -108,6 +108,7 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_DEBUG` | `false` | FastAPI debug 여부. production에서는 `true`를 거부함 |
 | `SEQRET_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` 중 하나 |
 | `SEQRET_API_PREFIX` | `/api/v1` | 향후 업무 API가 사용할 정규화된 절대 경로 접두사 |
+| `SEQRET_FRONTEND_ORIGIN` | 없음 | API CORS가 허용할 canonical HTTPS browser origin 하나. port, path, wildcard는 허용하지 않음 |
 | `SEQRET_DATABASE_URL` | 없음 | `postgresql+psycopg` 형식의 비밀 연결 URL. 엔진 생성과 migration 실행 시 필수 |
 | `SEQRET_DATABASE_POOL_SIZE` | `5` | runtime별 기본 connection pool 크기 |
 | `SEQRET_DATABASE_MAX_OVERFLOW` | `10` | pool 크기를 초과해 일시적으로 허용할 connection 수 |

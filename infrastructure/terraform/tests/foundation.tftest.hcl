@@ -5,6 +5,7 @@ variables {
   region                = "asia-northeast3"
   environment           = "staging"
   api_domain            = "api.staging.example.com"
+  frontend_origin       = "https://staging.example.com"
   container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   cloud_sql_instance_id = "seqret-stg-db"
   api_max_instances     = 2
@@ -13,6 +14,14 @@ variables {
 
 run "staging_runtime_isolation" {
   command = apply
+
+  assert {
+    condition = one([
+      for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+      if env.name == "SEQRET_FRONTEND_ORIGIN"
+    ]) == "https://staging.example.com"
+    error_message = "The API must receive the exact configured browser origin."
+  }
 
   assert {
     condition     = google_cloud_run_v2_service.api.name == "seqret-stg-api"
@@ -444,6 +453,16 @@ run "invalid_api_domain_is_rejected" {
   }
 
   expect_failures = [var.api_domain]
+}
+
+run "numeric_frontend_origin_is_rejected" {
+  command = plan
+
+  variables {
+    frontend_origin = "https://127.1"
+  }
+
+  expect_failures = [var.frontend_origin]
 }
 
 run "stable_revision_holds_latest_at_zero" {

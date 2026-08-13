@@ -26,7 +26,7 @@
 
 ## 현재 연동 blocker
 
-- BE에는 별도 browser origin용 CORS middleware가 없다. Vercel에서 API를 직접 호출하려면 실제 staging/production origin을 확정한 뒤 명시적 allowlist를 추가해야 한다. wildcard origin은 사용하지 않는다.
+- BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 upload method·필수 header와 bucket 정책은 B의 Storage adapter가 병합된 뒤 함께 검증한다.
 - 현재 `main`은 production `StoragePort`를 wiring하지 않으므로 media upload/read URL route는 배포 환경에서 `503`을 반환한다. 관련 B PR이 병합되기 전에는 실서버 미디어 연동 완료로 간주하지 않는다.
 - [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)는 현재 Next.js 16·React 19 API 미연동 UI 데모이며 API client, CI와 GitHub 배포 증적이 없다. `docs/TECH_STACK.md`의 React·Vite·TanStack 기준과 실제 FE 저장소가 다르므로 팀 결정 없이 한쪽을 임의로 맞추지 않는다.

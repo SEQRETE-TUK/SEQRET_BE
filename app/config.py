@@ -30,6 +30,11 @@ SERVICE_NAME_PATTERN = re.compile(
 )
 API_PREFIX_PATTERN = re.compile(r"^/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*$")
 GCP_PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+FRONTEND_HOST_PATTERN = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+    r"\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 PUBSUB_TOPIC_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9._~+%-]{2,254}$")
 
 
@@ -52,6 +57,7 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: LogLevel = "INFO"
     api_prefix: str = "/api/v1"
+    frontend_origin: str | None = None
     database_url: SecretStr | None = Field(default=None, repr=False)
     database_socket_path: str | None = Field(default=None, min_length=1, max_length=107)
     database_pool_size: int = Field(default=5, ge=1, le=50)
@@ -122,6 +128,26 @@ class Settings(BaseSettings):
                 or parsed_redis_url.hostname is None
             ):
                 msg = "redis_url must use redis:// or rediss:// and include a host"
+                raise ValueError(msg)
+        if self.frontend_origin is not None:
+            msg = "frontend_origin must be one HTTPS origin without credentials or a path"
+            origin = urlsplit(self.frontend_origin)
+            try:
+                port = origin.port
+            except ValueError as error:
+                raise ValueError(msg) from error
+            if (
+                origin.scheme != "https"
+                or origin.hostname is None
+                or FRONTEND_HOST_PATTERN.fullmatch(origin.hostname) is None
+                or origin.path
+                or origin.query
+                or origin.fragment
+                or origin.username is not None
+                or origin.password is not None
+                or port is not None
+                or self.frontend_origin != f"https://{origin.hostname}"
+            ):
                 raise ValueError(msg)
         if (self.pubsub_project_id is None) != (self.pubsub_topic_id is None):
             msg = "pubsub_project_id and pubsub_topic_id must be configured together"

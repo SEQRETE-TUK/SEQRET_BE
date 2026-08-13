@@ -23,6 +23,7 @@ env:
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
   ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY }}
   API_DOMAIN: ${{ vars.API_DOMAIN }}
+  FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
   DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
   CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
@@ -69,6 +70,7 @@ jobs:
             TF_STATE_BUCKET
             ARTIFACT_REPOSITORY
             API_DOMAIN
+            FRONTEND_ORIGIN
             DATABASE_URL_SECRET_ID
             CLOUD_SQL_SOURCE_INSTANCE
             MEDIA_RETENTION_DAYS
@@ -86,6 +88,10 @@ jobs:
           fi
           if [[ ! "${API_DOMAIN}" =~ ^[a-z0-9.-]+\.[a-z0-9-]+$ ]]; then
             echo "API_DOMAIN must be a lowercase fully-qualified DNS name." >&2
+            exit 1
+          fi
+          if [[ ! "${FRONTEND_ORIGIN}" =~ ^https://[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+            echo "FRONTEND_ORIGIN must be one canonical HTTPS origin without a port or path." >&2
             exit 1
           fi
           if [[ ! "${CLOUD_SQL_SOURCE_INSTANCE}" =~ ^[a-z]([a-z0-9-]{0,96}[a-z0-9])?$ ]]; then
@@ -168,6 +174,7 @@ jobs:
             -var="region=${GCP_REGION}" \
             -var="environment=staging" \
             -var="api_domain=${API_DOMAIN}" \
+            -var="frontend_origin=${FRONTEND_ORIGIN}" \
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
             -var="container_image=${placeholder_image}" \
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
@@ -279,6 +286,7 @@ jobs:
             -var="region=${GCP_REGION}"
             -var="environment=staging"
             -var="api_domain=${API_DOMAIN}"
+            -var="frontend_origin=${FRONTEND_ORIGIN}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
@@ -315,6 +323,7 @@ jobs:
             -var="region=${GCP_REGION}"
             -var="environment=staging"
             -var="api_domain=${API_DOMAIN}"
+            -var="frontend_origin=${FRONTEND_ORIGIN}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
@@ -645,6 +654,7 @@ jobs:
               -var="region=${GCP_REGION}" \
               -var="environment=staging" \
               -var="api_domain=${API_DOMAIN}" \
+              -var="frontend_origin=${FRONTEND_ORIGIN}" \
               -var="artifact_repository_id=${ARTIFACT_REPOSITORY}" \
               -var="container_image=${CONTAINER_IMAGE}" \
               -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
