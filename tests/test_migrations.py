@@ -17,7 +17,7 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_03_0002"
+ALEMBIC_HEAD = "a_09_0002"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
@@ -95,6 +95,9 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert "media_asset_metadata_state" in {
             check["name"] for check in inspect(engine).get_check_constraints("media_asset")
         }
+        assert {"outbox_payload_object", "outbox_schema_version_one"} <= {
+            check["name"] for check in inspect(engine).get_check_constraints("outbox_event")
+        }
 
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
@@ -128,6 +131,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 "room_zone",
                 "capture_session",
                 "media_asset",
+                "outbox_event",
                 "scope_version",
                 "background_job",
             ),
@@ -221,6 +225,32 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "created_by_participant_id": None,
                     "created_at": created_at,
                 },
+            )
+
+        outbox_event = {
+            "event_id": uuid4().hex,
+            "event_type": "SCOPE_LOCKED_V1",
+            "schema_version": 1,
+            "aggregate_id": job_id,
+            "trace_id": "0" * 32,
+            "payload": {},
+            "occurred_at": created_at,
+            "next_attempt_at": created_at,
+        }
+        invalid_outbox_events = (
+            outbox_event | {"event_id": uuid4().hex, "schema_version": 2},
+            outbox_event | {"event_id": uuid4().hex, "payload": []},
+        )
+        for invalid_outbox_event in invalid_outbox_events:
+            with pytest.raises(IntegrityError), engine.begin() as connection:
+                connection.execute(
+                    migrated_metadata.tables["outbox_event"].insert(),
+                    invalid_outbox_event,
+                )
+        with engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["outbox_event"].insert(),
+                outbox_event,
             )
 
         command.downgrade(configuration, "a_12_0001")
