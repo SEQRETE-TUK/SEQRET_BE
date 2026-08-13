@@ -24,7 +24,7 @@
 | ID | 작업 | 상태 | 막는 것 / 선행 | 산출물 |
 |---|---|---|---|---|
 | **B-04** | Vertex AI/Gemini adapter | 🚫 | Vertex AI SDK, runtime IAM과 model 설정 | — |
-| **B-05** | 미디어 검증 + 파생 처리 | 🚫 | A validation command 병합 / handler·지원 format·도구 결정 필요 | — |
+| **B-05** | 미디어 검증 + 파생 처리 | 🟡 | generation-pinned 검증 handler 완료 / 파생 format·도구 결정 필요 | — |
 | **B-06** | worker 멱등성 + 오류 매핑 | 🚫 | B-02 + B-04 | — |
 | **B-07** | GCS 삭제 + 장시간 Job handler | 🟡 | handler 병합 / B-02·Job runtime 배선 필요 | [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36) |
 
@@ -43,8 +43,8 @@
 ## 한눈에 요약
 
 - **병합 완료:** GCS SDK #37, B-01 #39, B-03 #35, B-07 handler #36
-- **남은 구현:** B-02, B-04, B-05, B-06과 provider/runtime wiring
-- **다음 순서:** B-02·B-04 → B-06, 병렬로 B-05 → INT-01·INT-04·INT-06
+- **남은 구현:** B-02, B-04, B-06, B-05 파생 처리와 provider/runtime wiring
+- **다음 순서:** B-02·B-04 → B-06, 파생 정책 확정 뒤 B-05 마무리 → INT-01·INT-04·INT-06
 
 ## 의존성 흐름
 
