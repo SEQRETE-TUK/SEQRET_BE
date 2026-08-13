@@ -148,7 +148,7 @@ def downgrade() -> None:
     if connection.dialect.name == "postgresql":
         connection.execute(
             sa.text(
-                "LOCK TABLE detection, ai_analysis_run, background_job IN ACCESS EXCLUSIVE MODE"
+                "LOCK TABLE ai_analysis_run, detection, background_job IN ACCESS EXCLUSIVE MODE"
             )
         )
     # As the head migration, b_03 carries the operational-data guard: once any

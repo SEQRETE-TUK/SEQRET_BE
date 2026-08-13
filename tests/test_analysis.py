@@ -427,7 +427,7 @@ async def test_fail_rejects_changed_replay(
 
 
 @pytest.mark.anyio
-async def test_retry_clears_prior_detections(
+async def test_start_completed_run_is_noop(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     run_id = AnalysisRunId(uuid4())
@@ -446,10 +446,10 @@ async def test_retry_clears_prior_detections(
         detection_count = await session.scalar(select(func.count()).select_from(Detection))
 
     assert run is not None
-    assert run.attempt_count == 2
-    assert run.status is AnalysisRunStatus.RUNNING
-    assert run.model_name is None
-    assert detection_count == 0
+    assert run.attempt_count == 1
+    assert run.status is AnalysisRunStatus.COMPLETED
+    assert run.model_name == "fake-vision"
+    assert detection_count == 3
 
 
 @pytest.mark.anyio

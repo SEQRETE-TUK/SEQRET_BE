@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,7 +58,7 @@ async def start_analysis_run(
     trace_id: TraceId,
     now: datetime,
 ) -> None:
-    """Create or restart a run as ``RUNNING`` without duplicating an attempt."""
+    """Create a ``RUNNING`` run; a same-capture replay is a no-op."""
 
     run = await _load_run_for_update(session, analysis_run_id)
     if run is None:
@@ -85,20 +85,7 @@ async def start_analysis_run(
     if run.capture_session_id != capture_session_id:
         raise AnalysisRunConflictError("analysis run ID belongs to another capture session")
 
-    if run.status is AnalysisRunStatus.RUNNING:
-        return
-
-    await session.execute(delete(Detection).where(Detection.analysis_run_id == analysis_run_id))
-    run.status = AnalysisRunStatus.RUNNING
-    run.attempt_count += 1
-    run.started_at = now
-    run.completed_at = None
-    run.failure_code = None
-    run.model_name = None
-    run.model_version = None
-    run.prompt_version = None
-    run.result_schema_version = None
-    await session.flush()
+    return
 
 
 async def complete_analysis_run(
