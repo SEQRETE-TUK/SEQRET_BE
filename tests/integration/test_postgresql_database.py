@@ -114,7 +114,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "b_03_0001"
+ALEMBIC_HEAD = "a_09_0003"
+ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
@@ -299,6 +300,49 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             assert BUSINESS_TABLES.isdisjoint(inspect(engine).get_table_names())
             assert "existing_schema_probe" in inspect(engine).get_table_names()
 
+            command.upgrade(configuration, "head")
+            assert _current_revision(engine) == ALEMBIC_HEAD
+        finally:
+            engine.dispose()
+
+
+def test_postgresql_operational_event_rows_block_schema_downgrade() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        engine = create_engine(schema_url)
+        configuration = _alembic_config(schema_url)
+        event_id = uuid4()
+
+        try:
+            command.upgrade(configuration, "head")
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO event_consumption (consumer_name, event_id, consumed_at) "
+                        "VALUES (:consumer_name, :event_id, :consumed_at)"
+                    ),
+                    {
+                        "consumer_name": "event-guard",
+                        "event_id": event_id,
+                        "consumed_at": datetime.now(UTC),
+                    },
+                )
+
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
+            assert _current_revision(engine) == ALEMBIC_HEAD
+            with engine.begin() as connection:
+                assert (
+                    connection.scalar(
+                        text("SELECT event_id FROM event_consumption WHERE event_id = :event_id"),
+                        {"event_id": event_id},
+                    )
+                    == event_id
+                )
+                connection.execute(text("DELETE FROM event_consumption"))
+
+            command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
+            assert _current_revision(engine) == ALEMBIC_OPERATIONAL_EVENT_PREVIOUS
             command.upgrade(configuration, "head")
             assert _current_revision(engine) == ALEMBIC_HEAD
         finally:
@@ -1213,6 +1257,10 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
 
         downgraded_engine = create_engine(schema_url)
         try:
+            with downgraded_engine.begin() as connection:
+                connection.execute(text("DELETE FROM event_consumption"))
+                connection.execute(text("DELETE FROM notification_delivery"))
+                connection.execute(text("DELETE FROM outbox_event"))
             command.downgrade(_alembic_config(schema_url), ALEMBIC_ANALYSIS_PREVIOUS)
             scope_version = Table("scope_version", MetaData(), autoload_with=downgraded_engine)
             with downgraded_engine.connect() as connection:

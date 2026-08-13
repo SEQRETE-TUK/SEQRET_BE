@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "b_03_0001"
+ALEMBIC_HEAD = "a_09_0003"
+ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
@@ -64,6 +65,104 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_operational_event_rows_block_schema_downgrade(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'event-guard.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(
+            engine,
+            only=(
+                "event_consumption",
+                "job_participant",
+                "move_job",
+                "notification_delivery",
+                "outbox_event",
+            ),
+        )
+        created_at = datetime.now(UTC)
+        job_id = uuid4().hex
+        participant_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "event guard",
+                    "status": "DRAFT",
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                {
+                    "id": participant_id,
+                    "job_id": job_id,
+                    "role": "CUSTOMER",
+                    "display_name": "event guard",
+                    "created_at": created_at,
+                },
+            )
+
+        event_id = uuid4().hex
+        guarded_rows = (
+            (
+                metadata.tables["outbox_event"],
+                {
+                    "event_id": event_id,
+                    "event_type": "SCOPE_LOCKED_V1",
+                    "schema_version": 1,
+                    "aggregate_id": job_id,
+                    "trace_id": "0" * 32,
+                    "payload": {},
+                    "occurred_at": created_at,
+                    "next_attempt_at": created_at,
+                },
+            ),
+            (
+                metadata.tables["notification_delivery"],
+                {
+                    "id": uuid4().hex,
+                    "event_id": event_id,
+                    "event_type": "SCOPE_LOCKED_V1",
+                    "job_id": job_id,
+                    "recipient_participant_id": participant_id,
+                    "status": "PENDING",
+                    "attempt_count": 0,
+                    "created_at": created_at,
+                },
+            ),
+            (
+                metadata.tables["event_consumption"],
+                {
+                    "consumer_name": "event-guard",
+                    "event_id": event_id,
+                    "consumed_at": created_at,
+                },
+            ),
+        )
+        for table, values in guarded_rows:
+            with engine.begin() as connection:
+                connection.execute(table.insert(), values)
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
+            assert _current_revision(engine) == ALEMBIC_HEAD
+            with engine.begin() as connection:
+                assert connection.scalar(select(table.c[next(iter(values))])) is not None
+                connection.execute(table.delete())
+
+        command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_OPERATIONAL_EVENT_PREVIOUS
+        command.upgrade(configuration, "head")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
@@ -255,6 +354,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 migrated_metadata.tables["outbox_event"].insert(),
                 outbox_event,
             )
+            connection.execute(migrated_metadata.tables["outbox_event"].delete())
 
         command.downgrade(configuration, "a_12_0001")
         assert _current_revision(engine) == "a_12_0001"
@@ -324,7 +424,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_OPERATIONAL_EVENT_PREVIOUS
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["background_job"].delete())
 
