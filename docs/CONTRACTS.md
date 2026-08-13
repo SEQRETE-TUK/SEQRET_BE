@@ -14,7 +14,7 @@
 
 | Port | adapter 소유자 | 입력·출력 | 멱등성 | timeout | 오류 계약 |
 | --- | --- | --- | --- | --- | --- |
-| `StoragePort` (`ObjectStoragePort` 호환 별칭) | B | object key와 제약 → signed upload target, read URL, metadata 또는 삭제 완료 | 삭제는 `idempotency_key`로 중복 효과를 막는다 | 모든 provider 호출에 초 단위 명시 | provider 오류를 adapter 예외로 매핑하며 A ORM을 갱신하지 않는다 |
+| `StoragePort` (`ObjectStoragePort` 호환 별칭) | B | object key와 제약 → signed upload target, read URL, metadata, generation-pinned SHA-256 또는 삭제 완료 | 삭제는 `idempotency_key`로 중복 효과를 막는다 | 모든 provider 호출에 초 단위 명시 | provider 오류를 adapter 예외로 매핑하며 A ORM을 갱신하지 않는다 |
 | `TaskQueuePort` | B | queue, handler, JSON payload → provider task ID | 같은 key는 한 task만 반환한다 | enqueue 호출에 초 단위 명시 | 재시도 가능 여부를 provider 외부 타입으로 노출하지 않는다 |
 | `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, object key, model/prompt version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
 | `EventBusPort` | A | `DomainEvent` → 발행 완료 | event ID 기반 key로 중복 발행 효과를 막는다 | 발행 호출에 초 단위 명시 | Outbox 상태와 retry 정책은 A가 관리한다 |
@@ -24,6 +24,7 @@
 
 - `StoragePort.create_upload_url`은 객체가 없을 때만 생성하는 immutable `StorageUploadTarget`을 반환한다. 공용 모델은 provider별 URL과 header를 해석하거나 정규화하지 않는 opaque bag이며, API는 그 값을 `upload_url`과 `upload_headers`로 정확히 전달한다. 각 adapter가 provider별 create-only 조건을 서명하고 서명에 필요한 모든 header를 target에 넣는다. 현재 GCS adapter는 요청 `Content-Type`과 `x-goog-if-generation-match: 0`을 함께 서명·반환해야 한다.
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
+- `StoragePort.calculate_sha256`은 지정한 generation만 스트리밍해 소문자 SHA-256을 반환한다. 원본 전체를 메모리에 적재하거나 최신 generation으로 대체하지 않는다.
 - `StoragePort.delete_object`의 generation은 1~255자의 필수 snapshot이다. snapshot generation이 이미 없으면 멱등 성공하고, 같은 key의 다른 generation 객체는 보존한다.
 - 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하거나 문자열을 정규화하지 않고 원문 그대로 전달한다.
 - `PENDING_UPLOAD` 미디어는 실제 크기·hash·generation·업로드 시각을 갖지 않는다. 그 밖의 상태는 실제 크기, 비어 있지 않은 generation과 업로드 시각을 반드시 보존한다.
