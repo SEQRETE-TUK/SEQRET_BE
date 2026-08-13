@@ -47,6 +47,7 @@ async def get_current_actor(
                 session,
                 secret,
                 cache=cache,
+                logger=request.app.state.observability.logger,
                 rate_limit_requests=settings.access_rate_limit_requests,
                 rate_limit_window_seconds=settings.access_rate_limit_window_seconds,
                 cache_timeout_seconds=settings.cache_timeout_seconds,

@@ -281,6 +281,10 @@ run "staging_runtime_isolation" {
     condition = alltrue([
       google_monitoring_alert_policy.api_server_errors.severity == "ERROR",
       google_monitoring_alert_policy.api_latency.severity == "WARNING",
+      google_monitoring_alert_policy.access_rate_limit_cache_fallback.severity == "WARNING",
+      length(google_monitoring_alert_policy.access_rate_limit_cache_fallback.conditions[0].condition_matched_log) == 1,
+      strcontains(google_monitoring_alert_policy.access_rate_limit_cache_fallback.conditions[0].condition_matched_log[0].filter, "jsonPayload.event=\"access_rate_limit_cache_fallback\""),
+      google_monitoring_alert_policy.access_rate_limit_cache_fallback.alert_strategy[0].notification_rate_limit[0].period == "900s",
       google_monitoring_alert_policy.job_failures.severity == "ERROR",
       google_monitoring_alert_policy.outbox_relay_failures.severity == "ERROR",
       length(google_monitoring_alert_policy.outbox_relay_failures.conditions) == 2,

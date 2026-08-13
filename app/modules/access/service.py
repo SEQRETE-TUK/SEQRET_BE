@@ -1,6 +1,7 @@
 """Access-link issuance, verification, and revocation."""
 
 import hashlib
+import logging
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -195,6 +196,7 @@ async def _enforce_access_rate_limit(
     cache: CachePort | None,
     *,
     now: datetime,
+    logger: logging.Logger,
     request_limit: int,
     window_seconds: int,
     timeout_seconds: float,
@@ -223,6 +225,13 @@ async def _enforce_access_rate_limit(
                 ProviderErrorKind.UNAVAILABLE,
             }:
                 raise
+            logger.warning(
+                "Redis access rate limit unavailable; using database limit",
+                extra={
+                    "event": "access_rate_limit_cache_fallback",
+                    "outcome": "fallback",
+                },
+            )
             return
         if cache_count > request_limit:
             raise AccessRateLimitExceededError(window_seconds)
@@ -233,6 +242,7 @@ async def authenticate_access_token(
     secret: str,
     *,
     cache: CachePort | None,
+    logger: logging.Logger,
     rate_limit_requests: int,
     rate_limit_window_seconds: int,
     cache_timeout_seconds: float,
@@ -262,6 +272,7 @@ async def authenticate_access_token(
         access_link,
         cache,
         now=now,
+        logger=logger,
         request_limit=rate_limit_requests,
         window_seconds=rate_limit_window_seconds,
         timeout_seconds=cache_timeout_seconds,
