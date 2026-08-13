@@ -156,11 +156,21 @@ resource "google_compute_managed_ssl_certificate" "api" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_compute_ssl_policy" "api" {
+  project         = var.project_id
+  name            = "${local.api_name}-tls"
+  profile         = "MODERN"
+  min_tls_version = "TLS_1_2"
+
+  depends_on = [google_project_service.required]
+}
+
 resource "google_compute_target_https_proxy" "api" {
   project          = var.project_id
   name             = "${local.api_name}-https"
   url_map          = google_compute_url_map.api.id
   ssl_certificates = [google_compute_managed_ssl_certificate.api.id]
+  ssl_policy       = google_compute_ssl_policy.api.id
 
   depends_on = [google_project_service.required]
 }

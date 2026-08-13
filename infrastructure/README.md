@@ -92,6 +92,8 @@ The API emits JSON logs containing `request_id`, `trace_id`, optional `job_id`, 
 
 Cloud Monitoring includes request-rate, p95-latency and job-result charts, a 99% rolling 30-day non-5xx request SLO, and alerts for API 5xx responses, p95 latency, failed media jobs, failed or missing Outbox relay executions, and failed external `/edgez` checks. That endpoint uses the ordinary policy path, so a closed default policy is reported as unavailable.
 
+The public HTTPS proxy enforces the managed `MODERN` profile with TLS 1.2 as its minimum. Artifact Registry deploys by immutable digest while repository cleanup remains in dry-run: versions older than 90 days are deletion candidates and the newest 50 versions are retained. Review the provider cleanup audit logs before changing dry-run to active deletion.
+
 ## Local validation
 
 Terraform `1.15.8` and Google provider `7.44.x` are pinned:

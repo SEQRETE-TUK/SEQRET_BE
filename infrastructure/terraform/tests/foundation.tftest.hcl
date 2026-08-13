@@ -173,9 +173,18 @@ run "staging_runtime_isolation" {
   assert {
     condition = alltrue([
       google_artifact_registry_repository.backend.repository_id == "backend",
-      google_artifact_registry_repository.backend.docker_config[0].immutable_tags,
+      !google_artifact_registry_repository.backend.docker_config[0].immutable_tags,
+      google_artifact_registry_repository.backend.cleanup_policy_dry_run,
+      one([
+        for policy in google_artifact_registry_repository.backend.cleanup_policies : policy.condition[0].older_than
+        if policy.id == "delete-older-than-90-days"
+      ]) == "7776000s",
+      one([
+        for policy in google_artifact_registry_repository.backend.cleanup_policies : policy.most_recent_versions[0].keep_count
+        if policy.id == "keep-most-recent-50"
+      ]) == 50,
     ])
-    error_message = "Artifact Registry must reject mutable tag replacement."
+    error_message = "Artifact Registry cleanup must stay in dry-run with the approved retention boundaries."
   }
 
   assert {
@@ -211,6 +220,9 @@ run "staging_runtime_isolation" {
       ]) == "deny(502)",
       google_compute_global_forwarding_rule.api_https.port_range == "443",
       google_compute_managed_ssl_certificate.api.name == "seqret-stg-api-cert-6d0cd4bd",
+      google_compute_ssl_policy.api.profile == "MODERN",
+      google_compute_ssl_policy.api.min_tls_version == "TLS_1_2",
+      google_compute_target_https_proxy.api.ssl_policy == google_compute_ssl_policy.api.id,
       google_monitoring_uptime_check_config.api.http_check[0].path == "/edgez",
     ])
     error_message = "The public API edge must enforce Cloud Armor, HTTPS, and external health checks."
