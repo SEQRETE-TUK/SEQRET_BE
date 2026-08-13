@@ -1,1 +1,1 @@
-"""B-owned media processing: deletion handler and derived-media work."""
+"""B-owned generation-pinned validation and deletion handlers."""

@@ -37,7 +37,7 @@
 ## B 트랙 인계
 
 - 병합 완료: GCS SDK [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37), B-01 GCS adapter [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39), B-03 분석 실행 [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35), B-07 삭제 handler [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36).
-- A는 upload 완료와 generation-pinned validation intent, `PROCESSING → READY|FAILED` command를 연결했다. 남은 B 구현은 B-02 Cloud Tasks·private worker runtime, B-04 Vertex AI adapter, B-05 검증 handler·파생 처리, B-06 worker retry·멱등성과 provider 오류 매핑이다. 이후 INT-01·INT-06과 삭제 runtime 통합을 검증한다.
+- upload 완료는 generation-pinned validation intent를 만들고 B-05 handler가 metadata·MIME type·크기·SHA-256을 검증해 `PROCESSING → READY|FAILED` command로 반영한다. 남은 B 구현은 B-02 Cloud Tasks·private worker runtime, B-04 Vertex AI adapter, B-05 파생 처리 정책, B-06 worker retry·멱등성과 provider 오류 매핑이다. 이후 INT-01·INT-06과 삭제 runtime 통합을 검증한다.
 - Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막고, B handler는 A ORM을 우회 갱신하지 않는다. 저장된 object generation은 read/delete까지 그대로 전달한다.
 
 ## 외부 활성화 전 확인
