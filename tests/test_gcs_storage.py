@@ -1,6 +1,8 @@
 """B-01 Google Cloud Storage adapter tests without network access."""
 
 import asyncio
+import hashlib
+import io
 import time
 from datetime import timedelta
 
@@ -31,6 +33,7 @@ class StubBlob:
         delete_error: Exception | None = None,
         signed_url_error: Exception | None = None,
         sleep_seconds: float = 0.0,
+        content: bytes = b"verified-media",
     ) -> None:
         self.generation = generation
         self.size = size
@@ -40,6 +43,7 @@ class StubBlob:
         self._delete_error = delete_error
         self._signed_url_error = signed_url_error
         self._sleep_seconds = sleep_seconds
+        self._content = content
         self.signed_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.reloaded = False
@@ -77,6 +81,18 @@ class StubBlob:
             raise self._reload_error
         self.reloaded = True
 
+    def open(
+        self,
+        mode: str,
+        *,
+        chunk_size: int,
+        timeout: float,
+    ) -> io.BytesIO:
+        assert mode == "rb"
+        assert chunk_size == 1024 * 1024
+        assert timeout > 0
+        return io.BytesIO(self._content)
+
     def delete(self, *, timeout: float, if_generation_match: int | None = None) -> None:
         self.delete_calls.append({"timeout": timeout, "if_generation_match": if_generation_match})
         if self._delete_error is not None:
@@ -87,9 +103,11 @@ class StubBucket:
     def __init__(self, blob: StubBlob) -> None:
         self._blob = blob
         self.requested: list[str] = []
+        self.requested_generations: list[int | None] = []
 
-    def blob(self, blob_name: str) -> StubBlob:
+    def blob(self, blob_name: str, generation: int | None = None) -> StubBlob:
         self.requested.append(blob_name)
+        self.requested_generations.append(generation)
         return self._blob
 
 
@@ -257,6 +275,23 @@ async def test_get_metadata_without_generation() -> None:
     metadata = await adapter.get_metadata(object_key="jobs/1/photo.jpg", timeout_seconds=2)
 
     assert metadata.generation is None
+
+
+@pytest.mark.anyio
+async def test_calculate_sha256_streams_the_requested_generation() -> None:
+    content = b"verified-media" * 200_000
+    blob = StubBlob(content=content)
+    adapter, bucket = _adapter(blob)
+
+    digest = await adapter.calculate_sha256(
+        object_key="jobs/1/photo.jpg",
+        generation="7",
+        timeout_seconds=2,
+    )
+
+    assert digest == hashlib.sha256(content).hexdigest()
+    assert bucket.requested == ["jobs/1/photo.jpg"]
+    assert bucket.requested_generations == [7]
 
 
 @pytest.mark.anyio

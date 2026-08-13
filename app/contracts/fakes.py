@@ -1,5 +1,6 @@
 """Deterministic local fakes for shared port contract tests."""
 
+import hashlib
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
@@ -23,6 +24,7 @@ class FakeObjectStorage:
 
     def __init__(self) -> None:
         self.metadata: dict[str, StorageObjectMetadata] = {}
+        self.contents: dict[str, bytes] = {}
         self.deleted_keys: set[str] = set()
         self._delete_requests: dict[IdempotencyKey, tuple[str, str]] = {}
 
@@ -86,6 +88,35 @@ class FakeObjectStorage:
                 retryable=False,
             ) from error
 
+    async def calculate_sha256(
+        self,
+        *,
+        object_key: str,
+        generation: StorageObjectGeneration,
+        timeout_seconds: float,
+    ) -> str:
+        self._require_positive(timeout_seconds, "timeout_seconds")
+        self._require_generation(generation)
+        metadata = await self.get_metadata(
+            object_key=object_key,
+            timeout_seconds=timeout_seconds,
+        )
+        if metadata.generation != generation:
+            raise ProviderError(
+                ProviderErrorKind.NOT_FOUND,
+                "storage object generation not found",
+                retryable=False,
+            )
+        try:
+            content = self.contents[object_key]
+        except KeyError as error:
+            raise ProviderError(
+                ProviderErrorKind.NOT_FOUND,
+                "storage object content not found",
+                retryable=False,
+            ) from error
+        return hashlib.sha256(content).hexdigest()
+
     async def delete_object(
         self,
         *,
@@ -111,6 +142,7 @@ class FakeObjectStorage:
         if metadata is None or metadata.generation != generation:
             return
         del self.metadata[object_key]
+        self.contents.pop(object_key, None)
         self.deleted_keys.add(object_key)
 
 

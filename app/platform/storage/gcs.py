@@ -6,9 +6,10 @@ this adapter touches; signed URLs are generated on demand and never persisted.
 """
 
 import asyncio
+import hashlib
 from collections.abc import Callable
 from datetime import timedelta
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 import google.auth
 from google.api_core import exceptions as google_exceptions
@@ -48,11 +49,19 @@ class Blob(Protocol):
 
     def reload(self, *, timeout: float) -> None: ...
 
+    def open(
+        self,
+        mode: str,
+        *,
+        chunk_size: int,
+        timeout: float,
+    ) -> BinaryIO: ...
+
     def delete(self, *, timeout: float, if_generation_match: int | None = None) -> None: ...
 
 
 class Bucket(Protocol):
-    def blob(self, blob_name: str) -> Blob: ...
+    def blob(self, blob_name: str, generation: int | None = None) -> Blob: ...
 
 
 class StorageClient(Protocol):
@@ -202,6 +211,29 @@ class GoogleCloudStorage:
                 size_bytes=cast(int, blob.size),
                 generation=None if blob.generation is None else str(blob.generation),
             )
+
+        return await self._run(timeout_seconds, operation)
+
+    async def calculate_sha256(
+        self,
+        *,
+        object_key: str,
+        generation: str,
+        timeout_seconds: float,
+    ) -> str:
+        generation_number = self._generation_number(generation)
+
+        def operation() -> str:
+            digest = hashlib.sha256()
+            blob = self._bucket.blob(object_key, generation=generation_number)
+            with blob.open(
+                "rb",
+                chunk_size=1024 * 1024,
+                timeout=timeout_seconds,
+            ) as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+            return digest.hexdigest()
 
         return await self._run(timeout_seconds, operation)
 

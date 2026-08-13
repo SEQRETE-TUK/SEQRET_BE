@@ -103,6 +103,16 @@ class StoragePort(Protocol):
         timeout_seconds: float,
     ) -> StorageObjectMetadata: ...
 
+    async def calculate_sha256(
+        self,
+        *,
+        object_key: str,
+        generation: StorageObjectGeneration,
+        timeout_seconds: float,
+    ) -> str:
+        """Stream one immutable object generation and return lowercase SHA-256."""
+        ...
+
     async def delete_object(
         self,
         *,

@@ -1,5 +1,6 @@
 """Contract tests reused by deterministic local port fakes."""
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -52,6 +53,7 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
         size_bytes=10,
         generation="7",
     )
+    storage.contents["jobs/1/photo.jpg"] = b"verified-media"
 
     assert isinstance(storage, ObjectStoragePort)
     upload = await storage.create_upload_url(
@@ -78,6 +80,14 @@ async def test_storage_fake_satisfies_protocol_and_deduplicates_deletion() -> No
     assert (
         await storage.get_metadata(object_key="jobs/1/photo.jpg", timeout_seconds=2)
     ).size_bytes == 10
+    assert (
+        await storage.calculate_sha256(
+            object_key="jobs/1/photo.jpg",
+            generation="7",
+            timeout_seconds=2,
+        )
+        == hashlib.sha256(b"verified-media").hexdigest()
+    )
 
     await storage.delete_object(
         object_key="jobs/1/photo.jpg",
@@ -107,6 +117,19 @@ async def test_storage_fake_preserves_a_different_generation_and_accepts_missing
     )
     storage.metadata[current.object_key] = current
 
+    with pytest.raises(ProviderError) as stale_generation:
+        await storage.calculate_sha256(
+            object_key=current.object_key,
+            generation="7",
+            timeout_seconds=2,
+        )
+    with pytest.raises(ProviderError) as missing_content:
+        await storage.calculate_sha256(
+            object_key=current.object_key,
+            generation="8",
+            timeout_seconds=2,
+        )
+
     await storage.delete_object(
         object_key=current.object_key,
         generation="7",
@@ -122,6 +145,8 @@ async def test_storage_fake_preserves_a_different_generation_and_accepts_missing
 
     assert storage.metadata[current.object_key] is current
     assert storage.deleted_keys == set()
+    assert stale_generation.value.kind is ProviderErrorKind.NOT_FOUND
+    assert missing_content.value.kind is ProviderErrorKind.NOT_FOUND
 
 
 def test_storage_upload_target_preserves_provider_opaque_values() -> None:
