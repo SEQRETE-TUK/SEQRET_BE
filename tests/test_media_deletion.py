@@ -18,7 +18,12 @@ from app.contracts.maintenance import (
     MediaDeletionTaskV1,
 )
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import ProviderError, ProviderErrorKind
+from app.contracts.ports import (
+    ProviderError,
+    ProviderErrorKind,
+    StorageObjectGeneration,
+    StorageObjectMetadata,
+)
 from app.contracts.primitives import BackgroundJobId, IdempotencyKey, TraceId
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
@@ -62,7 +67,7 @@ class FailingStorage(FakeObjectStorage):
         self,
         *,
         object_key: str,
-        generation: str | None,
+        generation: StorageObjectGeneration,
         idempotency_key: IdempotencyKey,
         timeout_seconds: float,
     ) -> None:
@@ -116,7 +121,9 @@ async def _seed(
                 object_key=object_key,
                 content_type="image/jpeg",
                 expected_size_bytes=10,
+                actual_size_bytes=10,
                 generation="7",
+                uploaded_at=NOW,
             )
         )
         session.add(
@@ -160,12 +167,19 @@ async def test_successful_deletion_marks_job_and_asset(
 ) -> None:
     task, object_key, media_id = await _seed(factory, status=BackgroundJobStatus.QUEUED)
     storage = FakeObjectStorage()
+    storage.metadata[object_key] = StorageObjectMetadata(
+        object_key=object_key,
+        content_type="image/jpeg",
+        size_bytes=10,
+        generation="7",
+    )
 
     result = await handle_media_deletion(factory, storage, task, now=NOW)
 
     assert result is not None
     assert result.outcome is MediaDeletionOutcome.SUCCEEDED
     assert storage.deleted_keys == {object_key}
+    assert object_key not in storage.metadata
 
     job = await _job(factory, task.background_job_id)
     assert job.status is BackgroundJobStatus.SUCCEEDED
