@@ -1,8 +1,10 @@
 """Capture session, media policy, authorization, and upload verification tests."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,6 +34,8 @@ from app.modules.capture.schemas import (
 from app.modules.capture.service import (
     CaptureResourceNotFoundError,
     MediaPurposeNotAllowedError,
+    MediaUploadStateConflictError,
+    complete_media_upload,
     create_capture_session,
     create_media_upload,
 )
@@ -416,24 +420,24 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 0
 
-    async def insecure_upload_url(**_kwargs: object) -> StorageUploadTarget:
-        return _upload_target(
-            "http://storage.invalid/upload?signature=secret",
-            "video/mp4",
-        )
+    for invalid_url in (
+        "http://storage.invalid/upload?signature=secret",
+        "https:///upload?signature=secret",
+        " https://storage.invalid/upload?signature=secret ",
+        "https://storage.invalid:not-a-port/upload?signature=secret",
+        "https://storage.invalid:70000/upload?signature=secret",
+    ):
 
-    monkeypatch.setattr(storage, "create_upload_url", insecure_upload_url)
-    insecure_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
-    assert insecure_provider.status_code == 503
-    assert "signature=secret" not in insecure_provider.text
+        async def invalid_upload_url(
+            _url: str = invalid_url,
+            **_kwargs: object,
+        ) -> StorageUploadTarget:
+            return _upload_target(_url, "video/mp4")
 
-    async def malformed_upload_url(**_kwargs: object) -> StorageUploadTarget:
-        return _upload_target("https:///upload?signature=secret", "video/mp4")
-
-    monkeypatch.setattr(storage, "create_upload_url", malformed_upload_url)
-    malformed_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
-    assert malformed_provider.status_code == 503
-    assert "signature=secret" not in malformed_provider.text
+        monkeypatch.setattr(storage, "create_upload_url", invalid_upload_url)
+        invalid_provider = await client.post(upload_url, headers=_headers(secret), json=payload)
+        assert invalid_provider.status_code == 503
+        assert "signature=secret" not in invalid_provider.text
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(MediaAsset)) == 0
     monkeypatch.setattr(storage, "create_upload_url", original_create_upload_url)
@@ -528,3 +532,73 @@ async def test_capture_maps_provider_failure_and_upload_conflicts(
         )
     state_conflict = await client.post(complete_url, headers=_headers(secret))
     assert state_conflict.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_complete_rechecks_state_after_metadata() -> None:
+    job_id = uuid4()
+    capture_id = uuid4()
+    asset_id = uuid4()
+    participant_id = uuid4()
+    capture = CaptureSession(
+        id=capture_id,
+        job_id=job_id,
+        created_by_participant_id=participant_id,
+    )
+    pending = MediaAsset(
+        id=asset_id,
+        capture_session_id=capture_id,
+        room_zone_id=uuid4(),
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.PENDING_UPLOAD,
+        object_key="jobs/raced-object",
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+    )
+    raced = MediaAsset(
+        id=asset_id,
+        capture_session_id=capture_id,
+        room_zone_id=pending.room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.READY,
+        object_key=pending.object_key,
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+        actual_size_bytes=10,
+        generation="2",
+        uploaded_at=datetime.now(UTC),
+    )
+
+    def scalar_result(*, one_or_none: object = None, one: object = None) -> MagicMock:
+        result = MagicMock()
+        result.one_or_none.return_value = one_or_none
+        result.one.return_value = one
+        return result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.scalars.side_effect = (
+        scalar_result(one_or_none=capture),
+        scalar_result(one_or_none=pending),
+        scalar_result(one=raced),
+    )
+    session.scalar.side_effect = (
+        MoveJobStatus.DRAFT,
+        MoveJob(id=job_id, title="race", status=MoveJobStatus.DRAFT),
+    )
+    storage = FakeObjectStorage()
+    storage.metadata[pending.object_key] = StorageObjectMetadata(
+        object_key=pending.object_key,
+        content_type=pending.content_type,
+        size_bytes=pending.expected_size_bytes,
+        generation="1",
+    )
+
+    with pytest.raises(MediaUploadStateConflictError):
+        await complete_media_upload(
+            session,
+            storage,
+            job_id,
+            capture_id,
+            asset_id,
+            participant_id,
+        )

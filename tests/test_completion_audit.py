@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
-from sqlalchemy import create_engine, delete, select, update
+from sqlalchemy import create_engine, delete, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -235,9 +235,12 @@ async def test_bilateral_completion_updates_job_and_exposes_sanitized_audit(
 
     for invalid_generation in (None, " "):
         async with factory.begin() as session:
+            await session.execute(text("PRAGMA ignore_check_constraints = ON"))
             asset = await session.get(MediaAsset, UUID(evidence_id))
             assert asset is not None
             asset.generation = invalid_generation
+            await session.flush()
+            await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
         blocked = await client.post(
             confirmation_url,
             headers=_headers(_secret(created, "company_manager")),

@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
 from pydantic import JsonValue, ValidationError
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -704,11 +704,14 @@ async def test_target_policy_and_unexpected_dispatch_errors(
             )
 
     for invalid_generation in (None, " "):
-        generation_missing = await _seed_media(
-            factory,
-            second,
-            generation=invalid_generation,
-        )
+        generation_missing = await _seed_media(factory, second)
+        async with factory.begin() as session:
+            await session.execute(text("PRAGMA ignore_check_constraints = ON"))
+            stored = await session.get(MediaAsset, generation_missing.id)
+            assert stored is not None
+            stored.generation = invalid_generation
+            await session.flush()
+            await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
         with pytest.raises(BackgroundJobConflictError):
             async with factory.begin() as session:
                 await create_retention_background_job(
@@ -763,6 +766,7 @@ async def test_create_recovers_only_a_matching_concurrent_insert(
         expected_size_bytes=10,
         actual_size_bytes=10,
         generation="7",
+        uploaded_at=FIXED_NOW - timedelta(days=40),
     )
     move_job = MoveJob(
         id=job_id,

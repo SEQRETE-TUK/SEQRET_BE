@@ -88,7 +88,8 @@ async def _lock_mutable_job(session: AsyncSession, job_id: UUID) -> None:
 def _validated_upload_url(value: str) -> str:
     try:
         parsed = urlsplit(value)
-        if parsed.scheme.lower() != "https" or parsed.hostname is None:
+        _ = parsed.port
+        if value != value.strip() or parsed.scheme.lower() != "https" or parsed.hostname is None:
             raise ValueError
     except ValueError:
         raise ProviderError(
@@ -254,7 +255,8 @@ async def complete_media_upload(
     ).one()
     if asset.status is MediaAssetStatus.UPLOADED:
         return _asset_response(asset)
-    assert asset.status is MediaAssetStatus.PENDING_UPLOAD
+    if asset.status is not MediaAssetStatus.PENDING_UPLOAD:
+        raise MediaUploadStateConflictError(media_asset_id)
 
     asset.status = MediaAssetStatus.UPLOADED
     asset.actual_size_bytes = metadata.size_bytes

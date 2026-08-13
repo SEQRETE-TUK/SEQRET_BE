@@ -17,7 +17,7 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_12_0001"
+ALEMBIC_HEAD = "a_03_0002"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
@@ -92,6 +92,9 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             "ix_background_job_dispatch_lease",
             "ix_background_job_move_job_created",
         } <= background_indexes
+        assert "media_asset_metadata_state" in {
+            check["name"] for check in inspect(engine).get_check_constraints("media_asset")
+        }
 
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
@@ -199,6 +202,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "content_type": "image/jpeg",
                     "expected_size_bytes": 10,
                     "actual_size_bytes": 10,
+                    "generation": "7",
                     "created_at": created_at,
                     "uploaded_at": created_at,
                 },
@@ -218,6 +222,46 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "created_at": created_at,
                 },
             )
+
+        command.downgrade(configuration, "a_12_0001")
+        assert _current_revision(engine) == "a_12_0001"
+        command.upgrade(configuration, "head")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.connect() as connection:
+            preserved_generation = connection.scalar(
+                select(migrated_metadata.tables["media_asset"].c.generation).where(
+                    migrated_metadata.tables["media_asset"].c.id == media_asset_id
+                )
+            )
+        assert preserved_generation == "7"
+
+        invalid_media_assets = (
+            {
+                "status": "PENDING_UPLOAD",
+                "generation": "unexpected",
+            },
+            {
+                "status": "UPLOADED",
+                "actual_size_bytes": 10,
+                "uploaded_at": created_at,
+            },
+        )
+        for invalid_state in invalid_media_assets:
+            invalid_media_asset = {
+                "id": uuid4().hex,
+                "capture_session_id": capture_id,
+                "room_zone_id": room_zone_id,
+                "media_purpose": "COMPLETION",
+                "object_key": f"migration/{uuid4().hex}",
+                "content_type": "image/jpeg",
+                "expected_size_bytes": 10,
+                "created_at": created_at,
+            } | invalid_state
+            with pytest.raises(IntegrityError), engine.begin() as connection:
+                connection.execute(
+                    migrated_metadata.tables["media_asset"].insert(),
+                    invalid_media_asset,
+                )
 
         invalid_background_job = {
             "id": uuid4().hex,
@@ -247,7 +291,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_BACKGROUND_JOB_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == "a_12_0001"
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["background_job"].delete())
 

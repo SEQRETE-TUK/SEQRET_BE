@@ -108,6 +108,10 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
     }
     assert "ErrorResponse" not in schema["components"]["schemas"]
     assert "ErrorDetail" not in schema["components"]["schemas"]
+    assert (
+        schema["components"]["schemas"]["MediaUploadResponse"]["properties"]["upload_url"]["format"]
+        == "uri"
+    )
 
     for method, path in route_failures:
         responses = schema["paths"][path][method]["responses"]

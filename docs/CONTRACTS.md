@@ -26,6 +26,7 @@
 - `StoragePort.create_read_url`은 DB에 검증·저장된 object generation을 필수로 받고, adapter는 그 generation을 signed URL에 고정한다. generation이 없는 미디어는 열람 URL 발급을 거부한다.
 - `StoragePort.delete_object`의 generation은 1~255자의 필수 snapshot이다. snapshot generation이 이미 없으면 멱등 성공하고, 같은 key의 다른 generation 객체는 보존한다.
 - 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하거나 문자열을 정규화하지 않고 원문 그대로 전달한다.
+- `PENDING_UPLOAD` 미디어는 실제 크기·hash·generation·업로드 시각을 갖지 않는다. 그 밖의 상태는 실제 크기, 비어 있지 않은 generation과 업로드 시각을 반드시 보존한다.
 - `AnalysisRequest.source_media_asset_ids[n]`과 `object_keys[n]`은 같은 미디어를 가리킨다. 두 배열은 길이가 같고 각 배열 안에서 중복이 없어야 한다.
 - merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.
 
