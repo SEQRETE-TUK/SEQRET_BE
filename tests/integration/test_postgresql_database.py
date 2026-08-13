@@ -16,6 +16,7 @@ from alembic.config import Config
 from pydantic import SecretStr
 from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import URL, Engine, make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
@@ -105,7 +106,7 @@ ALEMBIC_BASELINE = "fnd_a02_0001"
 ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
-ALEMBIC_HEAD = "a_03_0002"
+ALEMBIC_HEAD = "a_09_0002"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
@@ -211,6 +212,32 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
             command.upgrade(configuration, "head")
             assert _current_revision(engine) == ALEMBIC_HEAD
             assert set(inspect(engine).get_table_names()) >= BUSINESS_TABLES
+            assert {"outbox_payload_object", "outbox_schema_version_one"} <= {
+                check["name"] for check in inspect(engine).get_check_constraints("outbox_event")
+            }
+
+            outbox_metadata = MetaData()
+            outbox_metadata.reflect(engine, only=("outbox_event",))
+            outbox_event = {
+                "event_id": uuid4(),
+                "event_type": "SCOPE_LOCKED_V1",
+                "schema_version": 1,
+                "aggregate_id": uuid4(),
+                "trace_id": "0" * 32,
+                "payload": {},
+                "occurred_at": datetime.now(UTC),
+                "next_attempt_at": datetime.now(UTC),
+            }
+            invalid_outbox_events = (
+                outbox_event | {"event_id": uuid4(), "schema_version": 2},
+                outbox_event | {"event_id": uuid4(), "payload": []},
+            )
+            for invalid_outbox_event in invalid_outbox_events:
+                with pytest.raises(IntegrityError), engine.begin() as connection:
+                    connection.execute(
+                        outbox_metadata.tables["outbox_event"].insert(),
+                        invalid_outbox_event,
+                    )
 
             command.downgrade(configuration, "base")
             assert _current_revision(engine) is None

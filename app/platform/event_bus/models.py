@@ -34,7 +34,15 @@ class OutboxEvent(Base):
             "'COMPLETION_MEDIA_SUBMITTED_V1', 'MEDIA_DELETED_V1')",
             name="outbox_event_type",
         ),
-        CheckConstraint("schema_version > 0", name="outbox_schema_version_positive"),
+        CheckConstraint("schema_version = 1", name="outbox_schema_version_one"),
+        CheckConstraint(
+            "json_typeof(payload) = 'object'",
+            name="outbox_payload_object",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "json_type(payload) = 'object'",
+            name="outbox_payload_object",
+        ).ddl_if(dialect="sqlite"),
         CheckConstraint("attempt_count >= 0", name="outbox_attempt_count_nonnegative"),
         CheckConstraint("length(trace_id) = 32", name="outbox_trace_id_length"),
         CheckConstraint(
