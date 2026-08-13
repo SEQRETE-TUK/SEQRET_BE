@@ -184,12 +184,32 @@ resource "google_artifact_registry_repository" "backend" {
   project       = var.project_id
   location      = var.region
   repository_id = var.artifact_repository_id
-  description   = "Immutable SEQRET backend container images"
+  description   = "Digest-pinned SEQRET backend container images"
   format        = "DOCKER"
   mode          = "STANDARD_REPOSITORY"
   labels        = local.common_labels
 
-  docker_config { immutable_tags = true }
+  cleanup_policy_dry_run = true
+
+  docker_config { immutable_tags = false }
+
+  cleanup_policies {
+    id     = "delete-older-than-90-days"
+    action = "DELETE"
+
+    condition {
+      older_than = "7776000s"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-most-recent-50"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 50
+    }
+  }
 
   depends_on = [google_project_service.required]
 }
