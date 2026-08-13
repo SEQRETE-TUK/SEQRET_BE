@@ -23,7 +23,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from app.config import Settings
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
-from app.contracts.events import DomainEventType
+from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.maintenance import (
     MediaDeletionOutcome,
@@ -33,9 +33,11 @@ from app.contracts.maintenance import (
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import StorageObjectMetadata
 from app.contracts.primitives import (
+    AggregateId,
     AnalysisRunId,
     BackgroundJobId,
     CaptureSessionId,
+    EventId,
     MediaAssetId,
     TraceId,
 )
@@ -86,6 +88,15 @@ from app.modules.move_job.schemas import (
     RoomZoneCreate,
 )
 from app.modules.move_job.service import create_move_job, get_move_job
+from app.modules.notification.models import (
+    EventConsumption,
+    NotificationDelivery,
+    NotificationStatus,
+)
+from app.modules.notification.service import (
+    NOTIFICATION_CONSUMER_NAME,
+    consume_notification_event,
+)
 from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeApproval, ScopeVersion
 from app.modules.scope.schemas import (
     ChangeDecisionCreate,
@@ -637,6 +648,64 @@ async def test_outbox_claims_are_exclusive_on_postgresql() -> None:
                 assert row is not None
                 assert row.attempt_count == 1
                 assert row.lock_token is not None
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_notification_consumption_is_idempotent_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        job_id = uuid4()
+        recipient_id = uuid4()
+        event = DomainEvent(
+            event_id=EventId(uuid4()),
+            event_type=DomainEventType.SCOPE_LOCKED_V1,
+            aggregate_id=AggregateId(job_id),
+            trace_id="0123456789abcdef0123456789abcdef",
+            payload={"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                session.add(MoveJob(id=job_id, title="Notification race"))
+                session.add(
+                    JobParticipant(
+                        id=recipient_id,
+                        job_id=job_id,
+                        role=ParticipantRole.FIELD_WORKER,
+                        display_name="Field worker",
+                    )
+                )
+
+            start = Barrier(2)
+
+            async def consume() -> int:
+                async with transactional_session(factory) as session:
+                    await wait_for(start.wait(), timeout=5)
+                    return len(await consume_notification_event(session, event))
+
+            created_counts = await wait_for(gather(consume(), consume()), timeout=10)
+            assert sorted(created_counts) == [0, 1]
+
+            async with transactional_session(factory) as session:
+                receipt = await session.get(
+                    EventConsumption,
+                    (NOTIFICATION_CONSUMER_NAME, event.event_id),
+                )
+                deliveries = (await session.scalars(select(NotificationDelivery))).all()
+
+            assert receipt is not None
+            assert len(deliveries) == 1
+            assert deliveries[0].recipient_participant_id == recipient_id
+            assert deliveries[0].status is NotificationStatus.PENDING
+            assert deliveries[0].attempt_count == 0
         finally:
             await engine.dispose()
 

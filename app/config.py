@@ -70,9 +70,12 @@ class Settings(BaseSettings):
     access_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3_600)
     pubsub_project_id: str | None = None
     pubsub_topic_id: str | None = None
+    pubsub_subscription_id: str | None = None
     outbox_batch_size: int = Field(default=100, ge=1, le=100)
     outbox_lease_seconds: int = Field(default=60, ge=1, le=600)
     event_publish_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
+    notification_batch_size: int = Field(default=100, ge=1, le=100)
+    notification_pull_timeout_seconds: float = Field(default=10.0, gt=0, le=30.0)
     media_retention_days: int | None = Field(default=None, ge=1, le=3_650)
     otel_enabled: bool = False
     otel_exporter_otlp_traces_endpoint: AnyHttpUrl | None = None
@@ -152,6 +155,9 @@ class Settings(BaseSettings):
         if (self.pubsub_project_id is None) != (self.pubsub_topic_id is None):
             msg = "pubsub_project_id and pubsub_topic_id must be configured together"
             raise ValueError(msg)
+        if self.pubsub_subscription_id is not None and self.pubsub_topic_id is None:
+            msg = "pubsub_subscription_id requires pubsub_project_id and pubsub_topic_id"
+            raise ValueError(msg)
         if (
             self.pubsub_project_id is not None
             and GCP_PROJECT_ID_PATTERN.fullmatch(self.pubsub_project_id) is None
@@ -166,6 +172,18 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.pubsub_topic_id is not None and self.pubsub_topic_id.lower().startswith("goog"):
             msg = "pubsub_topic_id must not start with goog"
+            raise ValueError(msg)
+        if (
+            self.pubsub_subscription_id is not None
+            and PUBSUB_TOPIC_ID_PATTERN.fullmatch(self.pubsub_subscription_id) is None
+        ):
+            msg = "pubsub_subscription_id must be a valid Pub/Sub subscription ID"
+            raise ValueError(msg)
+        if (
+            self.pubsub_subscription_id is not None
+            and self.pubsub_subscription_id.lower().startswith("goog")
+        ):
+            msg = "pubsub_subscription_id must not start with goog"
             raise ValueError(msg)
         if (
             self.gcp_project_id is not None

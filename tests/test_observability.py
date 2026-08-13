@@ -68,6 +68,12 @@ def test_json_formatter_emits_only_safe_correlation_fields() -> None:
                 "http_status": 200,
                 "duration_ms": 1.25,
                 "outcome": "success",
+                "claimed": 3,
+                "published": 2,
+                "relay_failed": 1,
+                "pulled": 4,
+                "acknowledged": 3,
+                "notification_failed": 1,
             },
         )
 
@@ -78,6 +84,12 @@ def test_json_formatter_emits_only_safe_correlation_fields() -> None:
     assert payload["logging.googleapis.com/trace"].endswith("/" + "a" * 32)
     assert payload["event"] == "http_request_complete"
     assert payload["http_status"] == 200
+    assert payload["claimed"] == 3
+    assert payload["published"] == 2
+    assert payload["relay_failed"] == 1
+    assert payload["pulled"] == 4
+    assert payload["acknowledged"] == 3
+    assert payload["notification_failed"] == 1
     assert "authorization" not in stream.getvalue().lower()
     assert current_correlation() is None
 
