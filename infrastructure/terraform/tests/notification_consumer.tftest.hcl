@@ -12,6 +12,7 @@ variables {
   environment           = "staging"
   api_domain            = "api.staging.example.com"
   frontend_origin       = "https://staging.example.com"
+  media_bucket_name     = "seqret-stg-media"
   container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   cloud_sql_instance_id = "seqret-stg-db"
   media_retention_days  = 30

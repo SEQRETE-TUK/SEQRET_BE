@@ -39,10 +39,12 @@ locals {
   })
 
   api_runtime_environment = merge(local.observed_runtime_environment, {
-    SEQRET_DATABASE_MAX_OVERFLOW = "1"
-    SEQRET_DATABASE_POOL_SIZE    = "2"
-    SEQRET_MEDIA_RETENTION_DAYS  = tostring(var.media_retention_days)
-    SEQRET_FRONTEND_ORIGIN       = var.frontend_origin
+    SEQRET_DATABASE_MAX_OVERFLOW                 = "1"
+    SEQRET_DATABASE_POOL_SIZE                    = "2"
+    SEQRET_MEDIA_RETENTION_DAYS                  = tostring(var.media_retention_days)
+    SEQRET_FRONTEND_ORIGIN                       = var.frontend_origin
+    SEQRET_MEDIA_BUCKET_NAME                     = var.media_bucket_name
+    SEQRET_STORAGE_SIGNING_SERVICE_ACCOUNT_EMAIL = google_service_account.api.email
   })
 
   outbox_relay_environment = merge(local.observed_runtime_environment, {

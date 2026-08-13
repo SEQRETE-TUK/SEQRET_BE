@@ -6,6 +6,7 @@ variables {
   environment           = "staging"
   api_domain            = "api.staging.example.com"
   frontend_origin       = "https://staging.example.com"
+  media_bucket_name     = "seqret-stg-media"
   container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   cloud_sql_instance_id = "seqret-stg-db"
   api_max_instances     = 2
@@ -21,6 +22,29 @@ run "staging_runtime_isolation" {
       if env.name == "SEQRET_FRONTEND_ORIGIN"
     ]) == "https://staging.example.com"
     error_message = "The API must receive the exact configured browser origin."
+  }
+
+  assert {
+    condition = alltrue([
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_MEDIA_BUCKET_NAME"
+      ]) == "seqret-stg-media",
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_STORAGE_SIGNING_SERVICE_ACCOUNT_EMAIL"
+      ]) == google_service_account.api.email,
+      google_storage_bucket_iam_member.api_media_object_creator.bucket == "seqret-stg-media",
+      google_storage_bucket_iam_member.api_media_object_creator.role == "roles/storage.objectCreator",
+      google_storage_bucket_iam_member.api_media_object_creator.member == "serviceAccount:${google_service_account.api.email}",
+      google_storage_bucket_iam_member.api_media_object_viewer.bucket == "seqret-stg-media",
+      google_storage_bucket_iam_member.api_media_object_viewer.role == "roles/storage.objectViewer",
+      google_storage_bucket_iam_member.api_media_object_viewer.member == "serviceAccount:${google_service_account.api.email}",
+      google_service_account_iam_member.api_self_token_creator.service_account_id == "projects/seqret-staging/serviceAccounts/seqret-stg-api@seqret-staging.iam.gserviceaccount.com",
+      google_service_account_iam_member.api_self_token_creator.role == "roles/iam.serviceAccountTokenCreator",
+      google_service_account_iam_member.api_self_token_creator.member == "serviceAccount:${google_service_account.api.email}",
+    ])
+    error_message = "The API must receive the existing media bucket and only its upload, read, and signing permissions."
   }
 
   assert {
@@ -104,10 +128,12 @@ run "staging_runtime_isolation" {
         "cloudscheduler.googleapis.com",
         "compute.googleapis.com",
         "iam.googleapis.com",
+        "iamcredentials.googleapis.com",
         "pubsub.googleapis.com",
         "run.googleapis.com",
         "secretmanager.googleapis.com",
         "sqladmin.googleapis.com",
+        "storage.googleapis.com",
       ])
     )
     error_message = "The runtime foundation must enable its required Google Cloud APIs."

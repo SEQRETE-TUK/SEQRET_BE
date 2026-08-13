@@ -110,6 +110,16 @@ variable "frontend_origin" {
   }
 }
 
+variable "media_bucket_name" {
+  description = "Existing private Cloud Storage bucket used for media objects."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$", var.media_bucket_name))
+    error_message = "media_bucket_name must be a 3 to 63 character lowercase Cloud Storage bucket name."
+  }
+}
+
 variable "public_traffic_enabled" {
   description = "Open general edge traffic only after the deployment readiness gate succeeds."
   type        = bool
