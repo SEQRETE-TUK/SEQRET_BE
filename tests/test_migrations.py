@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_09_0003"
+ALEMBIC_HEAD = "a_08_0002"
+ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
@@ -65,6 +66,63 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+@pytest.mark.parametrize("history_table", ("audit_event", "completion_confirmation"))
+def test_audit_invariants_on_sqlite(
+    tmp_path: Path,
+    history_table: str,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / f'{history_table}.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(engine, only=(history_table,))
+        created_at = datetime.now(UTC)
+        table = metadata.tables[history_table]
+        values = (
+            {
+                "id": uuid4().hex,
+                "job_id": uuid4().hex,
+                "event_type": "JOB_CREATED",
+                "payload": {},
+                "occurred_at": created_at,
+            }
+            if history_table == "audit_event"
+            else {
+                "id": uuid4().hex,
+                "job_id": uuid4().hex,
+                "scope_version_id": uuid4().hex,
+                "participant_id": uuid4().hex,
+                "role": "CUSTOMER",
+                "confirmed_at": created_at,
+            }
+        )
+        with engine.begin() as connection:
+            connection.execute(table.insert(), values)
+
+        if history_table == "audit_event":
+            for mutation in (
+                table.update().values(payload={"changed": True}),
+                table.delete(),
+            ):
+                with (
+                    pytest.raises(
+                        IntegrityError,
+                        match="append-only",
+                    ),
+                    engine.begin() as connection,
+                ):
+                    connection.execute(mutation)
+
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_AUDIT_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 def test_operational_event_rows_block_schema_downgrade(tmp_path: Path) -> None:
@@ -152,7 +210,7 @@ def test_operational_event_rows_block_schema_downgrade(tmp_path: Path) -> None:
                 connection.execute(table.insert(), values)
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(configuration, ALEMBIC_OPERATIONAL_EVENT_PREVIOUS)
-            assert _current_revision(engine) == ALEMBIC_HEAD
+            assert _current_revision(engine) == ALEMBIC_AUDIT_PREVIOUS
             with engine.begin() as connection:
                 assert connection.scalar(select(table.c[next(iter(values))])) is not None
                 connection.execute(table.delete())

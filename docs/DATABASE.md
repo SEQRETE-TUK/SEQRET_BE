@@ -8,6 +8,7 @@
 - SQLAlchemy engine은 `pool_pre_ping`과 parameter hiding을 활성화한다.
 - application command는 `transactional_session`을 경계로 한 번 commit되며 예외 시 전체 rollback된다.
 - 각 ORM model은 `app.platform.db.Base`를 사용해 Alembic constraint 이름을 결정적으로 유지한다.
+- `audit_event`는 DB trigger가 일반 application DML의 UPDATE·DELETE를 거부하고 PostgreSQL에서는 TRUNCATE도 거부한다. 현재 API와 migration이 같은 DB owner 자격증명을 쓰므로 accidental mutation 방지선일 뿐, owner가 DDL로 trigger를 비활성화하는 공격까지 막는 권한 경계는 아니다. 별도 application DB role·grant·Secret은 외부 자격증명 준비 후 분리한다.
 
 ## Migration
 
@@ -21,6 +22,8 @@ uv run alembic downgrade -1
 ```
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
+
+감사 또는 완료 확인 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

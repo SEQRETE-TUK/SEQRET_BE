@@ -277,7 +277,35 @@ async def authenticate_access_token(
         window_seconds=rate_limit_window_seconds,
         timeout_seconds=cache_timeout_seconds,
     )
-    access_link.last_used_at = now
+    first_use_id = await session.scalar(
+        update(ParticipantAccessToken)
+        .where(
+            ParticipantAccessToken.id == access_link.id,
+            ParticipantAccessToken.last_used_at.is_(None),
+        )
+        .values(last_used_at=now)
+        .returning(ParticipantAccessToken.id)
+        .execution_options(synchronize_session=False)
+    )
+    if first_use_id is None:
+        await session.execute(
+            update(ParticipantAccessToken)
+            .where(ParticipantAccessToken.id == access_link.id)
+            .values(last_used_at=now)
+            .execution_options(synchronize_session=False)
+        )
+    else:
+        add_audit_event(
+            session,
+            participant.job_id,
+            AuditEventType.PARTICIPANT_CONNECTED,
+            actor_participant_id=participant.id,
+            payload={
+                "access_link_id": str(access_link.id),
+                "participant_id": str(participant.id),
+                "role": participant.role.value,
+            },
+        )
     correlation = current_correlation()
     return ActorContext(
         actor_kind=ActorKind.PARTICIPANT,

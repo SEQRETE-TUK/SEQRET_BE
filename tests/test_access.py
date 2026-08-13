@@ -30,6 +30,7 @@ from app.modules.access.service import (
     _increment_database_rate_window,
     rotate_access_link,
 )
+from app.modules.completion.models import AuditEvent, AuditEventType
 from app.modules.move_job.models import JobParticipant
 from app.platform.db import Base, create_session_factory
 
@@ -526,11 +527,33 @@ async def test_rejected_business_request_still_commits_access_use_history(
     )
 
     assert response.status_code == 404
+    repeated = await client.get(
+        f"/api/v1/move-jobs/{uuid4()}",
+        headers=_bearer(customer_link["secret"]),
+    )
+    assert repeated.status_code == 404
     async with factory() as session:
         stored = await session.get(ParticipantAccessToken, UUID(customer_link["id"]))
+        connected_events = (
+            await session.scalars(
+                select(AuditEvent).where(
+                    AuditEvent.job_id == UUID(created["job"]["id"]),
+                    AuditEvent.event_type == AuditEventType.PARTICIPANT_CONNECTED,
+                )
+            )
+        ).all()
         assert stored is not None
         assert stored.last_used_at is not None
-        assert stored.rate_window_count == 1
+        assert stored.rate_window_count == 2
+        assert len(connected_events) == 1
+        connected = connected_events[0]
+        assert connected.actor_participant_id == UUID(customer_link["participant_id"])
+        assert connected.payload == {
+            "access_link_id": customer_link["id"],
+            "participant_id": customer_link["participant_id"],
+            "role": customer_link["role"],
+        }
+        assert customer_link["secret"] not in repr(connected.payload)
 
 
 @pytest.mark.anyio
