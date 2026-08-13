@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from httpx2 import ASGITransport, AsyncClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -30,6 +30,7 @@ from app.modules.scope.service import (
     create_change_request,
     decide_change_request,
     explain_change_request,
+    list_change_requests,
     request_change_clarification,
 )
 from app.platform.db import Base, create_session_factory
@@ -756,3 +757,80 @@ async def test_change_service_rejects_wrong_roles_and_competing_approval(
         pending_asset = await session.get(MediaAsset, UUID(evidence_id))
         assert pending_asset is not None
         assert pending_asset.status is MediaAssetStatus.UPLOADED
+
+
+@pytest.mark.anyio
+async def test_change_request_list_uses_two_selects_for_many_requests(
+    change_api: ChangeApi,
+) -> None:
+    client, factory, storage = change_api
+    created = await _create_job(client)
+    base = await _create_scope(client, created, lock=True)
+    evidence_ids = [await _upload_evidence(client, factory, storage, created) for _ in range(4)]
+    evidence_by_request = [
+        [evidence_ids[0]],
+        sorted(evidence_ids[1:3], key=UUID, reverse=True),
+        [evidence_ids[3]],
+    ]
+    job_id = created["job"]["id"]
+    created_requests: list[dict[str, Any]] = []
+    for index, request_evidence_ids in enumerate(evidence_by_request):
+        payload = _change_payload(
+            created,
+            base["id"],
+            request_evidence_ids[0],
+            description=f"change {index}",
+        )
+        payload["evidence_media_asset_ids"] = request_evidence_ids
+        response = await client.post(
+            f"/api/v1/move-jobs/{job_id}/change-requests",
+            headers=_headers(_secret(created, "field_worker")),
+            json=payload,
+        )
+        assert response.status_code == 201
+        created_requests.append(cast(dict[str, Any], response.json()))
+
+    selects = 0
+
+    def count_selects(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        nonlocal selects
+        selects += statement.lstrip().upper().startswith("SELECT")
+
+    engine = factory.kw["bind"]
+    event.listen(engine.sync_engine, "before_cursor_execute", count_selects)
+    try:
+        async with factory() as session:
+            empty_responses = await list_change_requests(session, uuid4())
+            empty_selects = selects
+            selects = 0
+            responses = await list_change_requests(session, UUID(job_id))
+            populated_selects = selects
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count_selects)
+
+    expected = sorted(
+        (
+            datetime.fromisoformat(created_request["created_at"]),
+            UUID(created_request["id"]),
+            tuple(sorted(UUID(evidence_id) for evidence_id in request_evidence_ids)),
+        )
+        for created_request, request_evidence_ids in zip(
+            created_requests,
+            evidence_by_request,
+            strict=True,
+        )
+    )
+    assert empty_responses == ()
+    assert empty_selects == 1
+    assert [(response.id, response.evidence_media_asset_ids) for response in responses] == [
+        (request_id, request_evidence_ids)
+        for _created_at, request_id, request_evidence_ids in expected
+    ]
+    assert populated_selects == 2
