@@ -77,10 +77,9 @@ def _request(
     *,
     source_count: int = 2,
     prompt_version: str = "inventory-1",
-    suffix: str = "mp4",
 ) -> AnalysisRequest:
     sources = tuple(MediaAssetId(uuid4()) for _ in range(source_count))
-    keys = tuple(f"jobs/1/room{index}.{suffix}" for index in range(source_count))
+    keys = tuple(f"jobs/1/room{index}" for index in range(source_count))
     return AnalysisRequest(
         analysis_run_id=AnalysisRunId(uuid4()),
         capture_session_id=CaptureSessionId(uuid4()),
@@ -128,6 +127,12 @@ async def test_analyze_maps_structured_output_to_draft() -> None:
     assert call["model"] == "gemini-2.5-flash"
     assert isinstance(call["contents"], list)
     assert len(call["contents"]) == 3  # prompt + two media parts
+    media_parts = call["contents"][1:]
+    assert [part.file_data.mime_type for part in media_parts] == ["video/mp4", "video/mp4"]
+    assert [part.file_data.file_uri for part in media_parts] == [
+        "gs://seqret-media/jobs/1/room0",
+        "gs://seqret-media/jobs/1/room1",
+    ]
 
 
 @pytest.mark.anyio
@@ -184,20 +189,6 @@ async def test_analyze_rejects_unknown_prompt_version() -> None:
     with pytest.raises(ProviderError, match="prompt version") as error_info:
         await provider.analyze(
             request=_request(prompt_version="missing"),
-            idempotency_key=KEY,
-            timeout_seconds=30,
-        )
-
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-
-
-@pytest.mark.anyio
-async def test_analyze_rejects_unsupported_media_type() -> None:
-    provider = _provider(StubModels(text="{}"))
-
-    with pytest.raises(ProviderError, match="unsupported media") as error_info:
-        await provider.analyze(
-            request=_request(suffix="txt"),
             idempotency_key=KEY,
             timeout_seconds=30,
         )
