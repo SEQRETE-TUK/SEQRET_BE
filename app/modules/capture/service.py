@@ -12,6 +12,7 @@ from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.contracts.primitives import utc_now
+from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
 from app.modules.background_job.service import create_media_validation_background_job
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
@@ -147,6 +148,34 @@ async def _load_owned_capture_session(
     return capture_session
 
 
+async def _lock_capture_for_media(
+    session: AsyncSession,
+    job_id: UUID,
+    capture_session_id: UUID,
+    participant_id: UUID,
+) -> None:
+    capture = await session.scalar(
+        select(CaptureSession)
+        .where(
+            CaptureSession.id == capture_session_id,
+            CaptureSession.job_id == job_id,
+            CaptureSession.created_by_participant_id == participant_id,
+        )
+        .with_for_update()
+    )
+    if capture is None:
+        raise CaptureResourceNotFoundError(capture_session_id)
+    if (
+        await session.scalar(
+            select(CaptureAnalysisDispatch.analysis_run_id).where(
+                CaptureAnalysisDispatch.capture_session_id == capture_session_id
+            )
+        )
+        is not None
+    ):
+        raise CaptureWorkflowConflictError(capture_session_id)
+
+
 async def create_media_upload(
     session: AsyncSession,
     storage: StoragePort,
@@ -191,6 +220,7 @@ async def create_media_upload(
     upload_url = _validated_upload_url(upload_target.url)
 
     await _lock_mutable_job(session, job_id)
+    await _lock_capture_for_media(session, job_id, capture_session_id, participant_id)
     session.add(asset)
     await session.flush()
     return MediaUploadResponse(
@@ -251,6 +281,7 @@ async def complete_media_upload(
         raise MediaMetadataMismatchError(media_asset_id)
 
     await _lock_mutable_job(session, job_id)
+    await _lock_capture_for_media(session, job_id, capture_session_id, participant_id)
     asset = (
         await session.scalars(
             select(MediaAsset)

@@ -2,7 +2,7 @@
 
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `55720089c293de6729e6dfc529fcde5b9dae5503`
+> backend 기준 코드: `origin/main` `7c9c5aa5f5dfdb1283d1c3e4670cb6b1c33948a1` + 이 INT-01 변경
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
 > `aabf2da2221d63d4debc5f06b4d40e92f061289a`
@@ -15,7 +15,7 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 26개 | 22개 path의 업무 operation 23개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 28개 | 24개 path의 업무 operation 25개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 화면의 실제 API 호출 | 0개 | 공통 client·Query provider는 있으나 어떤 demo 화면도 호출하지 않음 |
 | 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
@@ -23,7 +23,7 @@
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
 | 핵심 업무 상태부터 새로 만들 제안 API | 8개 | 19개 제안 기준 배차, 체크인, 완료 제출·요청, 문서 등 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 23개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 25개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -57,7 +57,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/change-requests`, `/scope-versions` 등 23개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/capture-sessions/*/submit`, `/change-requests`, `/scope-versions` 등 25개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -102,10 +102,10 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 
 | 조건 | 추가 API | 결정 기준 |
 | --- | --- | --- |
-| 고객·업체가 최초 사진을 직접 등록 | `POST /api/v1/move-jobs/{job_id}/capture-submissions` | 사진이 seed·관리자 과정에서 미리 준비되지 않을 때만 추가 |
+| 고객·업체가 최초 사진을 직접 등록 | 화면용 `capture-submissions` adapter | 현재 저수준 capture 생성·upload·complete·submit·status 계약을 한 화면 command/view로 감쌀 때만 추가 |
 | 업체가 작업과 고객 link를 직접 생성 | 작업 생성·초대 API | admin seed가 아닌 실제 업체 onboarding을 MVP에 넣을 때만 확정 |
 
-## 5. 현재 서버 업무 operation 23개
+## 5. 현재 서버 업무 operation 25개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -116,6 +116,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/participants/{participant_id}/access-links` | 역할 link 재발급 | private bootstrap·운영으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/access-links/{access_link_id}/revoke` | 역할 link 철회 | private bootstrap·운영으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions` | 촬영 session 생성 | media upload 내부 logic으로 재사용 |
+| `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit` | READY inventory 촬영을 동결하고 분석 intent 생성 | 첫 촬영·AI E2E slice의 command로 바로 사용 가능; 화면용 adapter 여부는 FE 연동 후 결정 |
+| `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis` | 분석 queue·실행·범위 초안 terminal 상태 조회 | 첫 촬영·AI E2E slice의 polling query로 바로 사용 가능; review item view는 별도 필요 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload` | signed upload URL 발급 | `POST /media-uploads`로 축소 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/{media_asset_id}/complete` | 업로드 metadata 검증·확정 | 이슈·완료 제출 시 server 검증으로 흡수 |
 | `POST /api/v1/move-jobs/{job_id}/scope-versions` | 불변 범위 version 생성 | `POST /scope-proposals` 내부 logic으로 재사용 |
@@ -140,6 +142,9 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 제안 `POST /media-uploads`가 complete API를 흡수하려면 이 상태 전이와 재시도 계약을 먼저
 versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idempotency-Key` 공통 header는
 없고 API CORS 허용 method도 `GET`, `POST`이므로 제안 계약을 문서만으로 frontend에 적용할 수 없다.
+촬영 제출은 capture 소유자에게 멱등이며 제출 뒤 추가 media mutation을 막는다. 분석 상태 API는
+`scope_version_id` 또는 provider-neutral 실패만 노출하므로, FE는 provider task ID나 오류 원문을
+별도 계약으로 추정하지 않는다.
 
 ## 6. 운영 route 3개
 
@@ -167,7 +172,7 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 
 ### 예상 migration
 
-배차·체크인, 견적, 완료 제출·요청·문제 신고와 문서 상태는 새 persistence가 필요하므로 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
+INT-01은 실제 migration `int_01_0001`과 `capture_analysis_dispatch`로 제출·dispatch·terminal 상태를 추가했다. 배차·체크인, 견적, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
 
 ## 8. frontend 연동 기준
 

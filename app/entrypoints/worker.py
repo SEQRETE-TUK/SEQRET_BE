@@ -13,12 +13,19 @@ from app.api.routes.system import router as system_router
 from app.config import Settings
 from app.contracts.ai import AnalysisTaskV1
 from app.contracts.maintenance import MediaDeletionTaskV1, MediaValidationTaskV1
-from app.contracts.ports import AIProviderPort
+from app.contracts.ports import AIProviderPort, ProviderErrorKind
 from app.contracts.primitives import utc_now
-from app.modules.analysis.handler import handle_analysis_task
+from app.modules.analysis.handler import AnalysisTaskStatus, handle_analysis_task
 from app.modules.analysis.orchestration import (
     AnalysisInputsUnavailableError,
     build_analysis_request,
+)
+from app.modules.analysis.service import load_analysis_result
+from app.modules.analysis_workflow.service import (
+    CaptureAnalysisNotFoundError,
+    complete_capture_analysis,
+    fail_capture_analysis,
+    start_capture_analysis,
 )
 from app.modules.background_job.service import (
     BackgroundJobNotFoundError,
@@ -26,7 +33,11 @@ from app.modules.background_job.service import (
 from app.modules.media_processing.deletion import handle_media_deletion
 from app.modules.media_processing.validation import handle_media_validation
 from app.platform.ai.vertex import VertexAIProvider
-from app.platform.db import create_database_engine, create_session_factory
+from app.platform.db import (
+    create_database_engine,
+    create_session_factory,
+    transactional_session,
+)
 from app.platform.http_observability import HttpObservabilityMiddleware
 from app.platform.observability import create_observability
 from app.platform.storage.gcs import GoogleCloudStorage
@@ -136,8 +147,16 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
             async_sessionmaker[AsyncSession],
             request.app.state.database_session_factory,
         )
-        async with factory() as session:
-            try:
+        try:
+            async with transactional_session(factory) as session:
+                should_process = await start_capture_analysis(session, task)
+        except CaptureAnalysisNotFoundError:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        if not should_process:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        try:
+            async with factory() as session:
                 analysis_request = await build_analysis_request(
                     session,
                     analysis_run_id=task.analysis_run_id,
@@ -146,16 +165,52 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                     model_version=ANALYSIS_MODEL_VERSION,
                     prompt_version=ANALYSIS_PROMPT_VERSION,
                 )
-            except AnalysisInputsUnavailableError:
-                # No READY inventory media to analyze yet; acknowledge the task.
-                return Response(status_code=status.HTTP_204_NO_CONTENT)
-        await handle_analysis_task(
+        except AnalysisInputsUnavailableError:
+            async with transactional_session(factory) as write_session:
+                await fail_capture_analysis(
+                    write_session,
+                    task,
+                    error_kind=ProviderErrorKind.INVALID_INPUT,
+                    retryable=False,
+                    completed_at=utc_now(),
+                )
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        outcome = await handle_analysis_task(
             factory,
             cast(AIProviderPort, provider),
             analysis_request,
             trace_id=task.trace_id,
             now=utc_now(),
         )
+        async with transactional_session(factory) as session:
+            if outcome.status is AnalysisTaskStatus.SUCCEEDED:
+                result = await load_analysis_result(
+                    session,
+                    analysis_run_id=task.analysis_run_id,
+                )
+                if result is None:
+                    await fail_capture_analysis(
+                        session,
+                        task,
+                        error_kind=ProviderErrorKind.CONFLICT,
+                        retryable=False,
+                        completed_at=utc_now(),
+                    )
+                else:
+                    await complete_capture_analysis(
+                        session,
+                        task,
+                        result,
+                        completed_at=utc_now(),
+                    )
+            else:
+                await fail_capture_analysis(
+                    session,
+                    task,
+                    error_kind=outcome.error_kind or ProviderErrorKind.CONFLICT,
+                    retryable=outcome.retryable,
+                    completed_at=utc_now(),
+                )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     application.add_middleware(HttpObservabilityMiddleware, observability=observability)

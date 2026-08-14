@@ -7,6 +7,7 @@ from typing import cast
 from opentelemetry.trace import Status, StatusCode
 
 from app.config import Settings
+from app.modules.analysis_workflow.service import dispatch_capture_analyses_once
 from app.modules.background_job.service import dispatch_background_jobs_once
 from app.modules.notification.consumer import consume_notification_events_once
 from app.platform.db import create_database_engine, create_session_factory
@@ -90,6 +91,15 @@ async def run(settings: Settings | None = None) -> int:
                 lease_seconds=resolved.background_job_lease_seconds,
                 enqueue_timeout_seconds=resolved.task_enqueue_timeout_seconds,
             )
+            analysis_dispatch_result = await dispatch_capture_analyses_once(
+                session_factory,
+                task_queue,
+                queue_name=cast(str, resolved.task_queue_name),
+                handler="/tasks/analysis",
+                batch_size=resolved.background_job_batch_size,
+                lease_seconds=resolved.background_job_lease_seconds,
+                enqueue_timeout_seconds=resolved.task_enqueue_timeout_seconds,
+            )
             failed = (
                 relay_result.failed > 0
                 or relay_result.claimed != relay_result.published + relay_result.failed
@@ -97,6 +107,9 @@ async def run(settings: Settings | None = None) -> int:
                 or consumer_result.pulled != consumer_result.acknowledged + consumer_result.failed
                 or dispatch_result.failed > 0
                 or dispatch_result.claimed != dispatch_result.queued + dispatch_result.failed
+                or analysis_dispatch_result.failed > 0
+                or analysis_dispatch_result.claimed
+                != analysis_dispatch_result.queued + analysis_dispatch_result.failed
             )
             if failed:
                 span.set_status(Status(StatusCode.ERROR))
@@ -115,11 +128,18 @@ async def run(settings: Settings | None = None) -> int:
                     "background_claimed": dispatch_result.claimed,
                     "background_queued": dispatch_result.queued,
                     "background_failed": dispatch_result.failed,
+                    "analysis_claimed": analysis_dispatch_result.claimed,
+                    "analysis_queued": analysis_dispatch_result.queued,
+                    "analysis_failed": analysis_dispatch_result.failed,
                 },
             )
-            if not failed and relay_result.claimed == resolved.outbox_batch_size:
+            saturated = (
+                relay_result.claimed == resolved.outbox_batch_size
+                or analysis_dispatch_result.claimed == resolved.background_job_batch_size
+            )
+            if not failed and saturated:
                 observability.logger.warning(
-                    "Outbox relay reached its batch limit",
+                    "Event pump reached a batch limit",
                     extra={
                         "event": "outbox_relay_batch_saturated",
                         "outcome": "backlog",

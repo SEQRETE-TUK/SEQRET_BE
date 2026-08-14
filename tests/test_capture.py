@@ -25,6 +25,7 @@ from app.contracts.ports import (
     StorageUploadTarget,
 )
 from app.main import create_app
+from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
@@ -611,6 +612,8 @@ async def test_complete_rechecks_state_after_metadata() -> None:
     session.scalar.side_effect = (
         MoveJobStatus.DRAFT,
         MoveJob(id=job_id, title="race", status=MoveJobStatus.DRAFT),
+        capture,
+        None,
     )
     storage = FakeObjectStorage()
     storage.metadata[pending.object_key] = StorageObjectMetadata(
@@ -629,3 +632,215 @@ async def test_complete_rechecks_state_after_metadata() -> None:
             asset_id,
             participant_id,
         )
+
+
+@pytest.mark.anyio
+async def test_capture_submit_status_and_media_freeze_api(
+    capture_api: CaptureApi,
+) -> None:
+    client, factory, storage, _ = capture_api
+    created = await _create_job(client)
+    job = created["job"]
+    customer_secret = _secret(created, "customer")
+    worker_secret = _secret(created, "field_worker")
+    capture = await _create_capture(client, created, customer_secret)
+    submit_url = f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}/submit"
+    status_url = f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}/analysis"
+
+    assert (await client.get(status_url, headers=_headers(customer_secret))).status_code == 404
+    assert (await client.post(submit_url, headers=_headers(worker_secret))).status_code == 404
+    assert (await client.post(submit_url, headers=_headers(customer_secret))).status_code == 409
+
+    capture_id = UUID(capture["id"])
+    room_zone_id = UUID(job["locations"][0]["room_zones"][0]["id"])
+    ready_asset = MediaAsset(
+        capture_session_id=capture_id,
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.READY,
+        object_key=f"jobs/{job['id']}/captures/{capture['id']}/{uuid4()}",
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+        actual_size_bytes=10,
+        sha256_hex="a" * 64,
+        generation="7",
+        uploaded_at=datetime.now(UTC),
+    )
+    pending_condition = MediaAsset(
+        capture_session_id=capture_id,
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.CONDITION,
+        status=MediaAssetStatus.PENDING_UPLOAD,
+        object_key=f"jobs/{job['id']}/captures/{capture['id']}/{uuid4()}",
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+    )
+    async with factory.begin() as session:
+        session.add_all((ready_asset, pending_condition))
+
+    submitted = await client.post(submit_url, headers=_headers(customer_secret))
+    repeated = await client.post(submit_url, headers=_headers(customer_secret))
+    status_response = await client.get(status_url, headers=_headers(customer_secret))
+
+    assert submitted.status_code == 202
+    assert repeated.status_code == 202
+    assert status_response.status_code == 200
+    assert submitted.json()["analysis_run_id"] == repeated.json()["analysis_run_id"]
+    assert status_response.json()["status"] == "pending"
+    assert status_response.json()["scope_version_id"] is None
+    assert (await client.get(status_url, headers=_headers(worker_secret))).status_code == 404
+
+    upload_url = (
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}/media-assets/upload"
+    )
+    frozen_upload = await client.post(
+        upload_url,
+        headers=_headers(customer_secret),
+        json={
+            "room_zone_id": str(room_zone_id),
+            "media_purpose": "inventory",
+            "content_type": "image/jpeg",
+            "content_length": 10,
+        },
+    )
+    assert frozen_upload.status_code == 409
+
+    storage.metadata[pending_condition.object_key] = StorageObjectMetadata(
+        object_key=pending_condition.object_key,
+        content_type="image/jpeg",
+        size_bytes=10,
+        generation="8",
+    )
+    frozen_complete = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}"
+        f"/media-assets/{pending_condition.id}/complete",
+        headers=_headers(customer_secret),
+    )
+    assert frozen_complete.status_code == 409
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(CaptureAnalysisDispatch)) == 1
+        pending = await session.get(MediaAsset, pending_condition.id)
+        assert pending is not None
+        assert pending.status is MediaAssetStatus.PENDING_UPLOAD
+
+
+@pytest.mark.anyio
+async def test_upload_creation_rechecks_capture_after_signing() -> None:
+    job_id = uuid4()
+    capture_id = uuid4()
+    participant_id = uuid4()
+    room_zone_id = uuid4()
+    capture = CaptureSession(
+        id=capture_id,
+        job_id=job_id,
+        created_by_participant_id=participant_id,
+    )
+    selected = MagicMock()
+    selected.one_or_none.return_value = capture
+    session = AsyncMock(spec=AsyncSession)
+    session.scalars.return_value = selected
+    session.scalar.side_effect = (
+        MoveJobStatus.DRAFT,
+        room_zone_id,
+        MoveJob(id=job_id, title="signed race", status=MoveJobStatus.DRAFT),
+        None,
+    )
+
+    with pytest.raises(CaptureResourceNotFoundError):
+        await create_media_upload(
+            session,
+            FakeObjectStorage(),
+            job_id,
+            capture_id,
+            participant_id,
+            MediaUploadCreate(
+                room_zone_id=room_zone_id,
+                media_purpose=MediaPurpose.INVENTORY,
+                content_type="image/jpeg",
+                content_length=10,
+            ),
+        )
+
+
+@pytest.mark.anyio
+async def test_complete_accepts_concurrent_uploaded_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = uuid4()
+    capture_id = uuid4()
+    asset_id = uuid4()
+    participant_id = uuid4()
+    room_zone_id = uuid4()
+    capture = CaptureSession(
+        id=capture_id,
+        job_id=job_id,
+        created_by_participant_id=participant_id,
+    )
+    pending = MediaAsset(
+        id=asset_id,
+        capture_session_id=capture_id,
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.PENDING_UPLOAD,
+        object_key="jobs/concurrent-upload",
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+    )
+    raced = MediaAsset(
+        id=asset_id,
+        capture_session_id=capture_id,
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.UPLOADED,
+        object_key=pending.object_key,
+        content_type="image/jpeg",
+        expected_size_bytes=10,
+        actual_size_bytes=10,
+        generation="2",
+        created_at=datetime.now(UTC),
+        uploaded_at=datetime.now(UTC),
+    )
+
+    def scalar_result(*, one_or_none: object = None, one: object = None) -> MagicMock:
+        result = MagicMock()
+        result.one_or_none.return_value = one_or_none
+        result.one.return_value = one
+        return result
+
+    session = AsyncMock(spec=AsyncSession)
+    session.scalars.side_effect = (
+        scalar_result(one_or_none=capture),
+        scalar_result(one_or_none=pending),
+        scalar_result(one=raced),
+    )
+    session.scalar.side_effect = (
+        MoveJobStatus.DRAFT,
+        MoveJob(id=job_id, title="complete race", status=MoveJobStatus.DRAFT),
+        capture,
+        None,
+    )
+    storage = FakeObjectStorage()
+    storage.metadata[pending.object_key] = StorageObjectMetadata(
+        object_key=pending.object_key,
+        content_type="image/jpeg",
+        size_bytes=10,
+        generation="1",
+    )
+    create_validation = AsyncMock()
+    monkeypatch.setattr(
+        "app.modules.capture.service.create_media_validation_background_job",
+        create_validation,
+    )
+
+    response = await complete_media_upload(
+        session,
+        storage,
+        job_id,
+        capture_id,
+        asset_id,
+        participant_id,
+    )
+
+    assert response.status is MediaAssetStatus.UPLOADED
+    create_validation.assert_awaited_once()

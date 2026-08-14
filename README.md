@@ -52,6 +52,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
 - `POST /move-jobs/{job_id}/capture-sessions`: 참여자 소유 촬영 세션 생성
+- `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`: READY 촬영 제출과 분석 요청
+- `GET /move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis`: 촬영 분석·범위 초안 상태 조회
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload`: 업로드 URL 발급
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/{media_asset_id}/complete`: 업로드 메타데이터 확인
 - `POST /move-jobs/{job_id}/scope-versions`: 불변 작업범위 버전 생성
@@ -74,6 +76,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 로컬에서 storage 설정을 생략하면 업로드 API는 `503`을 반환하고, 배포 API는 storage 설정 없이는 시작하지 않습니다.
 
+촬영 소유자는 하나 이상의 `READY` inventory 미디어가 준비된 뒤 촬영 세션을 한 번 제출합니다. 제출과 `capture_submitted.v1`은 같은 transaction에 기록되며 이후 해당 세션의 새 미디어 변경은 막힙니다. 매분 relay가 분석 intent를 멱등 Cloud Task로 전달하고 private worker가 B의 분석 결과를 만든 뒤 A의 `import_analysis_draft` command로 편집 가능한 범위 초안을 생성합니다. provider 오류나 안전하게 가져올 수 없는 결과는 provider-neutral 실패 상태로 남고 수동 범위 작성은 계속 가능합니다.
+
 작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 
 고객과 회사 관리자가 같은 현재 버전을 각각 확인하면 해당 버전이 잠깁니다. 이미 다음 버전이 있는 과거 버전, 중복 확인, 잠긴 버전의 후속 편집은 거부합니다.
@@ -84,7 +88,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 매분 relay가 due 작업을 Cloud Tasks에 넣고 OIDC private worker가 generation-pinned validation·삭제를 수행합니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
 
-범위 잠금, 현장 변경요청, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행한 뒤 알림 subscription의 bounded batch를 pull하는 event pump로 동작합니다. 실패한 발행 event는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
+촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
 
 같은 scheduled relay Job이 Pub/Sub `DomainEvent`를 `consume_notification_event` application command에 전달하고 DB commit 뒤 ack합니다. 최초 31일 replay와 DLQ 운영 절차는 [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](docs/NOTIFICATION_CONSUMER_RUNBOOK.md)를 따릅니다. 실제 연락처 해석과 이메일·메시지 provider 호출은 destination 계약이 없어 이 런타임에 포함하지 않으며 현재는 `PENDING` in-app intent까지만 생성합니다.
 

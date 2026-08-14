@@ -74,10 +74,14 @@
 
 ## AI 분석 실행
 
+- 촬영 세션 소유자는 `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`으로 분석을 한 번만 제출한다. `inventory` 미디어가 하나 이상이고 전부 `READY`일 때만 `202`를 반환하며, 제출 뒤 같은 촬영 세션의 새 upload·미완료 upload 확정은 `409`로 막는다. 같은 제출 replay는 동일한 `analysis_run_id`와 상태를 반환한다.
+- `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis`는 촬영 소유자에게 `pending|dispatching|queued|running|completed|failed`, 선택적 `scope_version_id`, provider-neutral `failure_code`·`retryable`만 반환한다. object key, provider task 원문과 provider 오류 원문은 노출하지 않는다.
+- A의 `capture_analysis_dispatch`는 제출, Cloud Tasks enqueue lease·backoff, worker 실행, 결과 import와 terminal 상태를 소유한다. due row는 `FOR UPDATE SKIP LOCKED`로 선점하고 `analysis:{analysis_run_id}:attempt:1` key로 enqueue한다. enqueue 실패는 정제된 오류 코드만 저장한 뒤 최대 300초 지수 backoff로 재시도한다.
 - `ai_analysis_run`과 `detection`은 사람이 검토할 파생 초안만 저장한다. B는 `scope_version`을 생성·수정·잠금하지 않고, 확정 범위 반영은 A의 `ImportAnalysisDraft` command만 수행한다.
 - `analysis_run_id`가 실행 멱등성 key다. start·complete·fail은 해당 run을 잠그며, 같은 start·결과·오류 replay는 no-op이고 capture session이나 terminal 결과가 다르면 `AnalysisRunConflictError`다.
-- B-03의 기존 run start는 terminal 상태에서도 no-op이다. 새 attempt를 여는 명시적 retry와 stale attempt 차단 token은 worker retry 정책을 소유하는 B-06에서 추가한다.
-- analysis run이 생성된 뒤에는 파생 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
+- private worker는 먼저 A의 `start_capture_analysis` command를 호출하고, B handler 완료 후 `AnalysisResult`만 A의 `complete_capture_analysis`에 전달한다. A는 기존 `import_analysis_draft`를 통해 편집 가능하고 잠기지 않은 `scope_version`을 만들며 `analysis_completed.v1`을 같은 transaction에 기록한다. READY 입력이 사라졌거나 결과를 안전하게 가져올 수 없으면 `analysis_failed.v1`을 기록하고 수동 작업 경로를 유지한다.
+- B-06은 실패 run을 새 attempt로 여는 명시적 command를 제공한다. Cloud Tasks 전달 재시도와 provider 재시도 정책·동시 실행 recovery를 함께 검증하는 범위는 INT-06으로 남는다.
+- capture analysis dispatch나 analysis run이 생성된 뒤에는 파생 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
 
 ## 완료와 감사 이력
 

@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,6 +28,7 @@ from app.modules.access.models import ParticipantAccessToken
 from app.modules.access.service import (
     InvalidAccessTokenError,
     _increment_database_rate_window,
+    revoke_access_link,
     rotate_access_link,
 )
 from app.modules.completion.models import AuditEvent, AuditEventType
@@ -591,3 +592,20 @@ async def test_database_fallback_rejects_link_revoked_after_authentication(
                 current_secret=created["access_links"][0]["secret"],
                 actor_participant_id=participant_id,
             )
+
+
+@pytest.mark.anyio
+async def test_revoke_access_link_tolerates_concurrent_revocation() -> None:
+    access_link = Mock(spec=ParticipantAccessToken)
+    access_link.id = uuid4()
+    access_link.revoked_at = None
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.return_value = None
+
+    await revoke_access_link(
+        session,
+        cast(ParticipantAccessToken, access_link),
+        uuid4(),
+    )
+
+    session.scalar.assert_awaited_once()

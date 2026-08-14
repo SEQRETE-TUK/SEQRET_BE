@@ -15,6 +15,7 @@ from pydantic import SecretStr
 
 from app.config import AppEnvironment, Settings
 from app.entrypoints import outbox_relay
+from app.modules.analysis_workflow.service import AnalysisDispatchResult
 from app.modules.background_job.service import DispatchResult
 from app.modules.notification.consumer import NotificationConsumerResult
 from app.platform.event_bus.service import RelayResult
@@ -22,12 +23,20 @@ from app.platform.event_bus.service import RelayResult
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("relay_result", "consumer_result", "dispatch_result", "exit_code", "saturated"),
+    (
+        "relay_result",
+        "consumer_result",
+        "dispatch_result",
+        "analysis_dispatch_result",
+        "exit_code",
+        "saturated",
+    ),
     [
         (
             RelayResult(claimed=1, published=0, failed=1),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
             DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
@@ -35,6 +44,7 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=1, published=0, failed=0),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
             DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
@@ -42,6 +52,7 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=0, failed=1),
             DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
@@ -49,6 +60,7 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=0, failed=0),
             DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
@@ -56,6 +68,7 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=1, failed=0),
             DispatchResult(claimed=1, queued=0, failed=1),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             1,
             False,
         ),
@@ -63,6 +76,7 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=1, published=1, failed=0),
             NotificationConsumerResult(pulled=1, acknowledged=1, failed=0),
             DispatchResult(claimed=1, queued=1, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
             0,
             False,
         ),
@@ -70,6 +84,31 @@ from app.platform.event_bus.service import RelayResult
             RelayResult(claimed=100, published=100, failed=0),
             NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
             DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=0, queued=0, failed=0),
+            0,
+            True,
+        ),
+        (
+            RelayResult(claimed=0, published=0, failed=0),
+            NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=1, queued=0, failed=1),
+            1,
+            False,
+        ),
+        (
+            RelayResult(claimed=0, published=0, failed=0),
+            NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=1, queued=0, failed=0),
+            1,
+            False,
+        ),
+        (
+            RelayResult(claimed=0, published=0, failed=0),
+            NotificationConsumerResult(pulled=0, acknowledged=0, failed=0),
+            DispatchResult(claimed=0, queued=0, failed=0),
+            AnalysisDispatchResult(claimed=100, queued=100, failed=0),
             0,
             True,
         ),
@@ -80,6 +119,7 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     relay_result: RelayResult,
     consumer_result: NotificationConsumerResult,
     dispatch_result: DispatchResult,
+    analysis_dispatch_result: AnalysisDispatchResult,
     exit_code: int,
     saturated: bool,
 ) -> None:
@@ -91,6 +131,7 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     relay = AsyncMock(return_value=relay_result)
     consume = AsyncMock(return_value=consumer_result)
     dispatch = AsyncMock(return_value=dispatch_result)
+    analysis_dispatch = AsyncMock(return_value=analysis_dispatch_result)
     span = Mock()
     observability = SimpleNamespace(
         tracer=Mock(),
@@ -106,6 +147,7 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     monkeypatch.setattr(outbox_relay, "relay_outbox_once", relay)
     monkeypatch.setattr(outbox_relay, "consume_notification_events_once", consume)
     monkeypatch.setattr(outbox_relay, "dispatch_background_jobs_once", dispatch)
+    monkeypatch.setattr(outbox_relay, "dispatch_capture_analyses_once", analysis_dispatch)
     monkeypatch.setattr(
         outbox_relay,
         "create_observability",
@@ -147,6 +189,15 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
         lease_seconds=60,
         enqueue_timeout_seconds=10.0,
     )
+    analysis_dispatch.assert_awaited_once_with(
+        factory,
+        task_queue,
+        queue_name="seqret-test-media",
+        handler="/tasks/analysis",
+        batch_size=100,
+        lease_seconds=60,
+        enqueue_timeout_seconds=10.0,
+    )
     bus.close.assert_called_once_with()
     subscriber.close.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
@@ -164,6 +215,9 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
         "background_claimed": dispatch_result.claimed,
         "background_queued": dispatch_result.queued,
         "background_failed": dispatch_result.failed,
+        "analysis_claimed": analysis_dispatch_result.claimed,
+        "analysis_queued": analysis_dispatch_result.queued,
+        "analysis_failed": analysis_dispatch_result.failed,
     }
     if exit_code:
         assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
