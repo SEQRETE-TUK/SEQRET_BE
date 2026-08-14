@@ -1,7 +1,7 @@
 # Track B 진행상황 트래커
 
 > 작업 **정의/수락기준**의 원본은 [`BACKEND_WORK_SPLIT.md`](BACKEND_WORK_SPLIT.md) §6. 이 문서는 그 위에 **현재 상태**만 덧씌운 트래커다.
-> 기준일: 2026-08-13
+> 기준일: 2026-08-15
 
 ## 범례
 
@@ -14,7 +14,7 @@
 | ID | 작업 | 상태 | 막는 것 / 선행 | 산출물 |
 |---|---|---|---|---|
 | **B-01** | GCS StoragePort adapter | ✅ | production 설정·wiring은 통합 범위 | [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39) |
-| **B-02** | Cloud Tasks adapter + worker runtime | ✅ | 최신 main staging 실경로 검증 필요 | [#73](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/73) |
+| **B-02** | Cloud Tasks adapter + worker runtime | ✅ | 없음 — staging enqueue → private worker 완료 검증 | [#73](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/73) |
 | **B-03** | AnalysisRun + fake AI pipeline | ✅ | B-04와 INT-01 후속 | [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35) |
 
 ---
