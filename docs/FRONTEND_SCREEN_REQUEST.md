@@ -6,10 +6,10 @@
 >
 > 우선순위: MVP end-to-end flow 완성
 >
-> 상태: 최신 FE 시각 demo 반영 확인, backend 실행 계약 미확정
+> 상태: 최신 FE 시각 demo·공통 API 기반 반영 확인, backend 실행 계약 미확정
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `cd25fd745877c97edeb540d27007d20f8ab5c3ba` (2026-08-15)
+> `aabf2da2221d63d4debc5f06b4d40e92f061289a` (2026-08-15)
 >
 > backend 실행 계약: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -57,9 +57,10 @@ B 소유 Port·event·AI 결과 schema를 바꾸는 경우에만 해당 영향 �
 | 고객 변경 설명 요청·거절 | `/?role=consumer&screen=6` | 반영 | 미구현 |
 | 공통 실패·충돌 state | 역할별 `state` query variant | 반영 | 미구현 |
 
-따라서 이 문서의 **화면 추가 요청은 시각 demo 관점에서는 완료**됐다. 다만 FE source에는
-network 호출이 없고 동작은 local state와 timer로만 처리되므로, 아래 API 항목은 모두 목표
-후보다. 현재 OpenAPI에 없는 경로를 `기존 API`로 부르거나 바로 연동하지 않는다.
+따라서 이 문서의 **화면 추가 요청은 시각 demo 관점에서는 완료**됐다. FE source에 공통 API
+client와 TanStack Query provider는 마련됐지만 이를 호출하는 화면은 0개이고 동작은 local state와
+timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 OpenAPI에 없는 경로를 `기존 API`로
+부르거나 바로 연동하지 않는다.
 
 ## 3. P0 신규 화면 1 — 현장기사 작업 완료 기록
 
