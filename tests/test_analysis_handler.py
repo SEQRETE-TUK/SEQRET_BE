@@ -28,7 +28,11 @@ from app.modules.analysis.handler import (
 )
 from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
 from app.modules.analysis.service import (
+    AnalysisRunConflictError,
+    AnalysisRunNotFoundError,
+    fail_analysis_run,
     get_analysis_run_status,
+    reopen_analysis_run,
     start_analysis_run,
 )
 from app.platform.db import Base, create_session_factory, transactional_session
@@ -216,3 +220,82 @@ async def test_status_getter_returns_none_for_missing_run(
     async with transactional_session(factory) as session:
         status = await get_analysis_run_status(session, analysis_run_id=AnalysisRunId(uuid4()))
     assert status is None
+
+
+async def _fail_fresh_run(
+    factory: async_sessionmaker[AsyncSession],
+    request: AnalysisRequest,
+) -> None:
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+        await fail_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            error_kind=ProviderErrorKind.UNAVAILABLE,
+            now=NOW,
+        )
+
+
+@pytest.mark.anyio
+async def test_reopen_failed_run_starts_new_attempt(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    await _fail_fresh_run(factory, request)
+
+    async with transactional_session(factory) as session:
+        await reopen_analysis_run(session, analysis_run_id=request.analysis_run_id, now=NOW)
+
+    async with transactional_session(factory) as session:
+        run = await session.get(AiAnalysisRun, request.analysis_run_id)
+    assert run is not None
+    assert run.status is AnalysisRunStatus.RUNNING
+    assert run.attempt_count == 2
+    assert run.failure_code is None
+
+
+@pytest.mark.anyio
+async def test_reopen_running_run_is_noop(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+        await reopen_analysis_run(session, analysis_run_id=request.analysis_run_id, now=NOW)
+        run = await session.get(AiAnalysisRun, request.analysis_run_id)
+    assert run is not None
+    assert run.status is AnalysisRunStatus.RUNNING
+    assert run.attempt_count == 1
+
+
+@pytest.mark.anyio
+async def test_reopen_completed_run_conflicts(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    await handle_analysis_task(factory, CountingProvider(), request, trace_id=TRACE_ID, now=NOW)
+
+    async with transactional_session(factory) as session:
+        with pytest.raises(AnalysisRunConflictError, match="can be retried"):
+            await reopen_analysis_run(session, analysis_run_id=request.analysis_run_id, now=NOW)
+
+
+@pytest.mark.anyio
+async def test_reopen_missing_run_raises(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with transactional_session(factory) as session:
+        with pytest.raises(AnalysisRunNotFoundError):
+            await reopen_analysis_run(session, analysis_run_id=AnalysisRunId(uuid4()), now=NOW)
