@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, or_, select
@@ -23,7 +23,10 @@ from app.modules.analysis_workflow.models import (
     CaptureAnalysisDispatch,
     CaptureAnalysisStatus,
 )
-from app.modules.analysis_workflow.schemas import CaptureAnalysisResponse
+from app.modules.analysis_workflow.schemas import (
+    CaptureAnalysisResponse,
+    capture_analysis_response,
+)
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.move_job.models import MoveJob, MoveJobStatus
 from app.modules.scope.models import ScopeVersion
@@ -67,23 +70,6 @@ class AnalysisDispatchResult:
     failed: int
 
 
-def _aware(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
-
-
-def _response(row: CaptureAnalysisDispatch) -> CaptureAnalysisResponse:
-    return CaptureAnalysisResponse(
-        analysis_run_id=row.analysis_run_id,
-        capture_session_id=row.capture_session_id,
-        status=row.status,
-        scope_version_id=row.scope_version_id,
-        failure_code=row.failure_code,
-        retryable=row.retryable,
-        submitted_at=_aware(row.submitted_at),
-        completed_at=_aware(row.completed_at) if row.completed_at is not None else None,
-    )
-
-
 async def submit_capture_analysis(
     session: AsyncSession,
     job_id: UUID,
@@ -117,7 +103,7 @@ async def submit_capture_analysis(
         )
     )
     if existing is not None:
-        return _response(existing)
+        return capture_analysis_response(existing)
     if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
         raise CaptureAnalysisConflictError(job_id)
 
@@ -162,7 +148,7 @@ async def submit_capture_analysis(
             "inventory_media_asset_ids": [str(asset.id) for asset in inventory_assets],
         },
     )
-    return _response(row)
+    return capture_analysis_response(row)
 
 
 async def get_capture_analysis(
@@ -184,7 +170,7 @@ async def get_capture_analysis(
     )
     if row is None:
         raise CaptureAnalysisNotFoundError(capture_session_id)
-    return _response(row)
+    return capture_analysis_response(row)
 
 
 async def claim_capture_analyses(
@@ -458,7 +444,7 @@ async def complete_capture_analysis(
     ):
         raise CaptureAnalysisConflictError(task.analysis_run_id)
     if row.status is CaptureAnalysisStatus.COMPLETED:
-        return _response(row)
+        return capture_analysis_response(row)
     if row.status is not CaptureAnalysisStatus.RUNNING:
         raise CaptureAnalysisConflictError(task.analysis_run_id)
 
@@ -487,7 +473,7 @@ async def complete_capture_analysis(
                 operation_time,
             )
             await session.flush()
-            return _response(row)
+            return capture_analysis_response(row)
         scope_version_id = imported.id
     else:
         scope_version_id = scope_version.id
@@ -508,7 +494,7 @@ async def complete_capture_analysis(
         },
     )
     await session.flush()
-    return _response(row)
+    return capture_analysis_response(row)
 
 
 async def fail_capture_analysis(
@@ -524,7 +510,7 @@ async def fail_capture_analysis(
     row = await _load_task_row(session, task)
     if row.status is CaptureAnalysisStatus.FAILED:
         if row.failure_code == error_kind.value and row.retryable is retryable:
-            return _response(row)
+            return capture_analysis_response(row)
         raise CaptureAnalysisConflictError(task.analysis_run_id)
     if row.status is CaptureAnalysisStatus.COMPLETED:
         raise CaptureAnalysisConflictError(task.analysis_run_id)
@@ -536,4 +522,4 @@ async def fail_capture_analysis(
         completed_at or utc_now(),
     )
     await session.flush()
-    return _response(row)
+    return capture_analysis_response(row)

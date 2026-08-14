@@ -133,6 +133,97 @@ async def _create_capture(
 
 
 @pytest.mark.anyio
+async def test_capture_session_list_recovers_owned_media_and_analysis_state(
+    capture_api: CaptureApi,
+) -> None:
+    client, factory, _, _ = capture_api
+    created = await _create_job(client)
+    job = created["job"]
+    customer_secret = _secret(created, "customer")
+    manager_secret = _secret(created, "company_manager")
+    worker_secret = _secret(created, "field_worker")
+    submitted_capture = await _create_capture(client, created, customer_secret)
+    draft_capture = await _create_capture(client, created, customer_secret)
+    worker_capture = await _create_capture(client, created, worker_secret)
+    room_zone_id = UUID(job["locations"][0]["room_zones"][0]["id"])
+
+    ready_asset = MediaAsset(
+        capture_session_id=UUID(submitted_capture["id"]),
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.READY,
+        object_key=(f"jobs/{job['id']}/captures/{submitted_capture['id']}/{uuid4()}"),
+        content_type="image/jpeg",
+        expected_size_bytes=12,
+        actual_size_bytes=12,
+        sha256_hex="a" * 64,
+        generation="7",
+        uploaded_at=datetime.now(UTC),
+    )
+    pending_asset = MediaAsset(
+        capture_session_id=UUID(draft_capture["id"]),
+        room_zone_id=room_zone_id,
+        media_purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.PENDING_UPLOAD,
+        object_key=f"jobs/{job['id']}/captures/{draft_capture['id']}/{uuid4()}",
+        content_type="video/mp4",
+        expected_size_bytes=24,
+    )
+    async with factory.begin() as session:
+        session.add_all((ready_asset, pending_asset))
+
+    submitted = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions/{submitted_capture['id']}/submit",
+        headers=_headers(customer_secret),
+    )
+    assert submitted.status_code == 202
+
+    list_url = f"/api/v1/move-jobs/{job['id']}/capture-sessions"
+    customer_response = await client.get(list_url, headers=_headers(customer_secret))
+    manager_response = await client.get(list_url, headers=_headers(manager_secret))
+    worker_response = await client.get(list_url, headers=_headers(worker_secret))
+
+    assert customer_response.status_code == 200
+    assert manager_response.json() == []
+    customer_sessions = {
+        item["id"]: item for item in cast(list[dict[str, Any]], customer_response.json())
+    }
+    assert set(customer_sessions) == {submitted_capture["id"], draft_capture["id"]}
+    assert worker_response.json() == [
+        {
+            **worker_capture,
+            "media_assets": [],
+            "analysis": None,
+        }
+    ]
+
+    submitted_view = customer_sessions[submitted_capture["id"]]
+    assert submitted_view["analysis"]["analysis_run_id"] == submitted.json()["analysis_run_id"]
+    assert submitted_view["analysis"]["status"] == "pending"
+    assert submitted_view["media_assets"][0]["status"] == "ready"
+    assert set(submitted_view["media_assets"][0]) == {
+        "id",
+        "capture_session_id",
+        "room_zone_id",
+        "media_purpose",
+        "status",
+        "content_type",
+        "expected_size_bytes",
+        "actual_size_bytes",
+        "sha256_hex",
+        "created_at",
+        "uploaded_at",
+    }
+    draft_view = customer_sessions[draft_capture["id"]]
+    assert draft_view["analysis"] is None
+    assert draft_view["media_assets"][0]["status"] == "pending_upload"
+    assert "object_key" not in customer_response.text
+    assert "generation" not in customer_response.text
+    assert "provider_task_id" not in customer_response.text
+    assert customer_secret not in customer_response.text
+
+
+@pytest.mark.anyio
 async def test_capture_upload_verifies_metadata_and_is_idempotent(
     capture_api: CaptureApi,
     monkeypatch: pytest.MonkeyPatch,

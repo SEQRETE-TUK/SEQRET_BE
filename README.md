@@ -52,6 +52,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
 - `POST /move-jobs/{job_id}/capture-sessions`: 참여자 소유 촬영 세션 생성
+- `GET /move-jobs/{job_id}/capture-sessions`: 본인 촬영 세션·미디어·분석 상태 복구
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`: READY 촬영 제출과 분석 요청
 - `GET /move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis`: 촬영 분석·범위 초안 상태 조회
 - `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload`: 업로드 URL 발급
@@ -76,7 +77,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 로컬에서 storage 설정을 생략하면 업로드 API는 `503`을 반환하고, 배포 API는 storage 설정 없이는 시작하지 않습니다.
 
-촬영 소유자는 하나 이상의 `READY` inventory 미디어가 준비된 뒤 촬영 세션을 한 번 제출합니다. 제출과 `capture_submitted.v1`은 같은 transaction에 기록되며 이후 해당 세션의 새 미디어 변경은 막힙니다. 매분 relay가 분석 intent를 멱등 Cloud Task로 전달하고 private worker가 B의 분석 결과를 만든 뒤 A의 `import_analysis_draft` command로 편집 가능한 범위 초안을 생성합니다. provider 오류나 안전하게 가져올 수 없는 결과는 provider-neutral 실패 상태로 남고 수동 범위 작성은 계속 가능합니다.
+촬영 소유자는 `GET /capture-sessions`로 자신이 만든 세션, 미디어의 `pending_upload|uploaded|processing|ready|failed|deleted` 상태와 선택적 분석 상태를 복구할 수 있습니다. 응답에는 object key, generation, signed URL과 provider task ID가 포함되지 않습니다. 하나 이상의 `READY` inventory 미디어가 준비된 뒤 촬영 세션을 한 번 제출합니다. 제출과 `capture_submitted.v1`은 같은 transaction에 기록되며 이후 해당 세션의 새 미디어 변경은 막힙니다. 매분 relay가 분석 intent를 멱등 Cloud Task로 전달하고 private worker가 B의 분석 결과를 만든 뒤 A의 `import_analysis_draft` command로 편집 가능한 범위 초안을 생성합니다. provider 오류나 안전하게 가져올 수 없는 결과는 provider-neutral 실패 상태로 남고 수동 범위 작성은 계속 가능합니다.
 
 작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 

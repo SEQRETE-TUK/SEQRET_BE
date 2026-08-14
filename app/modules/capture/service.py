@@ -13,9 +13,11 @@ from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.contracts.primitives import utc_now
 from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
+from app.modules.analysis_workflow.schemas import capture_analysis_response
 from app.modules.background_job.service import create_media_validation_background_job
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
+    CaptureSessionDetailResponse,
     CaptureSessionResponse,
     MediaAssetResponse,
     MediaUploadCreate,
@@ -128,6 +130,66 @@ async def create_capture_session(
         job_id=capture_session.job_id,
         created_by_participant_id=capture_session.created_by_participant_id,
         created_at=capture_session.created_at,
+    )
+
+
+async def list_capture_sessions(
+    session: AsyncSession,
+    job_id: UUID,
+    participant_id: UUID,
+) -> tuple[CaptureSessionDetailResponse, ...]:
+    """List only the caller's sessions with durable media and analysis state."""
+
+    capture_sessions = (
+        await session.scalars(
+            select(CaptureSession)
+            .where(
+                CaptureSession.job_id == job_id,
+                CaptureSession.created_by_participant_id == participant_id,
+            )
+            .order_by(CaptureSession.created_at.desc(), CaptureSession.id.desc())
+        )
+    ).all()
+    if not capture_sessions:
+        return ()
+
+    capture_ids = tuple(capture.id for capture in capture_sessions)
+    media_assets = (
+        await session.scalars(
+            select(MediaAsset)
+            .where(MediaAsset.capture_session_id.in_(capture_ids))
+            .order_by(MediaAsset.created_at, MediaAsset.id)
+        )
+    ).all()
+    analyses = (
+        await session.scalars(
+            select(CaptureAnalysisDispatch).where(
+                CaptureAnalysisDispatch.capture_session_id.in_(capture_ids)
+            )
+        )
+    ).all()
+
+    assets_by_capture: dict[UUID, list[MediaAssetResponse]] = {
+        capture_id: [] for capture_id in capture_ids
+    }
+    for asset in media_assets:
+        assets_by_capture[asset.capture_session_id].append(_asset_response(asset))
+    analyses_by_capture = {row.capture_session_id: row for row in analyses}
+
+    return tuple(
+        CaptureSessionDetailResponse(
+            id=capture.id,
+            job_id=capture.job_id,
+            created_by_participant_id=capture.created_by_participant_id,
+            created_at=capture.created_at,
+            media_assets=tuple(assets_by_capture[capture.id]),
+            analysis=(
+                capture_analysis_response(analyses_by_capture[capture.id])
+                if capture.id in analyses_by_capture
+                else None
+            ),
+        )
+        for capture in capture_sessions
     )
 
 

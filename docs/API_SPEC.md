@@ -538,14 +538,14 @@ AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 24개 path와 28개 operation이 있다. `/api/v1` 업무 operation 25개와
+현재 OpenAPI에는 24개 path와 29개 operation이 있다. `/api/v1` 업무 operation 26개와
 운영 operation 3개이며, 이 문서의 제안 경로 17개와 FE PRD 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
 | `POST /move-jobs`, access-link 생성·철회 | 현재 bootstrap·운영 계약을 유지한다. 신뢰 bootstrap과 전달 채널이 결정된 뒤 공개 범위 변경을 별도 계약으로 다룬다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
-| capture session·asset upload·complete·submit·analysis status 5개 | storage와 durable 분석 흐름을 재사용한다. 첫 E2E는 현재 계약으로 연결하고, 이후 frontend는 화면용 capture command/view로 축소할지 결정한다. |
+| capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. 첫 E2E는 현재 계약으로 연결하고, 이후 frontend는 화면용 capture command/view로 축소할지 결정한다. |
 | scope version 생성·목록·approval | `scope-review`, `scope-proposals`, `confirm`으로 교체 |
 | change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |

@@ -8,6 +8,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.model import ContractModel
+from app.modules.analysis_workflow.schemas import CaptureAnalysisResponse
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_VIDEO_BYTES = 200 * 1024 * 1024
@@ -47,6 +48,13 @@ class MediaAssetResponse(ContractModel):
     sha256_hex: str | None
     created_at: datetime
     uploaded_at: datetime | None
+
+
+class CaptureSessionDetailResponse(CaptureSessionResponse):
+    """Recoverable participant-owned capture state without storage capabilities."""
+
+    media_assets: tuple[MediaAssetResponse, ...]
+    analysis: CaptureAnalysisResponse | None
 
 
 class MediaUploadResponse(ContractModel):

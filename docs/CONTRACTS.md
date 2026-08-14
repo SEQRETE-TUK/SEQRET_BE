@@ -74,6 +74,7 @@
 
 ## AI 분석 실행
 
+- `GET /api/v1/move-jobs/{job_id}/capture-sessions`는 호출자가 직접 만든 촬영 세션만 최신순으로 반환한다. 각 세션은 생성 정보, 생성순 미디어의 public metadata·처리 상태와 선택적 provider-neutral 분석 상태를 포함한다. object key, generation, signed URL, queue lease와 provider task ID는 반환하지 않으며, 세션이 없으면 `200 []`다.
 - 촬영 세션 소유자는 `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`으로 분석을 한 번만 제출한다. `inventory` 미디어가 하나 이상이고 전부 `READY`일 때만 `202`를 반환하며, 제출 뒤 같은 촬영 세션의 새 upload·미완료 upload 확정은 `409`로 막는다. 같은 제출 replay는 동일한 `analysis_run_id`와 상태를 반환한다.
 - `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis`는 촬영 소유자에게 `pending|dispatching|queued|running|completed|failed`, 선택적 `scope_version_id`, provider-neutral `failure_code`·`retryable`만 반환한다. object key, provider task 원문과 provider 오류 원문은 노출하지 않는다.
 - A의 `capture_analysis_dispatch`는 제출, Cloud Tasks enqueue lease·backoff, worker 실행, 결과 import와 terminal 상태를 소유한다. due row는 `FOR UPDATE SKIP LOCKED`로 선점하고 `analysis:{analysis_run_id}:attempt:1` key로 enqueue한다. enqueue 실패는 정제된 오류 코드만 저장한 뒤 최대 300초 지수 backoff로 재시도한다.

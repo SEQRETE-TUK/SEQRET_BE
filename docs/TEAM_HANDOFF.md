@@ -8,8 +8,8 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 24개 path에 28개다: `/api/v1` 업무 operation 25개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 작업 bootstrap, 역할별 access link 인증·회전·철회, 촬영 세션·미디어 업로드·분석 제출과 상태 조회, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- OpenAPI operation은 24개 path에 29개다: `/api/v1` 업무 operation 26개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 작업 bootstrap, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
 - Alembic은 단일 head `int_01_0001`이다. 감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
@@ -24,6 +24,7 @@
 - upload/read signed URL은 **opaque 문자열**이다. decode, 재직렬화, query 정렬, host 소문자화, 기본 port 제거를 하지 말고 받은 문자열을 그대로 사용한다. upload 응답의 `upload_headers`도 key·value를 정규화하지 않고 모두 PUT에 적용한다. GCS target에는 요청 MIME type의 `Content-Type`과 `x-goog-if-generation-match: 0`이 포함돼야 하며 어느 쪽도 빼면 안 된다.
 - secret 또는 signed URL을 담는 응답은 `Cache-Control: no-store`다. PWA cache, 브라우저 영구 저장소, 로그와 analytics에 남기지 않는다.
 - upload 완료 요청에 object generation을 보내지 않는다. FE는 발급받은 URL과 `upload_headers`로 PUT하고, BE가 storage metadata의 object key, MIME type, 크기와 generation을 검증한다.
+- `GET /move-jobs/{job_id}/capture-sessions`는 호출자가 만든 세션만 최신순으로 반환한다. 각 세션의 `media_assets`에서 validation 상태를 복구하고 선택적 `analysis`에서 분석 상태를 이어간다. object key, generation, signed URL과 provider task ID는 이 응답에 없다.
 - 촬영 소유자는 모든 inventory 미디어가 비동기 validation을 마쳐 `READY`가 된 뒤 `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`을 한 번 호출한다. `202` 응답의 `analysis_run_id`를 보관하고 `GET .../analysis`로 상태를 조회할 수 있다. 제출 뒤 해당 촬영 세션의 새 upload·미완료 upload 확정은 `409`다.
 - 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
