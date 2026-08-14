@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     otel_exporter_otlp_traces_endpoint: AnyHttpUrl | None = None
     otel_trace_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
     gcp_project_id: str | None = None
+    analysis_location: str | None = None
 
     @field_validator("service_name")
     @classmethod
