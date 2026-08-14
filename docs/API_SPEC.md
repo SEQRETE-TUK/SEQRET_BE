@@ -4,10 +4,10 @@
 >
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `6f6e580b2b3eba358f8c1adfe0841823af905e84`
+> backend 기준 코드: `origin/main` `55720089c293de6729e6dfc529fcde5b9dae5503`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `cd25fd745877c97edeb540d27007d20f8ab5c3ba`
+> `aabf2da2221d63d4debc5f06b4d40e92f061289a`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,17 +21,18 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/cd25fd745877c97edeb540d27007d20f8ab5c3ba)는
+2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/aabf2da2221d63d4debc5f06b4d40e92f061289a)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
 `state` query variant가 있다. 이 수치는 시각 demo 범위이며 backend E2E 완료 수가 아니다.
 
-frontend source에는 API client, `/api/v1`, Bearer header, runtime 환경변수와 TanStack Query가
-없다. 모든 전이는 component `useState`와 timer로 실행된다. frontend PRD 부록의 `/v1/jobs`,
-`consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
-제안이다. 이 문서의 17개 경로와 frontend PRD 경로 중 하나를 암묵적으로 선택하거나 혼용하지
-않는다.
+frontend source에는 `VITE_API_BASE_URL`, `/api/v1`로 제한한 공통 client, 명시적 Bearer 전달,
+opaque signed PUT helper와 TanStack Query provider·retry 정책이 있다. 그러나 이를 import해 실제
+query·mutation을 수행하는 demo 화면은 0개이며 모든 화면 전이는 여전히 component `useState`와
+timer로 실행된다. frontend PRD 부록의 `/v1/jobs`, `consumer|provider|crew`, 공통 error envelope와
+CRUD 경로도 현재 backend 계약이 아니라 별도 제안이다. 이 문서의 17개 경로와 frontend PRD 경로
+중 하나를 암묵적으로 선택하거나 혼용하지 않는다.
 
 이 문서의 경로와 schema는 아직 현재 OpenAPI에 등록되지 않았다. 제품 범위와 A 소유 업무 계약을
 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야 frontend 실행 계약이 된다.

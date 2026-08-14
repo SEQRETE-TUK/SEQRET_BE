@@ -32,10 +32,10 @@
 - staging은 FE 도메인 미구매 상태라 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 이는 공개 API edge 확인용이지 canonical FE origin 증적이 아니며, FE 배포 후 GitHub environment 변수와 bucket CORS를 함께 교체한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `cd25fd745877c97edeb540d27007d20f8ab5c3ba`다. Vite 7·React 19로 전환돼 `docs/TECH_STACK.md`의 build 선택과 일치하고, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
-- FE source에는 API client·runtime 환경변수·`/api/v1`·Bearer·TanStack Query가 없고 모든 동작이 local state와 timer다. FE PRD 부록의 `/v1/jobs`, `consumer|provider|crew`, error envelope와 화면 API 표도 현재 OpenAPI가 아닌 별도 제안이다. [API 현황](API_STATUS.md)과 [목표 API 제안](API_SPEC.md)을 대조해 첫 E2E slice를 계약 PR로 확정한다.
-- FE repository의 `agent.md`는 아직 Next.js 16·App Router를 지시해 실제 Vite source와 충돌한다. FE 작업 전 해당 저장소 지침을 정정해야 한다.
-- FE Actions run, GitHub deployment와 environment는 모두 0개다. canonical HTTPS origin이 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `aabf2da2221d63d4debc5f06b4d40e92f061289a`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer 전달, opaque signed PUT과 TanStack Query 공통 정책을 마련했다. 다만 이 client와 query hook을 호출하는 화면은 아직 0개이고 demo 동작은 계속 local state와 timer다. FE PRD 부록의 `/v1/jobs`, `consumer|provider|crew`, error envelope와 화면 API 표도 현재 OpenAPI가 아닌 별도 제안이므로 [API 현황](API_STATUS.md)과 [목표 API 제안](API_SPEC.md)을 대조해 첫 E2E slice를 계약 PR로 확정한다.
+- FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)와 [#3](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/3)의 PR·`main` CI 4회는 모두 성공했고 최신 run의 annotation은 0개다. GitHub deployment와 environment는 여전히 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
 
 ## B 트랙 인계
 

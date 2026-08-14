@@ -2,10 +2,10 @@
 
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `6f6e580b2b3eba358f8c1adfe0841823af905e84`
+> backend 기준 코드: `origin/main` `55720089c293de6729e6dfc529fcde5b9dae5503`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `cd25fd745877c97edeb540d27007d20f8ab5c3ba`
+> `aabf2da2221d63d4debc5f06b4d40e92f061289a`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -17,7 +17,7 @@
 | --- | ---: | --- |
 | 현재 FastAPI 등록 operation | 26개 | 22개 path의 업무 operation 23개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
-| FE source의 실제 network 호출 | 0개 | API client, `/api/v1`, Bearer, runtime 환경변수와 TanStack Query가 없음 |
+| FE 화면의 실제 API 호출 | 0개 | 공통 client·Query provider는 있으나 어떤 demo 화면도 호출하지 않음 |
 | 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
 | 추가 P0 화면 포함 시 backend 제안 API | 19개 | 작업 완료 제출과 고객 완료 결정 2개 추가 |
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
@@ -46,9 +46,9 @@
 | runtime | Vite 7, React 19, TypeScript | `TECH_STACK.md`의 Vite 선택과 일치 |
 | 사용자 경로 | `/`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 역할별 UI demo 경로만 존재 |
 | 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | 시각·상호작용 검증 자료로 사용; API 완료로 보지 않음 |
-| server state | component `useState`, `setTimeout` | 새로고침·동시 사용자·server 정합성을 증명하지 않음 |
-| API 기반 | API client, 환경변수, Bearer와 TanStack Query 없음 | OpenAPI 연동 전 공통 FE 기반 필요 |
-| 배포 | Actions run, deployment, environment 0개 | canonical HTTPS origin 없음; CORS 교체 불가 |
+| server state | TanStack Query provider·공통 retry 정책 존재; 화면은 `useState`, `setTimeout` | 기반은 준비됐지만 새로고침·동시 사용자·server 정합성 E2E는 아직 없음 |
+| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 승인된 첫 OpenAPI slice를 화면 query·mutation에 연결할 단계 |
+| CI·배포 | Actions 4회 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
 
 ### 3.2 계약 불일치
 
@@ -174,7 +174,7 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 - 최신 main의 비운영 `/openapi.json`만 현재 실행 계약으로 사용한다.
 - 현재 route 이름과 제안 경로를 섞어 임시 연동하지 않는다.
 - 각 최종 endpoint가 OpenAPI에 추가되고 권한·오류·중복 호출 test가 통과한 뒤 연동한다.
-- FE는 `VITE_API_BASE_URL`, 공통 API client, capability secret의 비영구 보관과 TanStack Query 기반 server state를 먼저 마련한다.
+- FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
 - 최신 FE 27개 중 첫 E2E slice와 추가 P0 화면 2개 포함 여부를 결정한 뒤 API 기준을 고정한다.
