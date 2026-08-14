@@ -325,6 +325,14 @@ def test_documented_v1_event_payloads_reject_drift_and_invalid_values(
         _event(event_type=event_type, payload=payload)
 
 
+def test_domain_event_defensively_rejects_an_unhandled_event_type() -> None:
+    event = _event()
+    object.__setattr__(event, "event_type", "future_event.v1")
+
+    with pytest.raises(ValueError, match="contract"):
+        event.require_documented_payload()  # type: ignore[operator]
+
+
 @pytest.mark.parametrize(
     "trace_id",
     [

@@ -185,6 +185,8 @@ class DomainEvent(ContractModel):
                     and isinstance(media_asset_id, str)
                     and str(UUID(media_asset_id)) == media_asset_id
                 )
+            else:
+                valid = False
         except ValueError:
             valid = False
         if not valid:
