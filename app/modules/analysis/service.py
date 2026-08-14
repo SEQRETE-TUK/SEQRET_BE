@@ -208,3 +208,47 @@ async def load_analysis_result(
         draft_items=tuple(draft_items),
         review_required_items=tuple(review_required_items),
     )
+
+
+async def get_analysis_run_status(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+) -> AnalysisRunStatus | None:
+    """Return the current run status, or ``None`` when the run is absent."""
+
+    run = await _load_run(session, analysis_run_id)
+    return None if run is None else run.status
+
+
+async def reopen_analysis_run(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+    now: datetime,
+) -> None:
+    """Open a new ``RUNNING`` attempt for a failed run (explicit retry).
+
+    A run already ``RUNNING`` is a no-op so a duplicate retry converges, and a
+    ``COMPLETED`` run is never reopened.
+    """
+
+    run = await _load_run_for_update(session, analysis_run_id)
+    if run is None:
+        raise AnalysisRunNotFoundError(str(analysis_run_id))
+
+    if run.status is AnalysisRunStatus.RUNNING:
+        return
+    if run.status is not AnalysisRunStatus.FAILED:
+        raise AnalysisRunConflictError("only a failed analysis run can be retried")
+
+    run.status = AnalysisRunStatus.RUNNING
+    run.attempt_count += 1
+    run.started_at = now
+    run.completed_at = None
+    run.failure_code = None
+    run.model_name = None
+    run.model_version = None
+    run.prompt_version = None
+    run.result_schema_version = None
+    await session.flush()
