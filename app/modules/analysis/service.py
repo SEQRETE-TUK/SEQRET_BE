@@ -208,3 +208,14 @@ async def load_analysis_result(
         draft_items=tuple(draft_items),
         review_required_items=tuple(review_required_items),
     )
+
+
+async def get_analysis_run_status(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+) -> AnalysisRunStatus | None:
+    """Return the current run status, or ``None`` when the run is absent."""
+
+    run = await _load_run(session, analysis_run_id)
+    return None if run is None else run.status
