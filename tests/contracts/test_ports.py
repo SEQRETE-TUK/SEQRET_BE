@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import JsonValue
 
 from app.contracts import (
     AIProviderPort,
@@ -310,7 +311,7 @@ def test_analysis_request_rejects_unsupported_content_type() -> None:
         )
 
 
-def _analysis_completed_payload() -> dict[str, object]:
+def _analysis_completed_payload() -> dict[str, JsonValue]:
     return {
         "capture_session_id": str(uuid4()),
         "analysis_run_id": str(uuid4()),
