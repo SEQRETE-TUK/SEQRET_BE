@@ -65,6 +65,9 @@
 현재 A 업무 command가 생성하는 event payload는 아래 key만 정확히 포함한다. 모든 ID는 canonical UUID 문자열이고 `content_hash`는 64자 소문자 16진수다. 증거 ID 배열은 비어 있지 않고 중복이 없다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
 
 - `scope_locked.v1`: 문자열 `scope_version_id`, 문자열 `content_hash`
+- `capture_submitted.v1`: 문자열 `capture_session_id`, 문자열 `analysis_run_id`, 비어 있지 않고 중복 없는 문자열 배열 `inventory_media_asset_ids`
+- `analysis_completed.v1`: 문자열 `capture_session_id`, 문자열 `analysis_run_id`, 문자열 `scope_version_id`
+- `analysis_failed.v1`: 문자열 `capture_session_id`, 문자열 `analysis_run_id`, provider-neutral `error_kind`, boolean `retryable`
 - `change_requested.v1`: 문자열 `change_request_id`, 문자열 `base_scope_version_id`, 문자열 배열 `evidence_media_asset_ids`
 - `completion_media_submitted.v1`: 문자열 `capture_session_id`, 문자열 `media_asset_id`, 문자열 `room_zone_id`
 - `media_deleted.v1`: 문자열 `background_job_id`, 문자열 `media_asset_id`

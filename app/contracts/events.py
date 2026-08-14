@@ -61,7 +61,68 @@ class DomainEvent(ContractModel):
         payload = self.payload
         valid = True
         try:
-            if self.event_type is DomainEventType.SCOPE_LOCKED_V1:
+            if self.event_type is DomainEventType.CAPTURE_SUBMITTED_V1:
+                capture_session_id = payload.get("capture_session_id")
+                analysis_run_id = payload.get("analysis_run_id")
+                media_asset_ids = payload.get("inventory_media_asset_ids")
+                valid = (
+                    set(payload)
+                    == {
+                        "capture_session_id",
+                        "analysis_run_id",
+                        "inventory_media_asset_ids",
+                    }
+                    and isinstance(capture_session_id, str)
+                    and str(UUID(capture_session_id)) == capture_session_id
+                    and isinstance(analysis_run_id, str)
+                    and str(UUID(analysis_run_id)) == analysis_run_id
+                    and isinstance(media_asset_ids, list)
+                    and bool(media_asset_ids)
+                    and all(
+                        isinstance(media_asset_id, str)
+                        and str(UUID(media_asset_id)) == media_asset_id
+                        for media_asset_id in media_asset_ids
+                    )
+                    and len(set(media_asset_ids)) == len(media_asset_ids)
+                )
+            elif self.event_type is DomainEventType.ANALYSIS_COMPLETED_V1:
+                capture_session_id = payload.get("capture_session_id")
+                analysis_run_id = payload.get("analysis_run_id")
+                scope_version_id = payload.get("scope_version_id")
+                valid = (
+                    set(payload) == {"capture_session_id", "analysis_run_id", "scope_version_id"}
+                    and isinstance(capture_session_id, str)
+                    and str(UUID(capture_session_id)) == capture_session_id
+                    and isinstance(analysis_run_id, str)
+                    and str(UUID(analysis_run_id)) == analysis_run_id
+                    and isinstance(scope_version_id, str)
+                    and str(UUID(scope_version_id)) == scope_version_id
+                )
+            elif self.event_type is DomainEventType.ANALYSIS_FAILED_V1:
+                capture_session_id = payload.get("capture_session_id")
+                analysis_run_id = payload.get("analysis_run_id")
+                error_kind = payload.get("error_kind")
+                retryable = payload.get("retryable")
+                valid = (
+                    set(payload)
+                    == {"capture_session_id", "analysis_run_id", "error_kind", "retryable"}
+                    and isinstance(capture_session_id, str)
+                    and str(UUID(capture_session_id)) == capture_session_id
+                    and isinstance(analysis_run_id, str)
+                    and str(UUID(analysis_run_id)) == analysis_run_id
+                    and isinstance(error_kind, str)
+                    and error_kind
+                    in {
+                        "not_found",
+                        "conflict",
+                        "invalid_input",
+                        "unavailable",
+                        "deadline_exceeded",
+                        "permission_denied",
+                    }
+                    and isinstance(retryable, bool)
+                )
+            elif self.event_type is DomainEventType.SCOPE_LOCKED_V1:
                 scope_version_id = payload.get("scope_version_id")
                 content_hash = payload.get("content_hash")
                 valid = (
@@ -124,6 +185,8 @@ class DomainEvent(ContractModel):
                     and isinstance(media_asset_id, str)
                     and str(UUID(media_asset_id)) == media_asset_id
                 )
+            else:
+                valid = False
         except ValueError:
             valid = False
         if not valid:

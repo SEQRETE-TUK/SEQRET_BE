@@ -81,6 +81,25 @@ async def _job(factory: OutboxDatabase) -> tuple[UUID, dict[ParticipantRole, UUI
 
 def _event_payload(event_type: DomainEventType) -> dict[str, Any]:
     resource_id = str(uuid4())
+    if event_type is DomainEventType.CAPTURE_SUBMITTED_V1:
+        return {
+            "capture_session_id": resource_id,
+            "analysis_run_id": str(uuid4()),
+            "inventory_media_asset_ids": [str(uuid4())],
+        }
+    if event_type is DomainEventType.ANALYSIS_COMPLETED_V1:
+        return {
+            "capture_session_id": resource_id,
+            "analysis_run_id": str(uuid4()),
+            "scope_version_id": str(uuid4()),
+        }
+    if event_type is DomainEventType.ANALYSIS_FAILED_V1:
+        return {
+            "capture_session_id": resource_id,
+            "analysis_run_id": str(uuid4()),
+            "error_kind": "unavailable",
+            "retryable": True,
+        }
     if event_type is DomainEventType.SCOPE_LOCKED_V1:
         return {"scope_version_id": resource_id, "content_hash": "a" * 64}
     if event_type is DomainEventType.CHANGE_REQUESTED_V1:
