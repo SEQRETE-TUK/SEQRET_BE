@@ -310,6 +310,14 @@ def test_analysis_request_rejects_unsupported_content_type() -> None:
         )
 
 
+def _analysis_completed_payload() -> dict[str, object]:
+    return {
+        "capture_session_id": str(uuid4()),
+        "analysis_run_id": str(uuid4()),
+        "scope_version_id": str(uuid4()),
+    }
+
+
 @pytest.mark.anyio
 async def test_event_bus_fake_keeps_first_event_for_idempotency_key() -> None:
     event_bus = FakeEventBus()
@@ -319,7 +327,7 @@ async def test_event_bus_fake_keeps_first_event_for_idempotency_key() -> None:
         event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
         aggregate_id=AggregateId(uuid4()),
         trace_id="0123456789abcdef0123456789abcdef",
-        payload={},
+        payload=_analysis_completed_payload(),
     )
     assert isinstance(event_bus, EventBusPort)
     await event_bus.publish(event=first, idempotency_key=key, timeout_seconds=2)
@@ -375,7 +383,7 @@ async def test_fakes_reject_idempotency_key_reuse_for_different_requests() -> No
         event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
         aggregate_id=AggregateId(uuid4()),
         trace_id="0123456789abcdef0123456789abcdef",
-        payload={},
+        payload=_analysis_completed_payload(),
     )
 
     await queue.enqueue(
@@ -440,7 +448,7 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
         event_type=DomainEventType.ANALYSIS_COMPLETED_V1,
         aggregate_id=AggregateId(uuid4()),
         trace_id="0123456789abcdef0123456789abcdef",
-        payload={},
+        payload=_analysis_completed_payload(),
     )
 
     async def result_factory(request: AnalysisRequest) -> AnalysisResult:

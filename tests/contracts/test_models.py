@@ -112,7 +112,11 @@ def _event(**overrides: object) -> DomainEvent:
         "aggregate_id": AggregateId(uuid4()),
         "actor_id": ParticipantId(uuid4()),
         "trace_id": "0123456789abcdef0123456789abcdef",
-        "payload": {"capture_session_id": str(uuid4())},
+        "payload": {
+            "capture_session_id": str(uuid4()),
+            "analysis_run_id": str(uuid4()),
+            "inventory_media_asset_ids": [str(uuid4())],
+        },
     }
     values.update(overrides)
     return DomainEvent.model_validate(values)
@@ -144,6 +148,31 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
 @pytest.mark.parametrize(
     ("event_type", "payload"),
     [
+        (
+            DomainEventType.CAPTURE_SUBMITTED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "inventory_media_asset_ids": [str(uuid4())],
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_COMPLETED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "scope_version_id": str(uuid4()),
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_FAILED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "error_kind": "unavailable",
+                "retryable": True,
+            },
+        ),
         (
             DomainEventType.SCOPE_LOCKED_V1,
             {"scope_version_id": str(uuid4()), "content_hash": "a" * 64},
@@ -180,6 +209,60 @@ def test_documented_v1_event_payloads_accept_exact_producer_shape(
 @pytest.mark.parametrize(
     ("event_type", "payload"),
     [
+        (
+            DomainEventType.CAPTURE_SUBMITTED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "inventory_media_asset_ids": [],
+            },
+        ),
+        (
+            DomainEventType.CAPTURE_SUBMITTED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "inventory_media_asset_ids": [
+                    "00000000-0000-4000-8000-000000000000",
+                    "00000000-0000-4000-8000-000000000000",
+                ],
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_COMPLETED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "scope_version_id": "not-a-uuid",
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_FAILED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "error_kind": "raw-provider-error",
+                "retryable": True,
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_FAILED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "error_kind": ["unavailable"],
+                "retryable": True,
+            },
+        ),
+        (
+            DomainEventType.ANALYSIS_FAILED_V1,
+            {
+                "capture_session_id": str(uuid4()),
+                "analysis_run_id": str(uuid4()),
+                "error_kind": "unavailable",
+                "retryable": 1,
+            },
+        ),
         (DomainEventType.SCOPE_LOCKED_V1, {"scope_version_id": str(uuid4())}),
         (
             DomainEventType.CHANGE_REQUESTED_V1,
