@@ -8,6 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from app.api.errors import protected_error_responses
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
 from app.modules.access.auth import CurrentActor, authorize_job_actor
+from app.modules.analysis_workflow.schemas import CaptureAnalysisResponse
+from app.modules.analysis_workflow.service import (
+    CaptureAnalysisConflictError,
+    CaptureAnalysisNotFoundError,
+    get_capture_analysis,
+    submit_capture_analysis,
+)
 from app.modules.capture.schemas import (
     CaptureSessionResponse,
     MediaAssetResponse,
@@ -57,6 +64,70 @@ def storage_error(error: ProviderError) -> HTTPException:
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="storage is unavailable",
     )
+
+
+@router.post(
+    "/{job_id}/capture-sessions/{capture_session_id}/submit",
+    response_model=CaptureAnalysisResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=protected_error_responses(
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
+    summary="촬영 제출 및 분석 요청",
+)
+async def submit_capture_analysis_endpoint(
+    job_id: UUID,
+    capture_session_id: UUID,
+    actor: CurrentActor,
+    session: Session,
+) -> CaptureAnalysisResponse:
+    authorize_job_actor(actor, job_id)
+    try:
+        return await submit_capture_analysis(
+            session,
+            job_id,
+            capture_session_id,
+            cast(UUID, actor.participant_id),
+            trace_id=actor.trace_id,
+        )
+    except CaptureAnalysisNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="capture resource not found",
+        ) from error
+    except CaptureAnalysisConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="capture is not ready for analysis",
+        ) from error
+
+
+@router.get(
+    "/{job_id}/capture-sessions/{capture_session_id}/analysis",
+    response_model=CaptureAnalysisResponse,
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
+    summary="촬영 분석 상태 조회",
+)
+async def get_capture_analysis_endpoint(
+    job_id: UUID,
+    capture_session_id: UUID,
+    actor: CurrentActor,
+    session: Session,
+) -> CaptureAnalysisResponse:
+    authorize_job_actor(actor, job_id)
+    try:
+        return await get_capture_analysis(
+            session,
+            job_id,
+            capture_session_id,
+            cast(UUID, actor.participant_id),
+        )
+    except CaptureAnalysisNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="capture analysis not found",
+        ) from error
 
 
 @router.post(

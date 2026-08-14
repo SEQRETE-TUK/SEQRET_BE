@@ -57,6 +57,11 @@ from app.modules.analysis.service import (
     load_analysis_result,
     start_analysis_run,
 )
+from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
+from app.modules.analysis_workflow.service import (
+    claim_capture_analyses,
+    submit_capture_analysis,
+)
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.background_job.service import (
     BackgroundJobConflictError,
@@ -128,7 +133,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_03_0001"
+ALEMBIC_HEAD = "int_01_0001"
+ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
@@ -137,6 +143,7 @@ ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
     "ai_analysis_run",
     "background_job",
+    "capture_analysis_dispatch",
     "capture_session",
     "job_participant",
     "location",
@@ -264,6 +271,74 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
                         outbox_metadata.tables["outbox_event"].insert(),
                         invalid_outbox_event,
                     )
+
+            migration_job_id = uuid4()
+            migration_participant_id = uuid4()
+            migration_capture_id = uuid4()
+            migration_run_id = uuid4()
+            migration_time = datetime.now(UTC)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO move_job (id, title, status, created_at, updated_at) "
+                        "VALUES (:id, 'analysis guard', 'DRAFT', :now, :now)"
+                    ),
+                    {"id": migration_job_id, "now": migration_time},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO job_participant "
+                        "(id, job_id, role, display_name, created_at) "
+                        "VALUES (:id, :job_id, 'CUSTOMER', 'guard', :now)"
+                    ),
+                    {
+                        "id": migration_participant_id,
+                        "job_id": migration_job_id,
+                        "now": migration_time,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO capture_session "
+                        "(id, job_id, created_by_participant_id, created_at) "
+                        "VALUES (:id, :job_id, :participant_id, :now)"
+                    ),
+                    {
+                        "id": migration_capture_id,
+                        "job_id": migration_job_id,
+                        "participant_id": migration_participant_id,
+                        "now": migration_time,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO capture_analysis_dispatch "
+                        "(analysis_run_id, capture_session_id, move_job_id, "
+                        "submitted_by_participant_id, status, trace_id, scheduled_at, "
+                        "dispatch_attempt_count, submitted_at) "
+                        "VALUES (:run_id, :capture_id, :job_id, :participant_id, 'PENDING', "
+                        ":trace_id, :now, 0, :now)"
+                    ),
+                    {
+                        "run_id": migration_run_id,
+                        "capture_id": migration_capture_id,
+                        "job_id": migration_job_id,
+                        "participant_id": migration_participant_id,
+                        "trace_id": "0" * 32,
+                        "now": migration_time,
+                    },
+                )
+            with pytest.raises(RuntimeError, match="roll back the application"):
+                command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
+            assert _current_revision(engine) == ALEMBIC_HEAD
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM capture_analysis_dispatch"))
+                connection.execute(text("DELETE FROM capture_session"))
+                connection.execute(text("DELETE FROM job_participant"))
+                connection.execute(text("DELETE FROM move_job"))
+            command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
+            assert _current_revision(engine) == ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS
+            command.upgrade(configuration, "head")
 
             command.downgrade(configuration, "base")
             assert _current_revision(engine) is None
@@ -891,6 +966,129 @@ async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> 
 
 
 @pytest.mark.anyio
+async def test_capture_analysis_submit_and_claim_are_exclusive_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        operation_time = datetime.now(UTC)
+        command_data = MoveJobCreate(
+            title="Capture analysis race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+                participant_id = next(
+                    participant.id
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    participant_id,
+                )
+                session.add(
+                    MediaAsset(
+                        capture_session_id=capture.id,
+                        room_zone_id=created.job.locations[0].room_zones[0].id,
+                        media_purpose=MediaPurpose.INVENTORY,
+                        status=MediaAssetStatus.READY,
+                        object_key=f"jobs/{created.job.id}/analysis/{uuid4()}",
+                        content_type="image/jpeg",
+                        expected_size_bytes=10,
+                        actual_size_bytes=10,
+                        sha256_hex="a" * 64,
+                        generation="7",
+                        uploaded_at=operation_time,
+                    )
+                )
+
+            async def submit() -> UUID:
+                async with transactional_session(factory) as session:
+                    response = await submit_capture_analysis(
+                        session,
+                        created.job.id,
+                        capture.id,
+                        participant_id,
+                        trace_id="0123456789abcdef0123456789abcdef",
+                        now=operation_time,
+                    )
+                    return response.analysis_run_id
+
+            first_id, second_id = await wait_for(gather(submit(), submit()), timeout=10)
+            assert first_id == second_id
+
+            ready = Event()
+            release = Event()
+
+            async def claim(hold_lock: bool) -> tuple[UUID, ...]:
+                async with factory.begin() as session:
+                    claims = await claim_capture_analyses(
+                        session,
+                        now=operation_time,
+                        limit=1,
+                    )
+                    if hold_lock:
+                        ready.set()
+                        await release.wait()
+                    return tuple(UUID(str(item.task.analysis_run_id)) for item in claims)
+
+            first_claim = claim(True)
+
+            async def second_claim() -> tuple[UUID, ...]:
+                await ready.wait()
+                try:
+                    return await claim(False)
+                finally:
+                    release.set()
+
+            claimed, skipped = await wait_for(
+                gather(first_claim, second_claim()),
+                timeout=10,
+            )
+            assert claimed == (first_id,)
+            assert skipped == ()
+            async with factory() as session:
+                rows = (await session.scalars(select(CaptureAnalysisDispatch))).all()
+                submitted_events = (
+                    await session.scalars(
+                        select(OutboxEvent).where(
+                            OutboxEvent.event_type == DomainEventType.CAPTURE_SUBMITTED_V1
+                        )
+                    )
+                ).all()
+                assert len(rows) == 1
+                assert rows[0].dispatch_attempt_count == 1
+                assert len(submitted_events) == 1
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
 async def test_analysis_run_replays_serialize_on_postgresql() -> None:
     url = _test_database_url()
     with _isolated_test_schema(url) as schema_url:
@@ -1226,7 +1424,7 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                 )
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(_alembic_config(schema_url), ALEMBIC_AUDIT_PREVIOUS)
-            assert _current_revision(guard_engine) == ALEMBIC_HEAD
+            assert _current_revision(guard_engine) == ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS
             with guard_engine.connect() as connection:
                 assert connection.scalar(text("SELECT count(*) FROM audit_event")) == 0
                 assert connection.scalar(text("SELECT count(*) FROM completion_confirmation")) == 2
@@ -1434,7 +1632,7 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
                 connection.execute(text("DELETE FROM outbox_event"))
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(_alembic_config(schema_url), ALEMBIC_ANALYSIS_PREVIOUS)
-            assert _current_revision(downgraded_engine) == ALEMBIC_HEAD
+            assert _current_revision(downgraded_engine) == ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS
             scope_version = Table("scope_version", MetaData(), autoload_with=downgraded_engine)
             with downgraded_engine.connect() as connection:
                 preserved_creator = connection.scalar(

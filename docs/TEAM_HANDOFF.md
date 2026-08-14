@@ -8,11 +8,11 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 22개 path에 26개다: `/api/v1` 업무 operation 23개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 작업 bootstrap, 역할별 access link 인증·회전·철회, 촬영 세션과 미디어 업로드 완료 확인, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
-- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. lease 소유권을 잃은 미확정 event가 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
+- OpenAPI operation은 24개 path에 28개다: `/api/v1` 업무 operation 25개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 작업 bootstrap, 역할별 access link 인증·회전·철회, 촬영 세션·미디어 업로드·분석 제출과 상태 조회, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `int_03_0001`이다. 감사·완료 확인·분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `int_01_0001`이다. 감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
@@ -24,6 +24,8 @@
 - upload/read signed URL은 **opaque 문자열**이다. decode, 재직렬화, query 정렬, host 소문자화, 기본 port 제거를 하지 말고 받은 문자열을 그대로 사용한다. upload 응답의 `upload_headers`도 key·value를 정규화하지 않고 모두 PUT에 적용한다. GCS target에는 요청 MIME type의 `Content-Type`과 `x-goog-if-generation-match: 0`이 포함돼야 하며 어느 쪽도 빼면 안 된다.
 - secret 또는 signed URL을 담는 응답은 `Cache-Control: no-store`다. PWA cache, 브라우저 영구 저장소, 로그와 analytics에 남기지 않는다.
 - upload 완료 요청에 object generation을 보내지 않는다. FE는 발급받은 URL과 `upload_headers`로 PUT하고, BE가 storage metadata의 object key, MIME type, 크기와 generation을 검증한다.
+- 촬영 소유자는 모든 inventory 미디어가 비동기 validation을 마쳐 `READY`가 된 뒤 `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`을 한 번 호출한다. `202` 응답의 `analysis_run_id`를 보관하고 `GET .../analysis`로 상태를 조회할 수 있다. 제출 뒤 해당 촬영 세션의 새 upload·미완료 upload 확정은 `409`다.
+- 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
 
 ## FE 현재 상태와 blocker
@@ -39,8 +41,8 @@
 
 ## B 트랙 인계
 
-- 병합 완료: GCS SDK [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37), B-01 GCS adapter [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39), B-03 분석 실행 [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35), B-07 삭제 handler [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36).
-- upload 완료는 generation-pinned validation intent를 만들고 B-05 handler가 metadata·MIME type·크기·SHA-256을 검증해 `PROCESSING → READY|FAILED` command로 반영한다. B-02는 기존 매분 relay가 Cloud Tasks에 intent를 전달하고 OIDC 인증 private worker가 validation·deletion handler를 실행하도록 연결했다. 남은 B 구현은 B-04 Vertex AI adapter, B-05 파생 처리 정책과 B-06 분석 retry·provider 오류 매핑이다. 이후 INT-01·INT-06을 검증한다.
+- 병합 완료: GCS SDK [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37), B-01 GCS adapter [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39), B-03 분석 실행 [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35), B-04 Vertex adapter [#79](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/79), B-06 worker [#81](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/81)·[#82](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/82)·[#84](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/84), B-07 삭제 handler [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36).
+- upload 완료는 generation-pinned validation intent를 만들고 B-05 handler가 metadata·MIME type·크기·SHA-256을 검증해 `PROCESSING → READY|FAILED` command로 반영한다. INT-01은 검증된 MIME 계약 [#85](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/85)·[#86](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/86), event 계약 [#87](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/87)과 현재 촬영 제출·durable dispatch·범위 초안 import 구현으로 연결됐다. 남은 B 범위는 INT-06 provider 재시도·동시 실행 recovery와 승인된 파생 처리 정책이다.
 - Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막고, B handler는 A ORM을 우회 갱신하지 않는다. 저장된 object generation은 read/delete까지 그대로 전달한다.
 
 ## 외부 활성화 전 확인
@@ -50,7 +52,8 @@
 - **DB 역할:** API, migration, Outbox relay와 recovery가 현재 같은 `DATABASE_URL_SECRET_ID`를 사용한다. `audit_event` mutation trigger는 이 owner의 일반 DML도 거부하지만 owner는 DDL로 우회할 수 있으므로 tamper-proof 권한 경계로 간주하지 않는다. 별도 DB 사용자·grant·Secret ID와 자격증명이 외부에서 준비되기 전에는 Terraform secret만 나누지 않는다.
 - **DB 연결 경보:** Cloud SQL `num_backends` 임계치는 승인된 instance `max_connections`와 connection budget이 정해진 뒤 추가한다. 임의 임계치로 경보를 만들지 않는다.
 - **Artifact Registry:** 90일 초과 삭제 후보와 최신 50개 보존 정책은 계속 dry-run이다. provider cleanup audit log를 검토한 뒤에만 실제 삭제로 전환한다.
-- **B runtime:** Cloud Tasks queue·OIDC private worker 배포와 validation 실경로는 staging에서 확인했다. B-04는 Vertex AI SDK·runtime IAM과 model 설정이 필요하다.
+- **B runtime:** Cloud Tasks queue·OIDC private worker 배포와 validation 실경로는 staging에서 확인했다. B-04 코드와 SDK는 병합됐으며 실제 Vertex 분석에는 staging runtime IAM·location·model 접근을 검증해야 한다.
+- **INT-01 runtime:** 현재 변경은 로컬·CI PostgreSQL에서 제출·dispatch·worker 결과 import를 검증했지만 staging에는 아직 배포하지 않았다. 병합 뒤 Vertex IAM·model 설정을 확인하고 실제 분석 1건의 `completed|failed` terminal 상태와 Outbox를 증적으로 남긴다.
 
 ## staging 운영 증적
 

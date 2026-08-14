@@ -9,6 +9,7 @@ from sqlalchemy import Connection, engine_from_config, pool
 from app.config import Settings
 from app.modules.access.models import ParticipantAccessToken
 from app.modules.analysis.models import AiAnalysisRun, Detection
+from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
 from app.modules.background_job.models import BackgroundJob
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
@@ -25,6 +26,7 @@ _REGISTERED_MODELS = (
     ParticipantAccessToken,
     AiAnalysisRun,
     Detection,
+    CaptureAnalysisDispatch,
     BackgroundJob,
     MediaAsset,
     ScopeApproval,

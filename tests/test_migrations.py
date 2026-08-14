@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_03_0001"
+ALEMBIC_HEAD = "int_01_0001"
+ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_MEDIA_VALIDATION_PREVIOUS = "a_08_0002"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
@@ -28,6 +29,7 @@ ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
 BUSINESS_TABLES = {
     "ai_analysis_run",
     "background_job",
+    "capture_analysis_dispatch",
     "capture_session",
     "job_participant",
     "location",
@@ -261,6 +263,25 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
         assert {"outbox_payload_object", "outbox_schema_version_one"} <= {
             check["name"] for check in inspect(engine).get_check_constraints("outbox_event")
         }
+        analysis_checks = {
+            check["name"]
+            for check in inspect(engine).get_check_constraints("capture_analysis_dispatch")
+        }
+        assert {
+            "capture_analysis_dispatch_attempt_time",
+            "capture_analysis_dispatch_completion_time",
+            "capture_analysis_dispatch_failure",
+            "capture_analysis_dispatch_lease",
+            "capture_analysis_dispatch_scope_version",
+            "capture_analysis_dispatch_status",
+        } <= analysis_checks
+        analysis_indexes = {
+            index["name"] for index in inspect(engine).get_indexes("capture_analysis_dispatch")
+        }
+        assert {
+            "ix_capture_analysis_dispatch_due",
+            "ix_capture_analysis_dispatch_lease",
+        } <= analysis_indexes
 
         command.downgrade(configuration, "base")
         assert _current_revision(engine) is None
@@ -297,6 +318,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 "outbox_event",
                 "scope_version",
                 "background_job",
+                "capture_analysis_dispatch",
             ),
         )
         job_id = uuid4().hex
@@ -443,6 +465,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 "outbox_event",
                 "scope_version",
                 "background_job",
+                "capture_analysis_dispatch",
             ),
         )
 
@@ -520,8 +543,43 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                 "outbox_event",
                 "scope_version",
                 "background_job",
+                "capture_analysis_dispatch",
             ),
         )
+        capture_analysis_dispatch = {
+            "analysis_run_id": uuid4().hex,
+            "capture_session_id": capture_id,
+            "move_job_id": job_id,
+            "submitted_by_participant_id": participant_id,
+            "status": "PENDING",
+            "trace_id": "0" * 32,
+            "scheduled_at": created_at,
+            "dispatch_attempt_count": 0,
+            "submitted_at": created_at,
+        }
+        invalid_capture_analysis = capture_analysis_dispatch | {
+            "analysis_run_id": uuid4().hex,
+            "dispatch_token": uuid4().hex,
+        }
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["capture_analysis_dispatch"].insert(),
+                invalid_capture_analysis,
+            )
+        with engine.begin() as connection:
+            connection.execute(
+                migrated_metadata.tables["capture_analysis_dispatch"].insert(),
+                capture_analysis_dispatch,
+            )
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.begin() as connection:
+            connection.execute(migrated_metadata.tables["capture_analysis_dispatch"].delete())
+        command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS
+        command.upgrade(configuration, "head")
+
         validation_background_job = valid_background_job | {
             "id": uuid4().hex,
             "job_type": "MEDIA_VALIDATION",
@@ -535,7 +593,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_MEDIA_VALIDATION_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["background_job"].delete())
         command.downgrade(configuration, ALEMBIC_MEDIA_VALIDATION_PREVIOUS)

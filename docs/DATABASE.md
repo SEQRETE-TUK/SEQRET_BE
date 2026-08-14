@@ -23,7 +23,7 @@ uv run alembic downgrade -1
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
 
-감사 또는 완료 확인 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
+감사·완료 확인 또는 촬영 분석 제출 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

@@ -47,6 +47,14 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("post", f"{job_path}/capture-sessions"): {409},
         (
             "post",
+            f"{job_path}/capture-sessions/{{capture_session_id}}/submit",
+        ): {409},
+        (
+            "get",
+            f"{job_path}/capture-sessions/{{capture_session_id}}/analysis",
+        ): set(),
+        (
+            "post",
             f"{job_path}/capture-sessions/{{capture_session_id}}/media-assets/upload",
         ): {409, 503},
         (
