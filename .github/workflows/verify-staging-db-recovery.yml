@@ -376,7 +376,7 @@ jobs:
           "${proxy_path}" "${proxy_args[@]}" "${CONNECTION_NAME}" \
             > "${proxy_log}" 2>&1 &
           proxy_pid=$!
-          for _ in {1..30}; do
+          for attempt in {1..30}; do
             if ! kill -0 "${proxy_pid}" 2>/dev/null; then
               echo "Cloud SQL Auth Proxy could not reach the recovery clone." >&2
               exit 1
