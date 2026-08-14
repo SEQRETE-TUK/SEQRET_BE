@@ -5,7 +5,7 @@ from typing import Annotated, Literal, Self
 from pydantic import Field, model_validator
 
 from app.contracts.model import ContractModel
-from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
+from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId, TraceId
 
 
 class DraftItem(ContractModel):
@@ -53,3 +53,13 @@ class AnalysisRequest(ContractModel):
         if len(set(self.object_keys)) != len(self.object_keys):
             raise ValueError("object keys must be unique")
         return self
+
+
+class AnalysisTaskV1(ContractModel):
+    """Minimal analysis queue message; media details are looked up by the worker."""
+
+    schema_version: Literal[1] = 1
+    analysis_run_id: AnalysisRunId
+    capture_session_id: CaptureSessionId
+    attempt_count: Annotated[int, Field(ge=1)]
+    trace_id: TraceId
