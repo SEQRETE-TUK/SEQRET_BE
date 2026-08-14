@@ -13,7 +13,7 @@ SCRIPT = ROOT / "infrastructure" / "scripts" / "initialize_notification_replay.s
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32" or shutil.which("bash") is None,
+    sys.platform != "linux" or shutil.which("bash") is None,
     reason="requires the Linux CI shell toolchain",
 )
 @pytest.mark.parametrize("seek_fails", [False, True])
