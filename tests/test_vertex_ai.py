@@ -1,0 +1,249 @@
+"""B-04 Vertex AI (google-genai) adapter tests without network access."""
+
+import time
+from uuid import uuid4
+
+import pytest
+from google.genai import errors
+
+from app.contracts.ai import AnalysisRequest
+from app.contracts.ports import AIProviderPort, ProviderError, ProviderErrorKind
+from app.contracts.primitives import AnalysisRunId, CaptureSessionId, IdempotencyKey, MediaAssetId
+from app.platform.ai.vertex import VertexAIProvider
+
+PROMPTS = {"inventory-1": "이삿짐을 방별로 나열하라"}
+KEY = IdempotencyKey("analysis:1")
+
+
+class StubResponse:
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+
+
+class StubModels:
+    def __init__(
+        self,
+        *,
+        text: str | None = None,
+        error: Exception | None = None,
+        sleep_seconds: float = 0.0,
+    ) -> None:
+        self._text = text
+        self._error = error
+        self._sleep_seconds = sleep_seconds
+        self.calls: list[dict[str, object]] = []
+
+    def generate_content(
+        self,
+        *,
+        model: str,
+        contents: list[object],
+        config: object,
+    ) -> StubResponse:
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        if self._sleep_seconds:
+            time.sleep(self._sleep_seconds)
+        if self._error is not None:
+            raise self._error
+        return StubResponse(self._text)
+
+
+class StubClient:
+    def __init__(self, models: StubModels) -> None:
+        self._models = models
+
+    @property
+    def models(self) -> StubModels:
+        return self._models
+
+
+class FakeAPIError(errors.APIError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+        Exception.__init__(self, "stub api error")
+
+
+def _provider(models: StubModels) -> VertexAIProvider:
+    return VertexAIProvider(
+        project="seqret-dev",
+        location="us-central1",
+        bucket_name="seqret-media",
+        prompt_library=PROMPTS,
+        client_factory=lambda: StubClient(models),
+    )
+
+
+def _request(
+    *,
+    source_count: int = 2,
+    prompt_version: str = "inventory-1",
+    suffix: str = "mp4",
+) -> AnalysisRequest:
+    sources = tuple(MediaAssetId(uuid4()) for _ in range(source_count))
+    keys = tuple(f"jobs/1/room{index}.{suffix}" for index in range(source_count))
+    return AnalysisRequest(
+        analysis_run_id=AnalysisRunId(uuid4()),
+        capture_session_id=CaptureSessionId(uuid4()),
+        source_media_asset_ids=sources,
+        object_keys=keys,
+        model_name="gemini-2.5-flash",
+        model_version="2025-08",
+        prompt_version=prompt_version,
+    )
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_analyze_maps_structured_output_to_draft() -> None:
+    output = (
+        '{"items": ['
+        '{"item_key": "bed", "description": "퀸 침대", "confidence": 0.9, "source_indices": [0]},'
+        '{"item_key": "box", "description": "확인 필요 박스", "confidence": 0.3,'
+        ' "source_indices": [1], "review_required": true}'
+        "]}"
+    )
+    models = StubModels(text=output)
+    provider = _provider(models)
+    request = _request()
+
+    assert isinstance(provider, AIProviderPort)
+    result = await provider.analyze(request=request, idempotency_key=KEY, timeout_seconds=30)
+
+    assert result.model_name == "gemini-2.5-flash"
+    assert result.model_version == "2025-08"
+    assert result.prompt_version == "inventory-1"
+    assert result.analysis_run_id == request.analysis_run_id
+    assert [item.item_key for item in result.draft_items] == ["bed"]
+    assert result.draft_items[0].source_media_asset_ids == (request.source_media_asset_ids[0],)
+    assert [item.item_key for item in result.review_required_items] == ["box"]
+    assert result.review_required_items[0].source_media_asset_ids == (
+        request.source_media_asset_ids[1],
+    )
+    call = models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"
+    assert isinstance(call["contents"], list)
+    assert len(call["contents"]) == 3  # prompt + two media parts
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_empty_response() -> None:
+    provider = _provider(StubModels(text=None))
+
+    with pytest.raises(ProviderError) as error_info:
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+    assert error_info.value.retryable is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "not json at all",
+        '{"items": [{"item_key": "bed", "description": "d", "confidence": 2.0}]}',
+    ],
+)
+@pytest.mark.anyio
+async def test_analyze_rejects_malformed_output(text: str) -> None:
+    provider = _provider(StubModels(text=text))
+
+    with pytest.raises(ProviderError, match="malformed") as error_info:
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+    assert error_info.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_out_of_range_source_index() -> None:
+    output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+        ' "source_indices": [5]}]}'
+    )
+    provider = _provider(StubModels(text=output))
+
+    with pytest.raises(ProviderError, match="unknown media") as error_info:
+        await provider.analyze(
+            request=_request(source_count=1),
+            idempotency_key=KEY,
+            timeout_seconds=30,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_unknown_prompt_version() -> None:
+    provider = _provider(StubModels(text="{}"))
+
+    with pytest.raises(ProviderError, match="prompt version") as error_info:
+        await provider.analyze(
+            request=_request(prompt_version="missing"),
+            idempotency_key=KEY,
+            timeout_seconds=30,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_unsupported_media_type() -> None:
+    provider = _provider(StubModels(text="{}"))
+
+    with pytest.raises(ProviderError, match="unsupported media") as error_info:
+        await provider.analyze(
+            request=_request(suffix="txt"),
+            idempotency_key=KEY,
+            timeout_seconds=30,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+
+
+@pytest.mark.anyio
+async def test_analyze_times_out() -> None:
+    provider = _provider(StubModels(text="{}", sleep_seconds=0.2))
+
+    with pytest.raises(ProviderError) as error_info:
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=0.01)
+
+    assert error_info.value.kind is ProviderErrorKind.DEADLINE_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    ("error", "kind", "retryable"),
+    [
+        (FakeAPIError(400), ProviderErrorKind.INVALID_INPUT, False),
+        (FakeAPIError(403), ProviderErrorKind.PERMISSION_DENIED, False),
+        (FakeAPIError(404), ProviderErrorKind.NOT_FOUND, False),
+        (FakeAPIError(409), ProviderErrorKind.CONFLICT, False),
+        (FakeAPIError(504), ProviderErrorKind.DEADLINE_EXCEEDED, True),
+        (FakeAPIError(500), ProviderErrorKind.UNAVAILABLE, True),
+        (RuntimeError("offline"), ProviderErrorKind.UNAVAILABLE, True),
+    ],
+)
+@pytest.mark.anyio
+async def test_analyze_maps_provider_errors(
+    error: Exception,
+    kind: ProviderErrorKind,
+    retryable: bool,
+) -> None:
+    provider = _provider(StubModels(error=error))
+
+    with pytest.raises(ProviderError, match="provider call failed") as error_info:
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+    assert error_info.value.kind is kind
+    assert error_info.value.retryable is retryable
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_nonpositive_timeout() -> None:
+    provider = _provider(StubModels(text="{}"))
+
+    with pytest.raises(ValueError, match="timeout_seconds must be positive"):
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=0)
