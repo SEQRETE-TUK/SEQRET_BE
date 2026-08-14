@@ -1,6 +1,6 @@
 # 팀 인계 — 현재 `main` 기준
 
-> 작성일: 2026-08-13
+> 작성일: 2026-08-15
 > 기능 기준 커밋: 이 문서를 포함한 최신 `main`
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -29,6 +29,7 @@
 ## FE 현재 상태와 blocker
 
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
+- staging은 FE 도메인 미구매 상태라 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 이는 공개 API edge 확인용이지 canonical FE origin 증적이 아니며, FE 배포 후 GitHub environment 변수와 bucket CORS를 함께 교체한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
 - canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `d3d33a4`(`chore: initial project setup`)다. Next.js 16·React 19 UI 데모만 있고 API client·환경변수·`/api/v1`·Bearer 연동이 없으며 PR, Actions run, deployment와 environment도 없다. FE가 배포됐다고 간주하지 않는다.
@@ -42,20 +43,28 @@
 
 ## 외부 활성화 전 확인
 
-- **GCS:** 기존 private bucket과 `MEDIA_BUCKET_NAME`을 준비하고 실제 FE origin의 bucket CORS를 설정한다. Terraform은 API runtime에 URL 서명과 객체 create/get 권한, private worker에 validation·delete 권한을 연결한다.
+- **GCS:** staging private bucket `seqret-stg-20260813-media`, `MEDIA_BUCKET_NAME`, runtime IAM과 임시 origin CORS는 준비됐다. 실제 FE origin을 확정하면 임시 origin을 교체하고 브라우저 preflight와 create-only upload를 다시 검증한다.
 - **Redis:** `REDIS_URL_SECRET_ID`, `REDIS_VPC_NETWORK`, `REDIS_VPC_SUBNETWORK`을 함께 설정한다. 같은 region의 기존 `/26` 이상 subnet, Memorystore authorized network와 Cloud Run service-agent network 권한을 확인하고, 배포 후 Memorystore metric으로 실제 연결을 증명한다.
 - **DB 역할:** API, migration, Outbox relay와 recovery가 현재 같은 `DATABASE_URL_SECRET_ID`를 사용한다. `audit_event` mutation trigger는 이 owner의 일반 DML도 거부하지만 owner는 DDL로 우회할 수 있으므로 tamper-proof 권한 경계로 간주하지 않는다. 별도 DB 사용자·grant·Secret ID와 자격증명이 외부에서 준비되기 전에는 Terraform secret만 나누지 않는다.
 - **DB 연결 경보:** Cloud SQL `num_backends` 임계치는 승인된 instance `max_connections`와 connection budget이 정해진 뒤 추가한다. 임의 임계치로 경보를 만들지 않는다.
 - **Artifact Registry:** 90일 초과 삭제 후보와 최신 50개 보존 정책은 계속 dry-run이다. provider cleanup audit log를 검토한 뒤에만 실제 삭제로 전환한다.
-- **B runtime:** Cloud Tasks queue·OIDC private worker는 코드와 Terraform에 연결됐다. 실제 활성화는 최신 main staging 배포에서 task enqueue→worker completion을 확인해야 한다. B-04는 Vertex AI SDK·runtime IAM과 model 설정이 필요하다.
+- **B runtime:** Cloud Tasks queue·OIDC private worker 배포와 validation 실경로는 staging에서 확인했다. B-04는 Vertex AI SDK·runtime IAM과 model 설정이 필요하다.
 
 ## staging 운영 증적
+
+- [Deploy staging #31811161952](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31811161952): 최신 application·migration 기준 `ecb325e`에서 migration, Terraform apply, 예약 Outbox relay, readiness, 10% canary와 promotion 성공. API `seqret-stg-api-00008-4b6`과 private worker `seqret-stg-worker-00001-xdf`가 동일 image digest `sha256:5cbf5c4ec7cc6d4fb27f7adc8e64d1b086cface8dac2e6cff65bafc023ee1f9a`를 사용한다.
+- [Notification replay #31812191122](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31812191122): `ecb325e`에서 31일 retained-event seek와 relay smoke 성공. subscription label은 `replay_contract=v1`, `seqret_replay_state=complete`다.
+- 2026-08-15 staging worker canary: API bootstrap → signed GCS PUT → upload complete → Outbox relay → Cloud Tasks → private worker validation을 실행했다. move job `fde893e4-d934-435e-b7ec-950763d39bc4`의 background job `31458876-8262-437a-9c7d-a24220a06548`이 1회 시도에 `succeeded`했고, 대상은 68-byte `image/png`였다. access secret과 signed URL은 저장하거나 출력하지 않았다.
+- [PITR recovery #31816400843](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31816400843): `72c4840`에서 복구 구간 확인, point-in-time clone, read-only 연결, 현재 Alembic head·marker 검증과 exact clone 삭제 성공. 종료 후 `seqret-stg-recovery-*` 인스턴스는 0개다.
+- [PR #76](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/76): 첫 최신-main 복구 drill에서 발견한 proxy readiness loop의 미정의 변수를 수정했다. 실패 실행도 recovery clone 삭제에는 성공했고, 수정 후 위 PITR drill로 회귀 검증했다.
+
+이전 rollback 절차의 증적은 다음과 같다.
 
 - [Deploy staging #31636130577](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31636130577): migration, Terraform apply, 매분 예약 Outbox relay 실행, readiness, canary와 promotion 성공 (`329d386`).
 - [Rollback #31630162261](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630162261): 기록된 1회 rollback target으로 traffic 복구와 tag 소비 성공.
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-Deploy는 `329d386`, rollback은 `f1d454a`, roll-forward와 PITR은 `9bb6b9e`에서 실행한 증적이다. 현재 기능 기준 `main`은 그 이후 A·B 코드와 migration을 포함하므로 staging image·schema가 같다고 간주하지 않는다. 다음 배포와 복구 훈련은 최신 `main`에서 다시 실행하고 workflow summary의 source SHA와 image digest를 증거로 남긴다.
+현재 staging application·schema는 `ecb325e` 배포 증적과 일치한다. `72c4840`은 recovery workflow만 수정했으며 이 SHA에서 PITR까지 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.
