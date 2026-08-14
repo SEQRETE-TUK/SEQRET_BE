@@ -7,6 +7,8 @@ from pydantic import Field, model_validator
 from app.contracts.model import ContractModel
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId, TraceId
 
+AnalysisContentType = Literal["image/jpeg", "image/png", "video/mp4"]
+
 
 class DraftItem(ContractModel):
     """One structured suggestion that a human may edit or reject."""
@@ -40,14 +42,23 @@ class AnalysisRequest(ContractModel):
         Field(min_length=1),
     ]
     object_keys: Annotated[tuple[str, ...], Field(min_length=1)]
+    content_types: Annotated[
+        tuple[AnalysisContentType, ...],
+        Field(min_length=1),
+    ]
     model_name: Annotated[str, Field(min_length=1, max_length=100)]
     model_version: Annotated[str, Field(min_length=1, max_length=100)]
     prompt_version: Annotated[str, Field(min_length=1, max_length=100)]
 
     @model_validator(mode="after")
     def require_unique_one_to_one_sources(self) -> Self:
-        if len(self.source_media_asset_ids) != len(self.object_keys):
-            raise ValueError("source media asset IDs and object keys must have the same length")
+        if (
+            len({len(self.source_media_asset_ids), len(self.object_keys), len(self.content_types)})
+            != 1
+        ):
+            raise ValueError(
+                "source media asset IDs, object keys, and content types must have the same length"
+            )
         if len(set(self.source_media_asset_ids)) != len(self.source_media_asset_ids):
             raise ValueError("source media asset IDs must be unique")
         if len(set(self.object_keys)) != len(self.object_keys):

@@ -233,6 +233,7 @@ async def test_ai_fake_returns_versioned_result_once() -> None:
         capture_session_id=CaptureSessionId(uuid4()),
         source_media_asset_ids=(MediaAssetId(uuid4()),),
         object_keys=("jobs/1/photo.jpg",),
+        content_types=("image/jpeg",),
         model_name="fake-model",
         model_version="1",
         prompt_version="1",
@@ -288,6 +289,21 @@ def test_analysis_request_requires_unique_one_to_one_sources(
             capture_session_id=CaptureSessionId(uuid4()),
             source_media_asset_ids=source_ids,
             object_keys=object_keys,
+            content_types=tuple("image/jpeg" for _ in source_ids),
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="1",
+        )
+
+
+def test_analysis_request_rejects_unsupported_content_type() -> None:
+    with pytest.raises(ValueError, match="image/jpeg"):
+        AnalysisRequest(
+            analysis_run_id=AnalysisRunId(uuid4()),
+            capture_session_id=CaptureSessionId(uuid4()),
+            source_media_asset_ids=(MediaAssetId(uuid4()),),
+            object_keys=("jobs/1/opaque-object",),
+            content_types=("application/octet-stream",),  # type: ignore[arg-type]
             model_name="fake-model",
             model_version="1",
             prompt_version="1",
@@ -502,6 +518,7 @@ async def test_fakes_reject_nonpositive_timeouts_and_lengths() -> None:
                 capture_session_id=CaptureSessionId(uuid4()),
                 source_media_asset_ids=(MediaAssetId(uuid4()),),
                 object_keys=("object",),
+                content_types=("image/jpeg",),
                 model_name="fake-model",
                 model_version="1",
                 prompt_version="1",

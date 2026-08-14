@@ -65,6 +65,7 @@ def _request(run_id: AnalysisRunId, capture_id: CaptureSessionId) -> AnalysisReq
         capture_session_id=capture_id,
         source_media_asset_ids=(MediaAssetId(uuid4()),),
         object_keys=("jobs/1/bedroom.mp4",),
+        content_types=("video/mp4",),
         model_name="fake-vision",
         model_version="2026-08",
         prompt_version="inventory-1",

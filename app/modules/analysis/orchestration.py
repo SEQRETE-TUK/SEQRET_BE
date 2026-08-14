@@ -7,11 +7,12 @@ keys never travel inside the queue message.
 """
 
 from collections.abc import Sequence
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.contracts.ai import AnalysisRequest, AnalysisTaskV1
+from app.contracts.ai import AnalysisContentType, AnalysisRequest, AnalysisTaskV1
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import TaskQueuePort
 from app.contracts.primitives import (
@@ -64,6 +65,7 @@ async def build_analysis_request(
         capture_session_id=capture_session_id,
         source_media_asset_ids=tuple(MediaAssetId(asset.id) for asset in assets),
         object_keys=tuple(asset.object_key for asset in assets),
+        content_types=tuple(cast(AnalysisContentType, asset.content_type) for asset in assets),
         model_name=model_name,
         model_version=model_version,
         prompt_version=prompt_version,
