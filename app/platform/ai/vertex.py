@@ -22,13 +22,6 @@ from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import IdempotencyKey
 
-_MIME_TYPE_BY_SUFFIX = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "mp4": "video/mp4",
-}
-
 
 class _RawDraftItem(BaseModel):
     """Strict shape the model must return for one draft item."""
@@ -108,18 +101,6 @@ class VertexAIProvider:
         self._bucket_name = bucket_name
         self._prompts = dict(prompt_library)
 
-    @staticmethod
-    def _mime_type_for(object_key: str) -> str:
-        suffix = object_key.rsplit(".", 1)[-1].lower() if "." in object_key else ""
-        try:
-            return _MIME_TYPE_BY_SUFFIX[suffix]
-        except KeyError as error:
-            raise ProviderError(
-                ProviderErrorKind.INVALID_INPUT,
-                "analysis input has an unsupported media type",
-                retryable=False,
-            ) from error
-
     async def analyze(
         self,
         *,
@@ -144,9 +125,13 @@ class VertexAIProvider:
         contents.extend(
             types.Part.from_uri(
                 file_uri=f"gs://{self._bucket_name}/{object_key}",
-                mime_type=self._mime_type_for(object_key),
+                mime_type=content_type,
             )
-            for object_key in request.object_keys
+            for object_key, content_type in zip(
+                request.object_keys,
+                request.content_types,
+                strict=True,
+            )
         )
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
