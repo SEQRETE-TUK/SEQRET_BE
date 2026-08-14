@@ -86,6 +86,7 @@ def _request(
         capture_session_id=CaptureSessionId(uuid4()),
         source_media_asset_ids=sources,
         object_keys=keys,
+        content_types=tuple("video/mp4" for _ in sources),
         model_name="gemini-2.5-flash",
         model_version="2025-08",
         prompt_version=prompt_version,

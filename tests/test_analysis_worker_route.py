@@ -36,6 +36,7 @@ def _request() -> AnalysisRequest:
         capture_session_id=CaptureSessionId(uuid4()),
         source_media_asset_ids=(MediaAssetId(uuid4()),),
         object_keys=("jobs/1/bedroom.mp4",),
+        content_types=("video/mp4",),
         model_name="gemini-2.5-flash",
         model_version="2025-08",
         prompt_version="inventory-1",

@@ -57,7 +57,8 @@ def _asset(
         room_zone_id=uuid4(),
         media_purpose=purpose,
         status=status,
-        object_key=f"jobs/1/{uuid4()}.jpg",
+        # Production object keys are opaque UUID paths and do not carry a suffix.
+        object_key=f"jobs/1/{uuid4()}",
         content_type="image/jpeg",
         expected_size_bytes=10,
         actual_size_bytes=10,
@@ -99,6 +100,7 @@ async def test_build_request_uses_ordered_ready_inventory_media(
     assert request.analysis_run_id == run_id
     assert request.object_keys == (first.object_key, second.object_key)
     assert request.source_media_asset_ids == (first.id, second.id)
+    assert request.content_types == (first.content_type, second.content_type)
 
 
 @pytest.mark.anyio
@@ -132,6 +134,7 @@ async def test_build_request_ignores_non_ready_or_non_inventory(
         )
 
     assert request.object_keys == (ready_inventory.object_key,)
+    assert request.content_types == (ready_inventory.content_type,)
 
 
 @pytest.mark.anyio

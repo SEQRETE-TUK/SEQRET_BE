@@ -1,7 +1,7 @@
 """Versioned provider-independent contracts shared by both tracks."""
 
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
-from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
+from app.contracts.ai import AnalysisContentType, AnalysisRequest, AnalysisResult, DraftItem
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.maintenance import (
     BackgroundJobType,
@@ -49,6 +49,7 @@ __all__ = [
     "ActorContext",
     "ActorKind",
     "AggregateId",
+    "AnalysisContentType",
     "AnalysisRequest",
     "AnalysisResult",
     "AnalysisRunId",
