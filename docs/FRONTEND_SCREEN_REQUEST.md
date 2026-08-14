@@ -5,6 +5,13 @@
 > 요청일: 2026-08-12
 >
 > 우선순위: MVP end-to-end flow 완성
+>
+> 상태: 최신 FE 시각 demo 반영 확인, backend 실행 계약 미확정
+>
+> frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
+> `cd25fd745877c97edeb540d27007d20f8ab5c3ba` (2026-08-15)
+>
+> backend 실행 계약: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
 ## 1. 요청 배경
 
@@ -14,13 +21,15 @@
 - [업체 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-현재 화면만으로는 다음 업무 흐름이 끝까지 연결되지 않는다.
+요청 당시 Figma 8개 화면만으로는 다음 업무 흐름이 끝까지 연결되지 않았다.
 
 1. 현장기사가 작업을 끝낸 뒤 완료 사진·체크리스트·현장 확인을 입력할 수 없다.
 2. 업체가 완료 확인 요청을 보내도 고객이 확인하거나 문제를 신고할 화면이 없다.
 3. 현장기사의 이슈 보고를 업체가 검토하고 금액이 있는 변경안으로 만드는 상태가 없다.
 
-관련 backend contract는 [API 명세](API_SPEC.md)를 기준으로 한다.
+[API 명세](API_SPEC.md)는 이 화면 요청을 구현하기 위한 목표 계약 제안이며 현재 실행 계약이
+아니다. 화면과 제품 범위가 확정된 뒤 A 소유 계약, 구현과 OpenAPI 반영 순서로 확정한다.
+B 소유 Port·event·AI 결과 schema를 바꾸는 경우에만 해당 영향 범위를 별도로 조정한다.
 
 ## 2. 요청 범위 요약
 
@@ -36,6 +45,21 @@
 | 결정 필요 | 조건부 화면 | 작업 생성·고객 초대 | admin seed가 아니면 추가 |
 
 새 design system이나 별도 dashboard는 요청하지 않는다. 기존 [디자인 시스템·스타일 가이드](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=156-26)의 component와 token을 재사용한다.
+
+### 2.1 최신 FE 반영 결과
+
+| 요청 항목 | 최신 FE 위치 | 시각 demo | 실행 계약 |
+| --- | --- | --- | --- |
+| 현장기사 작업 완료 기록 | `/crew?screen=4` | 반영 | 미구현 |
+| 고객 완료 확인·문제 신고 | `/?role=consumer&screen=7` | 반영 | 미구현 |
+| 업체 현장 이슈 견적 | `/provider/web?view=quote&state=field-issue-stale` 등 | 반영 | 미구현 |
+| 고객 범위 수정 요청 | `/?role=consumer&screen=11` | 반영 | 미구현 |
+| 고객 변경 설명 요청·거절 | `/?role=consumer&screen=6` | 반영 | 미구현 |
+| 공통 실패·충돌 state | 역할별 `state` query variant | 반영 | 미구현 |
+
+따라서 이 문서의 **화면 추가 요청은 시각 demo 관점에서는 완료**됐다. 다만 FE source에는
+network 호출이 없고 동작은 local state와 timer로만 처리되므로, 아래 API 항목은 모두 목표
+후보다. 현재 OpenAPI에 없는 경로를 `기존 API`로 부르거나 바로 연동하지 않는다.
 
 ## 3. P0 신규 화면 1 — 현장기사 작업 완료 기록
 
@@ -84,11 +108,11 @@
 - offline 또는 API 실패 후 입력 내용 유지
 - 제출 완료 success state
 
-### API 연결
+### 목표 API 후보
 
-- 기존 `GET /api/v1/move-jobs/{job_id}/field-brief`에 완료 checklist와 배정 인력 추가
-- 기존 `POST /api/v1/move-jobs/{job_id}/media-uploads`의 `purpose`에 `completion` 추가
-- 신규 `POST /api/v1/move-jobs/{job_id}/completion-submissions`
+- 제안 `GET /api/v1/move-jobs/{job_id}/field-brief`에 완료 checklist와 배정 인력 추가
+- 제안 `POST /api/v1/move-jobs/{job_id}/media-uploads`의 `purpose`에 `completion` 추가
+- 제안 `POST /api/v1/move-jobs/{job_id}/completion-submissions`
 
 ## 4. P0 신규 화면 2 — 고객 완료 확인
 
@@ -132,10 +156,10 @@
 - 완료 사진 일부 load 실패
 - 최종 범위나 금액 data load 실패
 
-### API 연결
+### 목표 API 후보
 
-- 기존 `GET /api/v1/move-jobs/{job_id}/completion-summary`를 고객 role에도 제공
-- 신규 `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision`
+- 제안 `GET /api/v1/move-jobs/{job_id}/completion-summary`를 고객 role에도 제공
+- 제안 `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision`
 - decision: `confirm` 또는 `report_issue`
 
 ## 5. P0 기존 화면 variant — 업체 현장 이슈 견적
@@ -174,10 +198,10 @@
 - 기준 scope version이 바뀐 stale 상태
 - 작업 일시 중지 경고
 
-### API 연결
+### 목표 API 후보
 
-- 기존 `GET /api/v1/move-jobs/{job_id}/scope-review`에 `source_field_issue_id` query 또는 동등한 mode 입력 추가
-- 기존 `POST /api/v1/move-jobs/{job_id}/scope-proposals`의 `source_field_issue_id` 사용
+- 제안 `GET /api/v1/move-jobs/{job_id}/scope-review`에 `source_field_issue_id` query 또는 동등한 mode 입력 추가
+- 제안 `POST /api/v1/move-jobs/{job_id}/scope-proposals`의 `source_field_issue_id` 사용
 
 ## 6. P0 bottom sheet
 

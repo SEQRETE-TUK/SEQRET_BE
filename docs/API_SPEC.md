@@ -1,10 +1,15 @@
-# SEQRET MVP 프론트엔드 API 명세
+# SEQRET MVP 프론트엔드 목표 API 제안서
 
-> 상태: 와이어프레임 기준 frontend contract v1
+> 상태: 제품·frontend 검토용 목표 계약 초안, 실행 계약 아님
 >
-> 기준일: 2026-08-12
+> 기준일: 2026-08-15
 >
-> 기준 코드: `origin/main` `81a4dabaa72597332ac1c8aeb0287e2ccd84f376`
+> backend 기준 코드: `origin/main` `6f6e580b2b3eba358f8c1adfe0841823af905e84`
+>
+> frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
+> `cd25fd745877c97edeb540d27007d20f8ab5c3ba`
+>
+> 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
 ## 1. 기준과 범위
 
@@ -16,7 +21,24 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-다음 원칙으로 API를 확정한다.
+2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/cd25fd745877c97edeb540d27007d20f8ab5c3ba)는
+Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
+총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
+`screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
+`state` query variant가 있다. 이 수치는 시각 demo 범위이며 backend E2E 완료 수가 아니다.
+
+frontend source에는 API client, `/api/v1`, Bearer header, runtime 환경변수와 TanStack Query가
+없다. 모든 전이는 component `useState`와 timer로 실행된다. frontend PRD 부록의 `/v1/jobs`,
+`consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
+제안이다. 이 문서의 17개 경로와 frontend PRD 경로 중 하나를 암묵적으로 선택하거나 혼용하지
+않는다.
+
+이 문서의 경로와 schema는 아직 현재 OpenAPI에 등록되지 않았다. 제품 범위와 A 소유 업무 계약을
+확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야 frontend 실행 계약이 된다.
+B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
+이 초안만으로 client를 생성하거나 현재 route를 제거하지 않는다.
+
+다음 원칙으로 목표 API를 제안한다.
 
 1. 화면의 표시 항목을 채우는 조회 API만 둔다.
 2. 화면의 버튼과 제출 행동마다 하나의 command API만 둔다.
@@ -24,7 +46,8 @@
 4. 화면에 없는 운영·정합성·감사·background job API는 frontend contract에서 제외한다.
 5. 전화, 채팅과 길 안내는 외부 앱 URI로 처리하고 별도 backend API를 만들지 않는다.
 
-확정 frontend API는 **17개**다. 시스템 운영 endpoint 3개는 별도이며 frontend가 호출하지 않는다.
+기존 8개 화면을 위한 제안 API는 **17개**다. 추가 P0 화면 2개의 승인 여부에 따라 19개로
+확장할 수 있다. 시스템 운영 endpoint 3개는 별도이며 frontend가 호출하지 않는다.
 
 ## 2. 공통 규약
 
@@ -36,7 +59,7 @@
 - 업체 담당자: `company_manager`
 - 현장기사: `field_worker`
 - 작업 ID와 인증 actor의 작업이 다르면 정보 노출 방지를 위해 `404`를 반환한다.
-- mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다.
+- 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없으므로 별도 선행 계약과 저장 정책이 필요하다.
 
 MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본다. 팀장을 포함한 배차 화면의 작업자들은 로그인 participant가 아니라 업체의 배정 인력 record다.
 
@@ -68,7 +91,7 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 
 모든 JSON 응답에는 `x-request-id` header가 포함된다. token, signed URL, 전화번호, 주소 원문과 미디어 원본은 로그에 기록하지 않는다.
 
-## 3. 확정 API 목록
+## 3. 제안 API 목록
 
 ### 3.1 고객·업체 공통 범위
 
@@ -500,7 +523,7 @@ AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거
 
 | 제외 항목 | 처리 방식 |
 | --- | --- |
-| 작업·참여자·access link 생성·철회 | 와이어프레임 이전의 seed/admin 과정. frontend API 아님 |
+| 작업·참여자·access link 생성·철회 | 이 8개 화면 제안에서는 seed/admin 과정. 최신 FE의 작업 생성·초대 demo를 실제 MVP에 넣으려면 별도 제품·계약 결정 필요 |
 | 일반 작업·scope·change·completion CRUD/list | 화면 단위 view와 command로 대체 |
 | notification 목록·읽음 처리 | 목록 화면이 없으므로 header count만 view에 포함 |
 | audit event 전체 조회 | 화면에 필요한 변경·완료 기록만 completion summary에 포함 |
@@ -514,24 +537,36 @@ AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거
 
 ## 9. 현재 구현에서의 전환
 
-현재 main에는 공개 REST route 23개가 있으나 이를 그대로 frontend contract로 확정하지 않는다.
+현재 main OpenAPI에는 22개 path와 26개 operation이 있다. `/api/v1` 업무 operation 23개와
+운영 operation 3개이며, 이 문서의 제안 경로 17개와 FE PRD 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
-| `POST /move-jobs`, participant·access-link API | public router에서 제거하거나 private bootstrap으로 이동 |
+| `POST /move-jobs`, access-link 생성·철회 | 현재 bootstrap·운영 계약을 유지한다. 신뢰 bootstrap과 전달 채널이 결정된 뒤 공개 범위 변경을 별도 계약으로 다룬다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session·asset upload·complete 3개 | storage service를 재사용하고 frontend는 `media-uploads` 한 개로 축소 |
 | scope version 생성·목록·approval | `scope-review`, `scope-proposals`, `confirm`으로 교체 |
-| change request 목록·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 decision 하나로 축소 |
+| change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |
-| 계획했던 read URL·maintenance API | frontend 계획에서 제거; view 또는 내부 운영 기능으로 처리 |
+| background job 생성·목록·재시도 3개 | 내부 운영 기능으로 유지하고 frontend 계약에서 제외 |
 | `/healthz`, `/edgez`, `/readyz` | 유지하되 운영 endpoint로 분류 |
 
-domain의 불변 version, content hash, access control, Outbox, audit와 provider Port는 삭제하지 않는다. 화면에 맞지 않는 공개 route만 줄이고 내부 안전성에 필요한 logic은 재사용한다.
+현재 upload 계약은 opaque `upload_url`·`upload_headers`를 그대로 사용한 뒤 별도 complete command가
+generation-pinned 비동기 검증을 시작한다. 이를 `media-uploads` 한 경로로 축소하려면 현재
+`UPLOADED → PROCESSING → READY|FAILED` 계약과 재시도 의미를 보존하는 별도 설계가 필요하다.
+또한 현재 API CORS는 `GET`, `POST`만 허용하므로 제안된 `PUT /dispatch`를 구현할 때 공용 설정
+변경을 함께 검토한다.
 
-## 10. 완료 기준
+domain의 불변 version, content hash, access control, Outbox, audit와 provider Port는 삭제하지
+않는다. 이 문서만 병합해 현재 route를 deprecate하지 않으며, 승인된 교체 계약과 전환 계획이
+OpenAPI에 반영된 뒤 frontend가 이동한다.
+
+## 10. 제안 승인·구현 완료 기준
 
 - 8개 화면의 모든 표시값이 해당 view response에 존재한다.
+- 최신 FE 27개 demo 중 실제 MVP에 포함할 화면과 보조 state를 먼저 고정하고, 제외 화면은 mock임을 표시한다.
+- 역할은 backend의 `customer`, `company_manager`, `field_worker`를 유지하거나 전환 계약을 별도 승인한다.
+- base path는 `/api/v1`을 사용하며 FE PRD의 `/v1` 경로를 현재 계약처럼 호출하지 않는다.
 - 모든 CTA와 제출 행동이 정확히 하나의 command endpoint에 대응한다.
 - 화면에 없는 frontend endpoint가 OpenAPI frontend tag에 남지 않는다.
 - 고객은 금액을 제안할 수 없고 현장기사는 금액·승인을 결정할 수 없다.
