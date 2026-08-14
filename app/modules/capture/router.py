@@ -16,6 +16,7 @@ from app.modules.analysis_workflow.service import (
     submit_capture_analysis,
 )
 from app.modules.capture.schemas import (
+    CaptureSessionDetailResponse,
     CaptureSessionResponse,
     MediaAssetResponse,
     MediaUploadCreate,
@@ -30,6 +31,7 @@ from app.modules.capture.service import (
     complete_media_upload,
     create_capture_session,
     create_media_upload,
+    list_capture_sessions,
 )
 from app.platform.db.dependencies import Session
 
@@ -63,6 +65,25 @@ def storage_error(error: ProviderError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="storage is unavailable",
+    )
+
+
+@router.get(
+    "/{job_id}/capture-sessions",
+    response_model=tuple[CaptureSessionDetailResponse, ...],
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
+    summary="내 촬영 세션과 처리 상태 조회",
+)
+async def list_capture_sessions_endpoint(
+    job_id: UUID,
+    actor: CurrentActor,
+    session: Session,
+) -> tuple[CaptureSessionDetailResponse, ...]:
+    authorize_job_actor(actor, job_id)
+    return await list_capture_sessions(
+        session,
+        job_id,
+        cast(UUID, actor.participant_id),
     )
 
 
