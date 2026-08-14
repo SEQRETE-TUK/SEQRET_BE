@@ -83,7 +83,7 @@ run "notification_event_pump" {
       google_monitoring_alert_policy.notification_source_backlog_age.conditions[0].condition_threshold[0].threshold_value == 900,
       google_monitoring_alert_policy.notification_source_backlog_age.conditions[0].condition_threshold[0].duration == "300s",
       strcontains(google_monitoring_alert_policy.notification_source_backlog_age.conditions[0].condition_threshold[0].filter, "pubsub.googleapis.com/subscription/oldest_unacked_message_age"),
-      google_monitoring_alert_policy.notification_source_backlog_age.alert_strategy[0].notification_rate_limit[0].period == "900s",
+      length(google_monitoring_alert_policy.notification_source_backlog_age.alert_strategy[0].notification_rate_limit) == 0,
       length(google_monitoring_alert_policy.outbox_relay_failures.conditions) == 2,
     ])
     error_message = "Relay failures, source backlog age, and DLQ backlog must be observable."

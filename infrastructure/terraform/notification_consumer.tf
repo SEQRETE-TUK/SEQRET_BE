@@ -158,7 +158,6 @@ resource "google_monitoring_alert_policy" "notification_source_backlog_age" {
 
   alert_strategy {
     auto_close = "1800s"
-    notification_rate_limit { period = "900s" }
   }
   documentation {
     subject   = "${local.notification_subscription_name} has a stale event backlog"

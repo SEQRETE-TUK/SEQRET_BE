@@ -318,7 +318,6 @@ resource "google_monitoring_alert_policy" "media_task_backlog" {
 
   alert_strategy {
     auto_close = "1800s"
-    notification_rate_limit { period = "900s" }
   }
   documentation {
     subject   = "${local.task_queue_name} has a sustained backlog"
@@ -358,7 +357,6 @@ resource "google_monitoring_alert_policy" "media_task_failures" {
 
   alert_strategy {
     auto_close = "1800s"
-    notification_rate_limit { period = "900s" }
   }
   documentation {
     subject   = "${local.task_queue_name} has a failed attempt"
