@@ -115,9 +115,7 @@ def _participant_id(created: dict[str, Any], role: str) -> UUID:
 
 
 def _headers(created: dict[str, Any], role: str) -> dict[str, str]:
-    secret = next(
-        link["secret"] for link in created["access_links"] if link["role"] == role
-    )
+    secret = next(link["secret"] for link in created["access_links"] if link["role"] == role)
     return {"Authorization": f"Bearer {secret}"}
 
 
@@ -234,9 +232,7 @@ def _selection(view: dict[str, Any]) -> dict[str, Any]:
         for item in view["vehicle_options"]
         if item["external_reference"] == "vehicle-ready"
     )
-    workers = {
-        item["external_reference"]: item["id"] for item in view["worker_options"]
-    }
+    workers = {item["external_reference"]: item["id"] for item in view["worker_options"]}
     return {
         "setup_id": view["setup_id"],
         "vehicle_id": vehicle_id,
@@ -363,15 +359,11 @@ async def test_dispatch_to_field_check_in_is_replay_safe_and_notifies_worker(
         assert event.payload == {
             "dispatch_id": confirmed_view["dispatch_id"],
             "scope_version_id": str(scope_id),
-            "field_worker_participant_id": str(
-                _participant_id(created, "field_worker")
-            ),
+            "field_worker_participant_id": str(_participant_id(created, "field_worker")),
         }
         intents = await consume_notification_event(session, event)
         assert len(intents) == 1
-        assert intents[0].recipient_participant_id == _participant_id(
-            created, "field_worker"
-        )
+        assert intents[0].recipient_participant_id == _participant_id(created, "field_worker")
         assert intents[0].event_type is DomainEventType.DISPATCH_CONFIRMED_V1
         assert await consume_notification_event(session, event) == ()
 
@@ -475,20 +467,24 @@ async def test_dispatch_rejects_invalid_snapshot_and_candidate_selections(
     other_created = await _create_job(client)
     other_setup, _ = await _setup(client, factory, other_created)
     other_job_id = other_created["job"]["id"]
-    options = {
-        item["external_reference"]: item["id"] for item in other_setup["worker_options"]
-    }
-    vehicles = {
-        item["external_reference"]: item["id"] for item in other_setup["vehicle_options"]
-    }
+    options = {item["external_reference"]: item["id"] for item in other_setup["worker_options"]}
+    vehicles = {item["external_reference"]: item["id"] for item in other_setup["vehicle_options"]}
     base = _selection(other_setup)
     invalid_commands = (
         {**base, "vehicle_id": str(uuid4())},
         {**base, "vehicle_id": vehicles["vehicle-busy"]},
         {**base, "vehicle_id": vehicles["vehicle-small"]},
-        {**base, "worker_ids": [options["worker-representative"]], "lead_worker_id": options["worker-representative"]},
+        {
+            **base,
+            "worker_ids": [options["worker-representative"]],
+            "lead_worker_id": options["worker-representative"],
+        },
         {**base, "worker_ids": [options["worker-representative"], options["worker-busy"]]},
-        {**base, "worker_ids": [options["worker-helper"], options["worker-unskilled"]], "lead_worker_id": options["worker-helper"]},
+        {
+            **base,
+            "worker_ids": [options["worker-helper"], options["worker-unskilled"]],
+            "lead_worker_id": options["worker-helper"],
+        },
         {**base, "worker_ids": [options["worker-representative"], options["worker-unskilled"]]},
         {**base, "setup_id": setup["setup_id"]},
     )
@@ -874,9 +870,7 @@ async def test_dispatch_defensive_integrity_branches(
     monkeypatch.setattr(dispatch_service, "_current_locked_scope", AsyncMock())
     command = DispatchSetupCreate.model_validate(payload)
     session.scalar = AsyncMock(return_value=None)
-    session.flush = AsyncMock(
-        side_effect=IntegrityError("insert", {}, Exception("race"))
-    )
+    session.flush = AsyncMock(side_effect=IntegrityError("insert", {}, Exception("race")))
     with pytest.raises(DispatchConflictError):
         await dispatch_service.create_dispatch_setup(
             session,
@@ -888,9 +882,7 @@ async def test_dispatch_defensive_integrity_branches(
     selection = DispatchConfirmCreate.model_validate(_selection(setup_view))
     monkeypatch.setattr(dispatch_service, "_validate_selection", lambda *args: None)
     session.scalar = AsyncMock(side_effect=[None, setup])
-    session.flush = AsyncMock(
-        side_effect=IntegrityError("insert", {}, Exception("race"))
-    )
+    session.flush = AsyncMock(side_effect=IntegrityError("insert", {}, Exception("race")))
     with pytest.raises(DispatchConflictError):
         await dispatch_service.confirm_dispatch(
             session,
@@ -940,9 +932,7 @@ async def test_dispatch_defensive_integrity_branches(
         )
 
     session.scalar = AsyncMock(side_effect=[setup, plan, None])
-    session.flush = AsyncMock(
-        side_effect=IntegrityError("insert", {}, Exception("race"))
-    )
+    session.flush = AsyncMock(side_effect=IntegrityError("insert", {}, Exception("race")))
     with pytest.raises(DispatchConflictError):
         await check_in_field_worker(
             session,

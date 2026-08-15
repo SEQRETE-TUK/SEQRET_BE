@@ -165,7 +165,9 @@ def _requirements(setup: DispatchSetup) -> DispatchRequirements:
 
 
 def _job_header(job: MoveJob, viewer: JobParticipant) -> ScopeReviewJobHeader:
-    participant_names = {participant.role: participant.display_name for participant in job.participants}
+    participant_names = {
+        participant.role: participant.display_name for participant in job.participants
+    }
     location_names = {location.kind: location.label for location in job.locations}
     return ScopeReviewJobHeader(
         job_id=job.id,
@@ -239,11 +241,7 @@ async def create_dispatch_setup(
         lock=True,
     )
     field_worker = next(
-        (
-            stored
-            for stored in job.participants
-            if stored.role is ParticipantRole.FIELD_WORKER
-        ),
+        (stored for stored in job.participants if stored.role is ParticipantRole.FIELD_WORKER),
         None,
     )
     if field_worker is None:
@@ -319,14 +317,10 @@ def _dispatch_checks(
             DispatchCheck(
                 key="vehicle_availability",
                 status=(
-                    DispatchCheckStatus.PASS
-                    if eligible_vehicles
-                    else DispatchCheckStatus.FAIL
+                    DispatchCheckStatus.PASS if eligible_vehicles else DispatchCheckStatus.FAIL
                 ),
                 detail=(
-                    "가용 용량 충족 차량 있음"
-                    if eligible_vehicles
-                    else "가용 용량 충족 차량 없음"
+                    "가용 용량 충족 차량 있음" if eligible_vehicles else "가용 용량 충족 차량 없음"
                 ),
             ),
             DispatchCheck(
@@ -500,9 +494,7 @@ def _validate_selection(
         raise DispatchConflictError(setup.id)
     selected_workers = tuple(worker for worker in selected if worker is not None)
     mapped = tuple(
-        worker
-        for worker in selected_workers
-        if worker.participant_id == field_worker_id
+        worker for worker in selected_workers if worker.participant_id == field_worker_id
     )
     if len(mapped) != 1:
         raise DispatchConflictError(field_worker_id)
@@ -530,7 +522,10 @@ async def confirm_dispatch(
         select(DispatchPlan).where(DispatchPlan.job_id == job_id).with_for_update()
     )
     if existing is not None:
-        if existing.command_hash == command_hash and existing.confirmed_by_participant_id == participant_id:
+        if (
+            existing.command_hash == command_hash
+            and existing.confirmed_by_participant_id == participant_id
+        ):
             return existing
         raise DispatchConflictError(job_id)
     _require_open_scheduled_job(job)
@@ -554,11 +549,7 @@ async def confirm_dispatch(
         lock=True,
     )
     field_worker = next(
-        (
-            stored
-            for stored in job.participants
-            if stored.role is ParticipantRole.FIELD_WORKER
-        ),
+        (stored for stored in job.participants if stored.role is ParticipantRole.FIELD_WORKER),
         None,
     )
     if field_worker is None:
@@ -732,9 +723,8 @@ async def check_in_field_worker(
         .with_for_update()
     )
     if existing is not None:
-        if (
-            existing.dispatch_plan_id == plan.id
-            and set(existing.confirmed_check_keys) == set(command.confirmed_check_keys)
+        if existing.dispatch_plan_id == plan.id and set(existing.confirmed_check_keys) == set(
+            command.confirmed_check_keys
         ):
             return _check_in_response(existing)
         raise DispatchConflictError(job_id)

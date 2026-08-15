@@ -32,7 +32,9 @@ router = APIRouter(prefix="/move-jobs", tags=["dispatch"])
 
 
 def _not_found(error: Exception) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dispatch resource not found")
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, detail="dispatch resource not found"
+    )
 
 
 def _conflict(error: Exception) -> HTTPException:

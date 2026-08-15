@@ -174,8 +174,7 @@ class DomainEvent(ContractModel):
                     and isinstance(scope_version_id, str)
                     and str(UUID(scope_version_id)) == scope_version_id
                     and isinstance(field_worker_participant_id, str)
-                    and str(UUID(field_worker_participant_id))
-                    == field_worker_participant_id
+                    and str(UUID(field_worker_participant_id)) == field_worker_participant_id
                 )
             elif self.event_type is DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1:
                 capture_session_id = payload.get("capture_session_id")

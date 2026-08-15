@@ -64,7 +64,9 @@ class DispatchSetupCreate(DispatchRequestModel):
     required_worker_count: Annotated[int, Field(ge=1, le=50)]
     required_skills: Annotated[tuple[Label, ...], Field(max_length=100)] = ()
     required_certifications: Annotated[tuple[Label, ...], Field(max_length=100)] = ()
-    check_in_items: Annotated[tuple[DispatchCheckInItemCreate, ...], Field(min_length=1, max_length=20)]
+    check_in_items: Annotated[
+        tuple[DispatchCheckInItemCreate, ...], Field(min_length=1, max_length=20)
+    ]
     origin_conditions: Annotated[tuple[Label, ...], Field(max_length=100)] = ()
     safety_notice: Annotated[str, Field(min_length=1, max_length=2000)]
     vehicles: Annotated[tuple[DispatchVehicleCreate, ...], Field(min_length=1, max_length=100)]
