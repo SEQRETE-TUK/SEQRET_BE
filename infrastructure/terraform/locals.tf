@@ -64,6 +64,7 @@ locals {
   worker_environment = merge(local.observed_runtime_environment, {
     SEQRET_DATABASE_MAX_OVERFLOW = "0"
     SEQRET_DATABASE_POOL_SIZE    = "1"
+    SEQRET_ANALYSIS_LOCATION     = var.region
     SEQRET_MEDIA_BUCKET_NAME     = var.media_bucket_name
   })
 
