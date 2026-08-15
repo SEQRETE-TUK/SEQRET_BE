@@ -8,8 +8,8 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 26개 path에 31개다: `/api/v1` 업무 operation 28개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 작업 bootstrap, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- OpenAPI operation은 27개 path에 32개다: `/api/v1` 업무 operation 29개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 소비자 전용 작업 생성, 신뢰 bootstrap, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
 - Alembic은 단일 head `int_01_0001`이다. 감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
@@ -18,6 +18,7 @@
 
 - 업무 prefix는 `/api/v1`이고, 인증은 `Authorization: Bearer <access-link-secret>`이다.
 - 역할값은 `customer`, `company_manager`, `field_worker`다. access link는 개인 신원을 증명하는 로그인 계정이 아니라 한 작업과 역할에 묶인 capability다.
+- `POST /move-jobs/onboarding`은 공개 소비자 생성 route다. 고객 참여자와 고객 access secret 하나만 반환하며 업체·현장기사 capability를 미리 발급하지 않는다.
 - `POST /move-jobs`는 공개 bootstrap route다. 정확히 세 역할의 capability secret을 한 번만 반환하며, 호출자는 이를 각 참여자에게 전달할 신뢰 주체여야 한다. 신뢰 bootstrap과 전달 채널이 정해지기 전에는 일반 FE 연동 대상으로 취급하지 않는다.
 - 다른 작업의 resource는 `404`, 역할 부족은 `403`, 유효한 access link의 제한 초과는 `429`와 `Retry-After`로 응답한다. 현재 오류 body는 FastAPI의 `detail` 기반이며 별도 machine error code는 계약하지 않았다.
 - 유효한 access link가 인증에 처음 사용되면 `participant_connected` 감사 event가 한 번 기록된다. payload에는 link·participant 식별자와 역할만 포함되며 bearer secret은 포함하지 않는다.

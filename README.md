@@ -47,7 +47,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 업무 API는 설정된 API prefix(기본 `/api/v1`) 아래에서 제공됩니다.
 
-- `POST /move-jobs`: 작업과 초기 참여자·위치·구역 생성
+- `POST /move-jobs/onboarding`: 소비자 작업과 소비자 전용 비밀 링크 생성
+- `POST /move-jobs`: 신뢰 bootstrap용 작업·세 역할·위치·구역 생성
 - `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
 - `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
@@ -73,7 +74,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
 
-작업 생성 응답은 최초 발급부터 7일 동안 유효한 초기 역할 링크의 비밀값을 한 번만 반환합니다. 이 공개 bootstrap 호출자는 모든 초기 역할 capability를 각 참여자에게 안전하게 전달하는 신뢰 주체이며, bearer 링크 자체는 개인 신원을 증명하지 않습니다. 고객·회사 관리자·현장 작업자 세 역할은 작업 생성 시 모두 연결하며, 검증된 별도 전달 채널이 없는 현재 public API에서는 이후 참여자를 추가하지 않습니다. 이후 작업 API는 비밀값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 각 참여자는 자기 링크만 회전할 수 있고, 회전은 같은 링크의 비밀값만 교체하므로 최초 절대 만료와 rate-limit 구간을 연장하거나 초기화하지 않습니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
+소비자 self-service 생성은 `POST /move-jobs/onboarding`을 사용합니다. 이 응답은 최초 발급부터 7일 동안 유효한 소비자 비밀값 하나만 한 번 반환하며, 업체나 현장기사 capability를 미리 만들지 않습니다. 기존 `POST /move-jobs`는 정확히 세 역할을 한 번에 준비하는 신뢰 bootstrap 계약으로 남아 일반 frontend 생성 흐름에서 사용하지 않습니다. bearer 링크 자체는 개인 신원을 증명하지 않습니다. 이후 작업 API는 비밀값을 `Authorization: Bearer <secret>`으로 받으며 데이터베이스에는 SHA-256 hash만 저장합니다. 각 참여자는 자기 링크만 회전할 수 있고, 회전은 같은 링크의 비밀값만 교체하므로 최초 절대 만료와 rate-limit 구간을 연장하거나 초기화하지 않습니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
 
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 로컬에서 storage 설정을 생략하면 업로드 API는 `503`을 반환하고, 배포 API는 storage 설정 없이는 시작하지 않습니다.
 
