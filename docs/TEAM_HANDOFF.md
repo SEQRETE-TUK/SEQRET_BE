@@ -8,11 +8,11 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 46개 path에 54개다: `/api/v1` 업무 operation 51개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 작업별 후보 snapshot 기반 배차·현장기사 알림·브리프·체크인, 현장기사 이슈→업체 변경 제안→고객 결정, 기존 현장 변경요청, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- OpenAPI operation은 52개 path에 60개다: `/api/v1` 업무 operation 57개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 작업별 후보 snapshot 기반 배차·현장기사 알림·브리프·체크인, 현장기사 이슈→업체 변경 제안→고객 결정, 대표기사 완료 제출→업체 요청→고객 확인·문제 신고→문서·보존, 기존 현장 변경요청·완료 확인, 감사·알림 조회와 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `a_13_0001`다. 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `int_04_0001`다. 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
@@ -37,7 +37,9 @@
 - 현장기사는 잠긴 현재 범위와 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 기준으로 `POST /move-jobs/{job_id}/field-issues`를 호출한다. `client_reference`와 정확한 payload 재전송은 같은 결과를 반환하며 현장기사는 금액을 제안하지 않는다. 업체는 `GET /field-issues`에서 처리 상태를 조회한다. 업체 변경 제안 전에는 모든 증거의 validation이 `READY`여야 한다.
 - 업체의 `POST /move-jobs/{job_id}/change-proposals`는 이슈 하나를 현재 확정 금액을 기준으로 한 불변 변경 범위·견적 제안으로 전환한다. 고객과 업체는 generation-pinned 증거 preview가 포함된 `GET /change-proposals/{proposal_id}`를 사용한다. 고객만 승인·거절·설명 요청을 결정하고 업체는 설명 요청 상태에서 `/explanation`을 제출한다. 승인 시 기존 범위 승인·잠금과 `scope_locked.v1`, 기존 `change_requested.v1` 계약을 재사용한다.
 - 업체 연동은 `POST /move-jobs/{job_id}/dispatch/setup`으로 현재 잠긴 leaf 범위와 작업 일정에 묶인 요구사항·차량·인력 후보 snapshot을 한 번 등록한다. 업체는 `GET /dispatch`로 충돌을 확인하고 `PUT /dispatch`로 용량·인원·기술·자격·대표 기사 조건을 원자적으로 검증해 확정한다. 정확 replay만 허용하며 `dispatch_confirmed.v1`은 현장기사 notification intent를 만든다.
-- 배정 현장기사만 `GET /field-brief`에서 현재 범위·마스킹 위치·일정·현장 조건·checklist를 조회하고 예정일 당일 `POST /check-ins`로 전체 checklist를 확인한다. 연락처·채팅·지도 source가 없으므로 관련 URI는 현재 `null`이다.
+- 배정 현장기사만 `GET /field-brief`에서 현재 범위·마스킹 위치·일정·현장 조건·체크인·완료 checklist와 배정 작업자 ID를 조회하고 예정일 당일 `POST /check-ins`로 체크인 checklist 전체를 확인한다. 연락처·채팅·지도 source가 없으므로 관련 URI는 현재 `null`이다.
+- 체크인한 대표 현장기사는 `POST /completion-submissions`에 완료 checklist 전체, 작업자별 실제 근무, 현장 고객 확인과 선택적 `READY` completion 미디어를 제출한다. 업체는 최신 제출을 `POST /completion-requests`로 7일 동안 고객에게 요청하거나 살아 있는 요청을 철회한다. 고객은 요청 뒤 `GET /completion-summary`를 읽고 `/decision`에서 확인 또는 별도 문제 신고를 선택한다. 문제 신고는 책임을 자동 판정하지 않고 정정 제출과 새 요청을 허용한다.
+- 고객 확인은 작업 `completed`, 양측 completion confirmation, 감사·`completion_decided.v1`과 제공된 미디어의 보존 삭제 intent를 같은 transaction에 기록한다. 완료 미디어가 없으면 보존 작업은 0개다. 업체 `GET /documents/archive`는 견적·변경·작업완료·완료확인 PDF와 schema v1 manifest를 결정적 ZIP으로 반환하며 준비 전에는 `409`다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
 
 ## FE 현재 상태와 blocker
@@ -47,7 +49,7 @@
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
 - canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `16b4a98b812e798ad62942f0d82d5d6d7e715068`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
-- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. secret은 React 메모리에만 보관하며 390x844 mock browser E2E에서 정상 확정, 충돌 복구, 콘솔·영구 저장소·DOM secret 노출 여부를 검증했다. 나머지 시각 demo 흐름은 여전히 local state와 timer이므로 API 완료 증거로 보지 않는다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. secret은 React 메모리에만 보관하며 390x844 mock browser E2E에서 정상 확정, 충돌 복구, 콘솔·영구 저장소·DOM secret 노출 여부를 검증했다. 최신 `/crew?screen=4`, `/?role=consumer&screen=7`과 업체 완료·문서 화면은 시각 state만 있으므로 새 완료 6개 operation의 실제 query·mutation·오류 복구 연동은 FE 담당 잔여다.
 - FE [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)은 화면 단위 dynamic import로 초기 JS를 224.60 kB까지 줄이고 500 kB 경고를 제거했다. production preview에서 7개 진입 경로와 전용 chunk 로드를 검증했다.
 - FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
 - FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)부터 [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)까지 필수 CI는 성공했다. GitHub deployment와 environment는 2026-08-15 재확인 기준 각각 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
@@ -70,6 +72,7 @@
 
 ## staging 운영 증적
 
+- [Deploy staging #31878092599](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31878092599): A-13 `4d4e274994ffa30eca8047d95c2289d7ca7e851f`에서 migration gate, Terraform apply, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00014-sj6`, rollback 대상은 `seqret-stg-api-00013-nzk`, image digest는 `sha256:eb51f5b7f1c2f6aa7a368c75dcf4eada50a9dbceae61905aff3ad1e6ebbe7f30`이고 live OpenAPI는 46개 path·54개 operation이다. 합성 작업 `71e3a08a-8e3d-4653-847f-dd104deb5916`에서 범위 `b33aeb98-1693-415b-b041-96f26ffbbf92` → setup `3c080727-03eb-427a-bb74-d71e6bf1c55c` → dispatch `f4af82be-ce31-42b2-b70e-12225707cc51` → check-in `6be6123f-9d11-423f-8316-76614c1c1fe0`을 검증했고 정확 replay, checklist 잔여 0과 현장기사 notification intent `PENDING`을 확인했다. 실제 outbound provider는 계약되지 않았다.
 - [Deploy staging #31876051227](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31876051227): INT-03 `e246844`에서 migration gate, Terraform apply, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00013-nzk`이고 live OpenAPI는 42개 path·49개 operation이다. 실제 GCS를 사용한 합성 작업 `05b89822-8786-4b09-92ca-3ea29f6b6a81`에서 현장 이슈 → 업체 변경 제안 → 고객 설명 요청 → 업체 설명 → 고객 승인 → 새 범위 잠금과 최종 1,230,000원 확정을 확인했고 모든 command의 정확 재전송 멱등성을 검증했다. secret과 signed URL은 출력·저장하지 않았다.
 - [Deploy staging #31874449104](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31874449104): INT-02 `121f232`에서 migration gate, Terraform apply, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00012-nz9`이고 live OpenAPI는 37개 path·43개 operation이다. 합성 작업 `dba3aa84-0429-4c72-aeaa-b4b4d0cab668`에서 업체 최초 제안 → 고객 수정 요청 → 업체 수정 제안 → 고객 확인을 거쳐 범위와 1,050,000원 견적이 잠기는 흐름과 정확 재전송 멱등성을 확인했다. secret과 signed URL은 출력·저장하지 않았다.
 - [Deploy staging #31873864857](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31873864857): A-02 PostgreSQL 잠금 hotfix `dc1e2c0`에서 전체 rollout gate와 promotion 성공. API는 `seqret-stg-api-00011-qxm`이고 live OpenAPI는 33개 path·39개 operation이다. 합성 작업 `c310a736-2fab-4bb4-90da-d9ede0d171db`에서 고객 온보딩 → 업체 초대·수락 → 기사 초대·수락 → 업체 초대 재발급과 하위 link 철회 cascade를 확인했으며 secret은 출력·저장하지 않았다.
@@ -89,6 +92,6 @@
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-현재 staging application·schema는 `e246844` 배포 증적과 일치한다. 이 문서에 포함된 A-13 변경은 병합·재배포 뒤 별도 canary 증적을 추가한다. `72c4840`에서 수정한 recovery workflow는 위 PITR drill로 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
+현재 staging application·schema는 `4d4e274994ffa30eca8047d95c2289d7ca7e851f` A-13 배포 증적과 일치한다. 이 문서의 INT-04 code·migration은 병합·재배포 뒤 별도 live 완료 E2E와 source SHA·image digest 증적을 추가한다. `72c4840`에서 수정한 recovery workflow는 위 PITR drill로 재검증했다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.

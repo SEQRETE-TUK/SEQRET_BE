@@ -239,7 +239,11 @@ DomainEvent
 - `analysis_failed.v1`
 - `scope_locked.v1`
 - `change_requested.v1`
+- `dispatch_confirmed.v1`
 - `completion_media_submitted.v1`
+- `completion_submitted.v1`
+- `completion_requested.v1`
+- `completion_decided.v1`
 - `media_deleted.v1`
 
 event consumer는 `event_id`를 기준으로 중복 처리를 방지한다.
@@ -309,7 +313,7 @@ event consumer는 `event_id`를 기준으로 중복 처리를 방지한다.
 | INT-01 | B | 촬영 제출 → AI 분석 → 범위 초안 | 중복 event와 AI 실패에서도 수동 작업이 가능하다. |
 | INT-02 | A | 양측 확인 → 범위 잠금 | 서로 다른 버전 확인과 동시 수정이 차단된다. |
 | INT-03 | A | 변경 증거 → 변경요청 → 새 버전 | 미디어 권한과 결과 버전 연결이 유지된다. |
-| INT-04 | A | 완료 미디어 → 완료 확인 → 보존 정책 | 자동 책임 판단 없이 완료 기록과 삭제 일정이 연결된다. |
+| INT-04 | A | 완료 제출 → 업체 요청 → 고객 확인·문제 신고 → 문서·보존 정책 | 구현 완료. 자동 책임 판단 없이 정정 가능한 불변 완료 기록, 결정적 문서 archive와 선택적 미디어 삭제 일정이 연결된다. |
 | INT-05 | A | 토큰 만료·철회·권한 공격 | 다른 작업과 역할의 데이터에 접근할 수 없다. |
 | INT-06 | B | task 재시도·provider 장애·복구 | 동일 작업이 반복돼도 결과가 한 번만 반영된다. |
 | INT-07 | A | 배포·migration·복구 | staging 배포와 DB 복구 절차가 재현된다. |

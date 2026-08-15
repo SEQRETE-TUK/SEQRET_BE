@@ -20,6 +20,9 @@ class DomainEventType(StrEnum):
     CHANGE_REQUESTED_V1 = "change_requested.v1"
     DISPATCH_CONFIRMED_V1 = "dispatch_confirmed.v1"
     COMPLETION_MEDIA_SUBMITTED_V1 = "completion_media_submitted.v1"
+    COMPLETION_SUBMITTED_V1 = "completion_submitted.v1"
+    COMPLETION_REQUESTED_V1 = "completion_requested.v1"
+    COMPLETION_DECIDED_V1 = "completion_decided.v1"
     MEDIA_DELETED_V1 = "media_deleted.v1"
 
 
@@ -193,6 +196,67 @@ class DomainEvent(ContractModel):
                     and str(UUID(media_asset_id)) == media_asset_id
                     and isinstance(room_zone_id, str)
                     and str(UUID(room_zone_id)) == room_zone_id
+                )
+            elif self.event_type is DomainEventType.COMPLETION_SUBMITTED_V1:
+                submission_id = payload.get("completion_submission_id")
+                scope_version_id = payload.get("scope_version_id")
+                field_worker_id = payload.get("field_worker_participant_id")
+                valid = (
+                    set(payload)
+                    == {
+                        "completion_submission_id",
+                        "scope_version_id",
+                        "field_worker_participant_id",
+                    }
+                    and isinstance(submission_id, str)
+                    and str(UUID(submission_id)) == submission_id
+                    and isinstance(scope_version_id, str)
+                    and str(UUID(scope_version_id)) == scope_version_id
+                    and isinstance(field_worker_id, str)
+                    and str(UUID(field_worker_id)) == field_worker_id
+                )
+            elif self.event_type is DomainEventType.COMPLETION_REQUESTED_V1:
+                request_id = payload.get("completion_request_id")
+                submission_id = payload.get("completion_submission_id")
+                customer_id = payload.get("customer_participant_id")
+                valid = (
+                    set(payload)
+                    == {
+                        "completion_request_id",
+                        "completion_submission_id",
+                        "customer_participant_id",
+                    }
+                    and isinstance(request_id, str)
+                    and str(UUID(request_id)) == request_id
+                    and isinstance(submission_id, str)
+                    and str(UUID(submission_id)) == submission_id
+                    and isinstance(customer_id, str)
+                    and str(UUID(customer_id)) == customer_id
+                )
+            elif self.event_type is DomainEventType.COMPLETION_DECIDED_V1:
+                request_id = payload.get("completion_request_id")
+                submission_id = payload.get("completion_submission_id")
+                decision = payload.get("decision")
+                problem_report_id = payload.get("problem_report_id")
+                valid = (
+                    set(payload)
+                    == {
+                        "completion_request_id",
+                        "completion_submission_id",
+                        "decision",
+                        "problem_report_id",
+                    }
+                    and isinstance(request_id, str)
+                    and str(UUID(request_id)) == request_id
+                    and isinstance(submission_id, str)
+                    and str(UUID(submission_id)) == submission_id
+                    and decision in {"confirm", "report_issue"}
+                    and (
+                        problem_report_id is None
+                        if decision == "confirm"
+                        else isinstance(problem_report_id, str)
+                        and str(UUID(problem_report_id)) == problem_report_id
+                    )
                 )
             elif self.event_type is DomainEventType.MEDIA_DELETED_V1:
                 background_job_id = payload.get("background_job_id")

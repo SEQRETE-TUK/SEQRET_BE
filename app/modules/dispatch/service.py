@@ -14,6 +14,7 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.events import DomainEventType
 from app.contracts.model import ContractModel
 from app.contracts.primitives import utc_now
+from app.modules.completion.models import CompletionSubmission
 from app.modules.dispatch.models import DispatchPlan, DispatchSetup, FieldCheckIn
 from app.modules.dispatch.schemas import (
     DispatchCheck,
@@ -27,6 +28,7 @@ from app.modules.dispatch.schemas import (
     DispatchWorkerOption,
     FieldBriefCheckItem,
     FieldBriefView,
+    FieldBriefWorker,
     FieldCheckInCreate,
     FieldCheckInResponse,
 )
@@ -268,6 +270,9 @@ async def create_dispatch_setup(
         required_skills=list(command.required_skills),
         required_certifications=list(command.required_certifications),
         check_in_items=[item.model_dump(mode="json") for item in command.check_in_items],
+        completion_check_items=[
+            item.model_dump(mode="json") for item in command.completion_check_items
+        ],
         origin_conditions=list(command.origin_conditions),
         safety_notice=command.safety_notice,
         vehicle_options=vehicles,
@@ -642,6 +647,17 @@ async def get_field_brief(
         )
     )
     confirmed = set(check_in.confirmed_check_keys) if check_in is not None else set()
+    completion_submission = await session.scalar(
+        select(CompletionSubmission)
+        .where(CompletionSubmission.job_id == job_id)
+        .order_by(CompletionSubmission.submitted_at.desc(), CompletionSubmission.id.desc())
+        .limit(1)
+    )
+    completed = (
+        set(completion_submission.completed_check_keys)
+        if completion_submission is not None
+        else set()
+    )
     locations = {location.kind: location.label for location in job.locations}
     items = tuple(
         FieldBriefCheckItem(
@@ -650,6 +666,25 @@ async def get_field_brief(
             confirmed=str(item["key"]) in confirmed,
         )
         for item in setup.check_in_items
+    )
+    completion_items = tuple(
+        FieldBriefCheckItem(
+            key=str(item["key"]),
+            label=str(item["label"]),
+            confirmed=str(item["key"]) in completed,
+        )
+        for item in setup.completion_check_items
+    )
+    assigned_workers = tuple(
+        FieldBriefWorker(
+            worker_id=worker_id,
+            external_reference=workers[worker_id].external_reference,
+            display_name=workers[worker_id].display_name,
+            role_label=workers[worker_id].role_label,
+            is_lead=worker_id == plan.lead_worker_option_id,
+        )
+        for worker_id in (UUID(value) for value in plan.selected_worker_option_ids)
+        if worker_id in workers
     )
     return FieldBriefView(
         job=_job_header(job, viewer),
@@ -663,8 +698,14 @@ async def get_field_brief(
         origin_conditions=tuple(setup.origin_conditions),
         field_check_required_count=sum(not item.confirmed for item in items),
         check_in_items=items,
+        completion_check_items=completion_items,
+        completion_required_count=sum(not item.confirmed for item in completion_items),
+        completion_submission_id=(
+            completion_submission.id if completion_submission is not None else None
+        ),
         assigned_vehicle=vehicle,
         assigned_worker_count=len(plan.selected_worker_option_ids),
+        assigned_workers=assigned_workers,
         required_skills=tuple(setup.required_skills),
         safety_notice=setup.safety_notice,
         checked_in_at=_aware(check_in.checked_in_at) if check_in is not None else None,

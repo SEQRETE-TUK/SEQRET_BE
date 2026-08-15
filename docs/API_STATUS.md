@@ -15,14 +15,14 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 54개 | 46개 path의 업무 operation 51개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 60개 | 52개 path의 업무 operation 57개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
-| 기존 8화면 기준 backend 목표 API | 17개 | 13개 구현: 기존 9개 + 배차 조회·확정 2 + field brief·체크인 2 |
-| 추가 P0 화면 포함 시 backend 제안 API | 19개 | 현재 13개 구현; 작업 완료 제출과 고객 완료 결정 2개 추가 |
-| 남은 목표 API | 6개 | 완료·문서 3, upload adapter 1, 추가 P0 완료 2 |
+| 기존 8화면 기준 backend 목표 API | 17개 | 16개 구현; 화면용 `media-uploads` adapter만 조건부 잔여 |
+| 승인된 P0 화면 포함 backend 목표 API | 19개 | 18개 구현; 완료 제출과 고객 결정 포함 |
+| 남은 목표 API | 1개 | 기존 capture 상태 전이를 보존할 upload adapter만 조건부 잔여 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 51개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 57개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -56,7 +56,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins` 등 51개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins`, `/completion-*` 등 57개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -80,22 +80,22 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객 변경 승인 | `POST /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인·거절·설명 요청 | 구현 | 고객 전용 결정, 정확 replay, 승인 시 양측 확인·scope lock을 원자적으로 수행 |
 | 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 구현 | 현재 범위에 묶인 작업별 immutable 후보 snapshot, 요구사항·충돌·선택 상태 반환 |
 | 업체 배차 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 배정 확정과 알림 생성 | 구현 | 용량·인원·기술·자격·대표 기사를 원자 검증하고 `dispatch_confirmed.v1` 알림 연결 |
-| 업체 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 문서 요약 | 확장 | 완료 확인·감사 기반 재사용; 작업자 제출·체크리스트·금액·문서 data 추가 |
-| 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 완료 확인 요청 | 신규 | 요청 lifecycle과 deep-link 알림 trigger 필요 |
-| 업체 완료 | `GET /api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF ZIP 다운로드 | 신규 | 문서 생성 상태와 archive 생성 service 필요 |
+| 업체·고객 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 요청·문서 요약 | 구현 | 업체와 요청받은 고객의 단일 view; READY generation-pinned preview 포함 |
+| 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 7일 완료 확인 요청 | 구현 | 최신 제출·활성 요청·정확 replay 검증과 고객 알림 intent 연결 |
+| 업체 완료 | `GET /api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF 4종·manifest ZIP 다운로드 | 구현 | 결정적 archive; 준비 전 `409`, 완료 DB 사실과 생성 실패 분리 |
 | 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 구현 | 확정 배정·현재 잠긴 범위·마스킹 위치·checklist와 체크인 상태를 한 view로 반환 |
 | 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 구현 | 배정된 대표 기사, 예정일 당일과 checklist 전체 확인을 검증하고 정확 replay 허용 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 signed upload URL 발급 | 전환 | 기존 capture 3단계와 `StoragePort` 재사용; frontend path 단순화 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 기사 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 제안 전에는 READY 필수 |
 
-### 4.2 추가 P0 화면 승인 시 2개
+### 4.2 승인된 추가 P0 화면 2개
 
 | 화면 | Method · Path | 용도 | 상태 | 재사용 기반·남은 일 |
 | --- | --- | --- | --- | --- |
-| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 신규 | 작업자 완료 제출 aggregate와 검증 필요 |
-| 고객 완료 확인 | `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 문제 신고 | 확장 | 기존 완료 확인 logic 재사용; 요청 lifecycle과 문제 신고 상태 추가 |
+| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 구현 | 체크인·현재 배차·범위·작업자·선택적 READY 미디어 검증과 정정 제출 지원 |
+| 고객 완료 확인 | `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 문제 신고 | 구현 | 책임 자동판단 없이 문제를 분리하고 확인 시 완료·보존 intent를 원자 반영 |
 
-두 API는 [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)의 P0 화면이 승인되면 [API 명세](API_SPEC.md)에 편입한다. 승인 전 기준 API 수는 17개, 승인 후는 19개다.
+두 P0 API는 승인되어 [API 명세](API_SPEC.md)와 OpenAPI에 편입됐다. 목표 19개 중 화면용 upload adapter를 제외한 18개가 구현됐다.
 
 ### 4.3 온보딩·조건부 API
 
@@ -108,7 +108,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 현장 변경 화면을 지원하기 위해 목표 17개 밖의 업체용 `GET /field-issues`,
 `POST /change-proposals`, `POST /change-proposals/{id}/explanation`도 실행 계약으로 등록됐다.
 
-## 5. 현재 서버 업무 operation 51개
+## 5. 현재 서버 업무 operation 57개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -158,6 +158,12 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/change-requests/{change_request_id}/clarification` | 현장기사에게 설명 요청 | 최종 decision action으로 통합 |
 | `POST /api/v1/move-jobs/{job_id}/change-requests/{change_request_id}/explanation` | 현장기사 설명 제출 | 별도 화면 승인 전 frontend에서 제외 |
 | `POST /api/v1/move-jobs/{job_id}/change-requests/{change_request_id}/decision` | 현장 변경 승인·거절 | `change-proposals/{id}/decision`에 재사용 |
+| `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 대표 현장기사 완료 checklist·근무·현장 확인·선택적 미디어 제출 | 현장기사 완료 화면의 실행 계약; 정확 replay와 문제 뒤 정정 지원 |
+| `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료·최종 금액·변경·요청·문서·보존 상태 조회 | 업체 완료와 고객 완료 확인 화면의 단일 view |
+| `POST /api/v1/move-jobs/{job_id}/completion-requests` | 업체의 최신 완료 제출 고객 확인 요청 | 7일 만료와 고객 notification intent를 포함한 멱등 command |
+| `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/revoke` | 업체의 살아 있는 완료 요청 철회 | 재점검·잘못 보낸 요청을 이력 보존 상태로 철회 |
+| `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 고객 완료 확인 또는 문제 신고 | 확인 시 완료·감사·보존을 원자 반영하고 문제는 책임판단 없이 별도 기록 |
+| `GET /api/v1/move-jobs/{job_id}/documents/archive` | 견적·변경·완료·결정 PDF와 manifest ZIP | 업체 전용 결정적 문서 package; 준비 전 `409` |
 | `POST /api/v1/move-jobs/{job_id}/completion-confirmations` | 고객·업체 완료 확인 | 고객 완료 결정과 업체 완료 요청 흐름으로 재구성 |
 | `GET /api/v1/move-jobs/{job_id}/completion-confirmations` | 완료 확인 이력 조회 | `completion-summary`에 흡수 |
 | `GET /api/v1/move-jobs/{job_id}/audit-events` | 전체 감사 이력 조회 | 내부 유지; 화면에는 필요한 요약만 제공 |
@@ -184,22 +190,24 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 | `GET /edgez` | 일반 public traffic 경로 확인 | 사용하지 않음 |
 | `GET /readyz` | DB 연결 readiness 확인 | 사용하지 않음 |
 
-## 7. 남은 backend 범위
+## 7. 남은 backend·연동 범위
 
-### 계약·조회 재구성
+### 조건부 계약·조회 재구성
 
-- 남은 화면 단위 view 1개: `completion-summary`
-- 후속 공통 `JobHeader`, `ScopeLineV2`; `QuoteSnapshot`과 signed 범위 preview v1은 구현됨
+- 완료 포함 화면 단위 view와 command는 구현됨
+- 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
+- 후속 공통 `JobHeader`, `ScopeLineV2`; `QuoteSnapshot`과 signed 범위·완료 preview v1은 구현됨
 - 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
-### 신규 업무 상태
+### frontend 연동
 
-- 작업자 완료 제출, 완료 확인 요청, 고객 결정·문제 신고
-- 문서 생성 상태와 ZIP archive
+- scope·변경·배차·완료 화면은 아직 FE local state/timer를 실제 API query·mutation으로 교체해야 함
+- 완료 제출의 capture upload·READY polling, 고객 요청 deep link 전달과 `409` 최신 상태 복구를 브라우저 E2E로 검증
+- canonical HTTPS origin 구매·배포 뒤 API와 GCS CORS를 임시 origin에서 교체
 
-### 예상 migration
+### migration
 
-INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`을 추가했다. 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. 단일 head는 `int_04_0001`이며 기존 범위 version, 승인, 변경요청, media, audit, notification table을 재사용한다.
 
 ## 8. frontend 연동 기준
 
@@ -209,5 +217,5 @@ INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_
 - FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
-- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. `scope-review` 4개와 현장 이슈·변경 제안 6개 operation도 실행 계약과 권한·멱등·충돌 test가 준비돼 FE가 연동할 수 있다.
+- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. `scope-review` 4개, 현장 이슈·변경 제안 6개, 배차·브리프·체크인 5개와 완료 6개 operation도 실행 계약과 권한·멱등·충돌 test가 준비돼 FE가 연동할 수 있다.
 - FE canonical HTTPS origin이 생기기 전에는 staging 임시 origin과 GCS bucket CORS를 교체하지 않는다.

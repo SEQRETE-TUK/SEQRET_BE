@@ -35,11 +35,11 @@ query·mutation을 수행한다. 나머지 demo 화면 전이는
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
-이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개, `scope-review` 조회·제안·수정요청·확인
-4개, 변경 제안 조회·결정 2개와 현장 이슈 보고가 현재 OpenAPI에 등록됐다. 업체 이슈 목록·변경
-제안·설명 3개와 소비자 onboarding·역할 초대 8개 operation도 별도 실행 계약으로 등록됐다. 나머지는 제품
-범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
-frontend 실행 계약이 된다.
+승인된 19개 화면 경로 중 `media-uploads` 단순화 adapter를 제외한 18개가 현재 OpenAPI에
+등록됐다. 업체 이슈 목록·변경 제안·설명, 완료 요청 철회와 소비자 onboarding·역할 초대도 화면
+복구·lifecycle을 위한 별도 실행 계약으로 등록됐다. 나머지 대안 경로는 제품 범위와 A 소유 업무
+계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야 frontend 실행
+계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
 이 초안만으로 client를 생성하거나 현재 route를 제거하지 않는다.
 
@@ -51,8 +51,9 @@ B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 �
 4. 화면에 없는 운영·정합성·감사·background job API는 frontend contract에서 제외한다.
 5. 전화, 채팅과 길 안내는 외부 앱 URI로 처리하고 별도 backend API를 만들지 않는다.
 
-기존 8개 화면을 위한 제안 API는 **17개**다. 추가 P0 화면 2개의 승인 여부에 따라 19개로
-확장할 수 있다. 시스템 운영 endpoint 3개는 별도이며 frontend가 호출하지 않는다.
+기존 8개 화면 17개와 승인된 완료 P0 화면 2개를 합친 목표 API는 **19개**다. 현재 18개가
+구현됐고, 기존 3단계 capture 계약을 보존할 화면용 `media-uploads` adapter만 조건부로 남는다.
+시스템 운영 endpoint 3개는 별도이며 frontend가 호출하지 않는다.
 
 ## 2. 공통 규약
 
@@ -159,9 +160,11 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 체크리스트, 근무 기록, 변경·금액·문서 요약 조회 | 업체 | 기존 완료·감사 data 재구성 필요 |
-| `POST` | `/api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 완료 확인 요청 전송 | 업체 | 미구현 |
-| `GET` | `/api/v1/move-jobs/{job_id}/documents/archive` | 화면에 표시된 증빙 PDF를 ZIP으로 일괄 다운로드 | 업체 | 미구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 체크리스트, 근무 기록, 변경·금액·요청·문서 요약 조회 | 업체, 요청받은 고객 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/completion-requests` | 최신 완료 제출의 7일 고객 확인 요청 생성 | 업체 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/completion-requests/{request_id}/revoke` | 살아 있는 고객 확인 요청 철회 | 업체 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 별도 문제 신고 | 고객 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF 4종과 manifest를 ZIP으로 일괄 다운로드 | 업체 | 구현 |
 
 ### 3.6 현장기사
 
@@ -172,6 +175,7 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
 | `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 업체에 보고 | 현장기사 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 업체, 현장기사 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/completion-submissions` | 완료 checklist, 실제 근무, 현장 확인과 선택적 완료 미디어 제출 | 대표 현장기사 | 구현 |
 
 ## 4. 화면 조회 계약
 
@@ -288,22 +292,21 @@ resource provider가 만든 작업별 후보와 요구사항을 immutable snapsh
 Response `CompletionSummaryView`:
 
 - `job: JobHeader`
-- `completed_at`, `final_amount_krw`, `duration_minutes`
+- `job_status`, `completion_submission_id`, `completed_at`, `final_amount_krw`, `duration_minutes`
 - `completion_media[]`, `completion_media_count`
 - `checklist: {completed_count, total_count}`
-- `onsite_signature_completed`
+- `onsite_confirmation_completed`
 - `worker_shifts[]`: 작업자, 역할, 시작·종료, 근무시간
-- `field_changes[]`: 제목, 승인 시각, 증감 금액
-- `quote: QuoteSnapshot`
-- `completion_request_status: not_requested|requested`
-- `completion_requested_at`
-- `approved_scope_version_label`
-- `documents[]`: 문서명, 생성 상태
-- `retention_until`, `problem_report_count`
+- `field_changes[]`: 제안 ID, 제목, 상태, 승인 시각, 증감·최종 금액
+- `quote: QuoteSnapshot|null`
+- `completion_request`: 요청 ID, 제출 ID, `requested|confirmed|issue_reported|revoked|expired`, 요청·만료·결정 시각, 추가금 응답과 선택적 문제 기록
+- `approved_scope_version_id`, `approved_scope_version_label`
+- `documents[]`: `quote|changes|completion|decision`, 문서명, `ready|not_ready`
+- `archive_ready`, `retention_until`, `problem_report_count`
 
-와이어프레임에 고객의 완료 확인 수신 화면이 없으므로 이번 contract는 요청 전송까지만 정의한다. 고객 확인 action은 해당 화면이 추가되기 전에는 API로 만들지 않는다.
+업체는 제출 전에도 요약을 읽을 수 있지만 문서는 견적과 완료 제출이 모두 있을 때만 준비된다. 고객은 자신에게 완료 요청이 생성된 뒤에만 같은 요약을 읽는다. completion 미디어 preview는 `READY` 객체의 generation-pinned 5분 HTTPS URL이며 object key와 generation은 반환하지 않는다.
 
-`GET /documents/archive`는 `200 application/zip`과 `Content-Disposition` 파일명을 반환한다. 화면의 필수 문서가 아직 준비되지 않았으면 빈 archive 대신 `409`를 반환한다.
+`GET /documents/archive`는 견적서, 변경 승인 기록, 작업 완료 기록, 완료 확인 기록 PDF와 schema v1 `manifest.json`을 담은 결정적 `200 application/zip`과 `Content-Disposition` 파일명을 반환한다. 화면의 필수 문서가 아직 준비되지 않았으면 빈 archive 대신 `409`를 반환한다. 외부 PDF provider 실패가 완료 사실을 변경하지 않는다.
 
 ### 4.7 `GET /field-brief`
 
@@ -314,7 +317,8 @@ Response `FieldBriefView`:
 - `start_at`, `masked_origin`, `masked_destination`
 - `lead_worker_name`, `lead_worker_call_uri`, `company_chat_uri`
 - `origin_conditions[]`, `field_check_required_count`
-- `assigned_vehicle`, `assigned_worker_count`, `required_skills[]`
+- `completion_check_items[]`, `completion_required_count`, `completion_submission_id`
+- `assigned_vehicle`, `assigned_workers[]`, `assigned_worker_count`, `required_skills[]`
 - `safety_notice`, `navigation_uri`
 - `checked_in_at`
 
@@ -475,6 +479,11 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
   "required_skills": ["대형가구", "포장"],
   "required_certifications": ["화물운송"],
   "check_in_items": [{"key": "safety", "label": "안전 장비 확인"}],
+  "completion_check_items": [
+    {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
+    {"key": "site_restored", "label": "출발지와 도착지 정리"},
+    {"key": "changes_recorded", "label": "변경·이슈 기록 확인"}
+  ],
   "origin_conditions": ["엘리베이터 사용 가능"],
   "safety_notice": "고객 확인 전 운반을 시작하지 않습니다.",
   "vehicles": [{
@@ -531,15 +540,62 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 - 검증과 저장이 모두 성공한 뒤 `dispatch_confirmed.v1`과 현장기사 알림 intent를 한 번만 생성한다.
 - 성공: `200 DispatchView`; 정확히 같은 command 재전송은 같은 확정을 반환하고 다른 선택은 `409`다.
 
-### 5.7 완료 확인 요청
+### 5.7 현장 완료 제출
+
+`POST /completion-submissions`
+
+```json
+{
+  "client_reference": "uuid",
+  "dispatch_id": "uuid",
+  "scope_version_id": "uuid",
+  "completion_media_asset_ids": ["uuid"],
+  "completed_check_keys": ["tools_removed", "site_restored", "changes_recorded"],
+  "worker_shifts": [{
+    "worker_id": "uuid",
+    "started_at": "2026-08-15T09:00:00+09:00",
+    "ended_at": "2026-08-15T12:00:00+09:00"
+  }],
+  "onsite_customer_confirmed": true,
+  "onsite_confirmed_at": "2026-08-15T12:00:00+09:00",
+  "work_ended_at": "2026-08-15T12:00:00+09:00"
+}
+```
+
+- 체크인한 대표 현장기사만 현재 확정 배차와 잠긴 leaf 범위에 제출한다. setup의 완료 checklist와 배정 작업자 전체가 정확히 한 번씩 포함돼야 한다.
+- 완료 미디어는 선택 사항이다. 전달한 ID는 같은 기사가 업로드한 `READY` completion 객체여야 하고 generation이 고정돼야 한다.
+- 같은 `client_reference`와 정확한 payload는 최초 결과를 반환한다. 고객 문제 신고·요청 만료·철회 뒤에는 새 reference로 정정 제출할 수 있다.
+
+### 5.8 완료 확인 요청·철회·결정
 
 `POST /completion-requests`
 
-- body 없음
-- 이미 요청한 경우 기존 결과를 반환한다.
-- 성공: `201`, `{request_id, status: "requested", requested_at}`
+```json
+{
+  "client_reference": "uuid",
+  "completion_submission_id": "uuid"
+}
+```
 
-### 5.8 현장 체크인
+- 업체가 최신 제출 하나에 7일 유효한 요청을 생성한다. 같은 reference와 정확한 payload만 기존 결과를 반환한다.
+- `POST /completion-requests/{request_id}/revoke`는 `{ "reason": "..." }`으로 아직 살아 있는 요청만 철회한다.
+
+`POST /completion-requests/{request_id}/decision`
+
+```json
+{
+  "decision": "report_issue",
+  "problem_type": "missing_work",
+  "problem_description": "포장재 회수가 누락됐습니다.",
+  "unrecorded_extra_charge": null
+}
+```
+
+- 고객만 최신 살아 있는 요청을 `confirm|report_issue`로 결정한다. 확인 body에는 문제 필드를 넣지 않고, 문제 신고는 `missing_work|damage|amount|other`와 설명이 필수다.
+- 문제 신고는 작업을 완료하지 않고 정정 제출을 허용한다. 확인은 작업을 `completed`로 전이하고 선택적 완료 미디어의 보존 삭제 intent를 함께 만든다.
+- terminal 요청의 정확한 결정 replay는 같은 결과를 반환하고 상충 결정은 `409`다.
+
+### 5.9 현장 체크인
 
 `POST /check-ins`
 
@@ -554,7 +610,7 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 - 배정된 시작일 당일이며 확정 배차에 포함된 대표 현장기사만 호출할 수 있다.
 - 성공: `201`, `{check_in_id, dispatch_id, participant_id, confirmed_check_keys, checked_in_at}`. 같은 key 집합의 재전송은 최초 시각을 반환한다.
 
-### 5.9 증빙 upload URL
+### 5.10 증빙 upload URL
 
 `POST /media-uploads`
 
@@ -672,11 +728,13 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | 고객 작업범위 확인 | `GET /scope-review` | `수정 요청` → `revision-request`; `이 범위 확인` → `confirm` |
 | 고객 사진·AI 검토 | `GET /analysis-review` | `AI 검토 완료` → `analysis-review/complete` |
 | 고객 현장 변경 승인 | `GET /change-proposals/{id}` | `설명 요청 또는 거절`, `변경 승인하기` → `change-proposals/{id}/decision`의 decision 구분 |
+| 고객 완료 확인 | `GET /completion-summary` | `완료 확인` 또는 `문제 신고` → `completion-requests/{id}/decision` |
 | 업체 작업범위 검토·확정 | `GET /scope-review` | `수정안 고객에게 보내기` → `POST /scope-proposals` |
 | 업체 배차·인력 배정 | `GET /dispatch` | `배정 확정 및 알림 발송` → `PUT /dispatch` |
 | 업체 완료·변경 내역 | `GET /completion-summary` | `완료 확인 요청 보내기` → `POST /completion-requests`; `PDF 일괄 내려받기` → `GET /documents/archive` |
 | 현장기사 상세·체크인 | `GET /field-brief` | `현장 도착 체크인` → `POST /check-ins`; 전화·채팅·길 안내는 신뢰 source가 없어 현재 비활성 |
 | 현장기사 변경·이슈 보고 | `GET /field-brief`의 공통 context | `＋ 추가`는 기존 capture upload·complete 계약 사용; `업체에 이슈 보고` → `POST /field-issues`; `팀장에게 먼저 알리기`는 전화 URI |
+| 현장기사 완료 기록 | `GET /field-brief` | 완료 media는 기존 capture upload·complete; `작업 완료 제출` → `POST /completion-submissions` |
 
 ## 8. frontend contract에서 제외한 항목
 
@@ -696,12 +754,13 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 46개 path와 54개 operation이 있다. `/api/v1` 업무 operation 51개와
+현재 OpenAPI에는 52개 path와 60개 operation이 있다. `/api/v1` 업무 operation 57개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
-배차 조회·확정 2개와 field brief·체크인이 실행 계약으로 등록됐다. 배차 setup, 업체 이슈
-목록·변경 제안·설명 3개와 소비자 onboarding·역할 초대 8개 operation도 별도 실행 계약으로
-등록됐다. 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
+배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
+실행 계약으로 등록됐다. 배차 setup, 업체 이슈 목록·변경 제안·설명 3개와 소비자 onboarding·역할
+초대 8개 operation도 별도 실행 계약으로 등록됐다. 남은 단순화 제안 경로와 FE PRD 부록의 대안
+경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
@@ -715,7 +774,8 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
 | change request 생성·목록·증거 read URL·설명·결정 | 호환 경로로 유지한다. 일반 FE는 역할을 분리하고 증거 preview를 묶은 `field-issues`와 `change-proposals` 실행 계약을 사용한다. |
-| completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |
+| completion 제출·요약·요청·철회·결정·문서 6개 | FE 완료 화면용 실행 계약이다. 기존 confirmation·audit는 내부 이력 원본으로 호환 유지한다. |
+| completion 확인 목록·audit 목록·notification 목록 | 내부 호환·운영 경로로 유지하고 화면은 `completion-summary`를 사용한다. |
 | background job 생성·목록·재시도 3개 | 내부 운영 기능으로 유지하고 frontend 계약에서 제외 |
 | `/healthz`, `/edgez`, `/readyz` | 유지하되 운영 endpoint로 분류 |
 

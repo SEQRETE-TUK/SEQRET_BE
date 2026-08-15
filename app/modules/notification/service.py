@@ -38,6 +38,9 @@ NOTIFICATION_ROLES = {
     DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1: frozenset(
         {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER}
     ),
+    DomainEventType.COMPLETION_SUBMITTED_V1: frozenset({ParticipantRole.COMPANY_MANAGER}),
+    DomainEventType.COMPLETION_REQUESTED_V1: frozenset({ParticipantRole.CUSTOMER}),
+    DomainEventType.COMPLETION_DECIDED_V1: frozenset({ParticipantRole.COMPANY_MANAGER}),
 }
 NOTIFICATION_STATUS_TRANSITIONS = {
     NotificationStatus.PENDING: frozenset({NotificationStatus.SENT, NotificationStatus.FAILED}),
