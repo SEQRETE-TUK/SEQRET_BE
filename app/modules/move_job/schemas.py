@@ -77,6 +77,24 @@ class MoveJobCreate(RequestModel):
         return self
 
 
+class CustomerMoveJobCreate(RequestModel):
+    """Self-service command that grants only the creating customer capability."""
+
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    scheduled_at: datetime | None = None
+    customer_display_name: Annotated[str, Field(min_length=1, max_length=100)]
+    locations: Annotated[tuple[LocationCreate, ...], Field(min_length=1, max_length=2)]
+
+    @model_validator(mode="after")
+    def require_unique_locations_and_aware_time(self) -> "CustomerMoveJobCreate":
+        kinds = [location.kind for location in self.locations]
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("location kinds must be unique within a job")
+        if self.scheduled_at is not None and self.scheduled_at.utcoffset() is None:
+            raise ValueError("scheduled_at must include a timezone")
+        return self
+
+
 class ParticipantResponse(ContractModel):
     id: UUID
     role: ParticipantRole
@@ -110,3 +128,10 @@ class MoveJobResponse(ContractModel):
 class MoveJobCreatedResponse(ContractModel):
     job: MoveJobResponse
     access_links: tuple[AccessLinkResponse, ...]
+
+
+class CustomerMoveJobCreatedResponse(ContractModel):
+    """Self-service creation result with no capability for another role."""
+
+    job: MoveJobResponse
+    customer_access_link: AccessLinkResponse

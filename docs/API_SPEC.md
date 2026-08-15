@@ -4,7 +4,7 @@
 >
 > 기준일: 2026-08-15
 >
-> backend 기능 기준 코드: `origin/main` `e922f08e26f860de28541db99823f66a9942484f`
+> backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
 > `16b4a98b812e798ad62942f0d82d5d6d7e715068`
@@ -35,7 +35,8 @@ query·mutation을 수행한다. 나머지 demo 화면 전이는
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
-이 문서의 17개 경로 중 `analysis-review` 조회·완료 2개만 현재 OpenAPI에 등록됐다. 나머지는 제품
+이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개가 현재 OpenAPI에 등록됐다. 별도의
+소비자 onboarding 실행 계약도 등록됐다. 나머지는 제품
 범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
 frontend 실행 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
@@ -95,6 +96,19 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 모든 JSON 응답에는 `x-request-id` header가 포함된다. token, signed URL, 전화번호, 주소 원문과 미디어 원본은 로그에 기록하지 않는다.
 
 ## 3. 제안 API 목록
+
+### 3.0 소비자 onboarding 실행 계약
+
+| Method | Path | 용도 | 인증 | 구현 상태 |
+| --- | --- | --- | --- | --- |
+| `POST` | `/api/v1/move-jobs/onboarding` | 작업과 고객 참여자·고객 전용 capability 하나 생성 | 공개 | 구현 |
+
+요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
+`locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`과
+1~100개의 고유한 `room_zones`를 가진다. 응답은 `job`과 `customer_access_link`만 반환하며
+업체·현장기사 참여자나 secret을 미리 만들지 않는다. secret 응답은 `Cache-Control: no-store`다.
+업체와 현장기사 참여는 A-02 invitation lifecycle이 담당한다. 기존 `POST /move-jobs`의 세 역할
+동시 생성은 신뢰 bootstrap 호환 계약이며 일반 frontend onboarding에서 호출하지 않는다.
 
 ### 3.1 고객·업체 공통 범위
 
@@ -544,7 +558,7 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 | 제외 항목 | 처리 방식 |
 | --- | --- |
-| 작업·참여자·access link 생성·철회 | 이 8개 화면 제안에서는 seed/admin 과정. 최신 FE의 작업 생성·초대 demo를 실제 MVP에 넣으려면 별도 제품·계약 결정 필요 |
+| 기존 세 역할 bootstrap과 운영용 link 회전 | 소비자 생성은 `/move-jobs/onboarding`을 사용한다. 역할별 초대·폐기·재발급은 A-02 실행 계약으로 분리한다. |
 | 일반 작업·scope·change·completion CRUD/list | 화면 단위 view와 command로 대체 |
 | notification 목록·읽음 처리 | 목록 화면이 없으므로 header count만 view에 포함 |
 | audit event 전체 조회 | 화면에 필요한 변경·완료 기록만 completion summary에 포함 |
@@ -558,13 +572,15 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 26개 path와 31개 operation이 있다. `/api/v1` 업무 operation 28개와
+현재 OpenAPI에는 27개 path와 32개 operation이 있다. `/api/v1` 업무 operation 29개와
 운영 operation 3개다. 이 문서의 제안 17개 중 `analysis-review` 조회·완료 2개가 실행 계약으로
-등록됐으며 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
+등록됐고 소비자 onboarding 1개가 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
+부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
-| `POST /move-jobs`, access-link 생성·철회 | 현재 bootstrap·운영 계약을 유지한다. 신뢰 bootstrap과 전달 채널이 결정된 뒤 공개 범위 변경을 별도 계약으로 다룬다. |
+| `POST /move-jobs/onboarding` | 소비자 작업과 고객 capability 하나만 생성하는 공개 실행 계약이다. |
+| `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |

@@ -7,18 +7,37 @@ from fastapi import APIRouter, HTTPException, Response, status
 from app.api.errors import protected_error_responses
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.move_job.schemas import (
+    CustomerMoveJobCreate,
+    CustomerMoveJobCreatedResponse,
     MoveJobCreate,
     MoveJobCreatedResponse,
     MoveJobResponse,
 )
 from app.modules.move_job.service import (
     MoveJobNotFoundError,
+    create_customer_move_job,
     create_move_job,
     get_move_job,
 )
 from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["move-jobs"])
+
+
+@router.post(
+    "/onboarding",
+    response_model=CustomerMoveJobCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="소비자 작업과 전용 링크 생성",
+)
+async def create_customer_move_job_endpoint(
+    command: CustomerMoveJobCreate,
+    response: Response,
+    session: Session,
+) -> CustomerMoveJobCreatedResponse:
+    created = await create_customer_move_job(session, command)
+    response.headers["Cache-Control"] = "no-store"
+    return created
 
 
 @router.post(

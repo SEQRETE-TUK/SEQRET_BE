@@ -6,11 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.contracts.actor import ParticipantRole
 from app.modules.access.service import issue_access_link
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, MoveJob, RoomZone
 from app.modules.move_job.schemas import (
+    CustomerMoveJobCreate,
+    CustomerMoveJobCreatedResponse,
+    LocationCreate,
     LocationResponse,
     MoveJobCreate,
     MoveJobCreatedResponse,
@@ -22,6 +26,33 @@ from app.modules.move_job.schemas import (
 
 class MoveJobNotFoundError(LookupError):
     """Raised when a move job does not exist."""
+
+
+def _locations_from_command(locations: tuple[LocationCreate, ...]) -> list[Location]:
+    """Build owned location rows from a validated creation command."""
+
+    return [
+        Location(
+            kind=item.kind,
+            label=item.label,
+            room_zones=[
+                RoomZone(name=zone.name, sort_order=zone.sort_order) for zone in item.room_zones
+            ],
+        )
+        for item in locations
+    ]
+
+
+def _record_job_created(session: AsyncSession, job: MoveJob) -> None:
+    add_audit_event(
+        session,
+        job.id,
+        AuditEventType.JOB_CREATED,
+        payload={
+            "participant_roles": sorted(participant.role.value for participant in job.participants),
+            "location_kinds": sorted(location.kind.value for location in job.locations),
+        },
+    )
 
 
 async def _load_move_job(session: AsyncSession, job_id: UUID) -> MoveJob | None:
@@ -79,31 +110,37 @@ async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> Move
         JobParticipant(role=item.role, display_name=item.display_name)
         for item in command.participants
     ]
-    job.locations = [
-        Location(
-            kind=item.kind,
-            label=item.label,
-            room_zones=[
-                RoomZone(name=zone.name, sort_order=zone.sort_order) for zone in item.room_zones
-            ],
-        )
-        for item in command.locations
-    ]
+    job.locations = _locations_from_command(command.locations)
     session.add(job)
     await session.flush()
-    add_audit_event(
-        session,
-        job.id,
-        AuditEventType.JOB_CREATED,
-        payload={
-            "participant_roles": sorted(participant.role.value for participant in job.participants),
-            "location_kinds": sorted(location.kind.value for location in job.locations),
-        },
-    )
+    _record_job_created(session, job)
     access_links = tuple(
         [await issue_access_link(session, participant) for participant in job.participants]
     )
     return MoveJobCreatedResponse(job=_to_response(job), access_links=access_links)
+
+
+async def create_customer_move_job(
+    session: AsyncSession,
+    command: CustomerMoveJobCreate,
+) -> CustomerMoveJobCreatedResponse:
+    """Create a customer-owned job without pre-issuing another role's access."""
+
+    job = MoveJob(title=command.title, scheduled_at=command.scheduled_at)
+    customer = JobParticipant(
+        role=ParticipantRole.CUSTOMER,
+        display_name=command.customer_display_name,
+    )
+    job.participants = [customer]
+    job.locations = _locations_from_command(command.locations)
+    session.add(job)
+    await session.flush()
+    _record_job_created(session, job)
+    access_link = await issue_access_link(session, customer)
+    return CustomerMoveJobCreatedResponse(
+        job=_to_response(job),
+        customer_access_link=access_link,
+    )
 
 
 async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
