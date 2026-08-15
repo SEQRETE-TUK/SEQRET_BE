@@ -1,6 +1,6 @@
 """Fast migration graph and SQLite compatibility tests."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_01_0001"
+ALEMBIC_HEAD = "a_02_0002"
+ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_MEDIA_VALIDATION_PREVIOUS = "a_08_0002"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -36,6 +37,7 @@ BUSINESS_TABLES = {
     "media_asset",
     "move_job",
     "participant_access_token",
+    "participant_invitation",
     "room_zone",
     "scope_version",
     "scope_approval",
@@ -69,6 +71,124 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_invitation_history_blocks_schema_downgrade(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'invitation-guard.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "participant_access_token",
+                "participant_invitation",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        customer_id = uuid4().hex
+        manager_id = uuid4().hex
+        access_link_id = uuid4().hex
+        customer_access_link_id = uuid4().hex
+        invitation_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "invitation guard",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                [
+                    {
+                        "id": customer_id,
+                        "job_id": job_id,
+                        "role": "CUSTOMER",
+                        "display_name": "customer",
+                        "created_at": now,
+                    },
+                    {
+                        "id": manager_id,
+                        "job_id": job_id,
+                        "role": "COMPANY_MANAGER",
+                        "display_name": "manager",
+                        "created_at": now,
+                    },
+                ],
+            )
+            connection.execute(
+                metadata.tables["participant_access_token"].insert(),
+                [
+                    {
+                        "id": access_link_id,
+                        "participant_id": manager_id,
+                        "token_hash": "a" * 64,
+                        "expires_at": now + timedelta(days=7),
+                        "created_at": now,
+                    },
+                    {
+                        "id": customer_access_link_id,
+                        "participant_id": customer_id,
+                        "token_hash": "b" * 64,
+                        "expires_at": now + timedelta(days=7),
+                        "created_at": now,
+                    },
+                ],
+            )
+            connection.execute(
+                metadata.tables["participant_invitation"].insert(),
+                {
+                    "id": invitation_id,
+                    "job_id": job_id,
+                    "issuer_participant_id": customer_id,
+                    "invitee_participant_id": manager_id,
+                    "access_link_id": access_link_id,
+                    "role": "COMPANY_MANAGER",
+                    "status": "PENDING",
+                    "issued_at": now,
+                    "expires_at": now + timedelta(days=7),
+                    "created_at": now,
+                },
+            )
+
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                metadata.tables["participant_invitation"].insert(),
+                {
+                    "id": uuid4().hex,
+                    "job_id": job_id,
+                    "issuer_participant_id": manager_id,
+                    "invitee_participant_id": customer_id,
+                    "access_link_id": customer_access_link_id,
+                    "role": "CUSTOMER",
+                    "status": "PENDING",
+                    "issued_at": now,
+                    "expires_at": now + timedelta(days=7),
+                    "created_at": now,
+                },
+            )
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, "int_01_0001")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            connection.execute(metadata.tables["participant_invitation"].delete())
+        command.downgrade(configuration, "int_01_0001")
+        assert "participant_invitation" not in inspect(engine).get_table_names()
+        command.upgrade(configuration, "head")
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("history_table", ("audit_event", "completion_confirmation"))
@@ -573,7 +693,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_INVITATION_PREVIOUS
         with engine.begin() as connection:
             connection.execute(migrated_metadata.tables["capture_analysis_dispatch"].delete())
         command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)

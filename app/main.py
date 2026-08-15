@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.routes.system import router as system_router
 from app.config import AppEnvironment, Settings
+from app.modules.access.router import identity_router
 from app.modules.access.router import router as access_router
 from app.modules.analysis_review.router import router as analysis_review_router
 from app.modules.background_job.router import router as background_job_router
@@ -81,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.database_session_factory = None
     application.state.storage_port = None
     application.include_router(system_router)
+    application.include_router(identity_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(access_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(capture_router, prefix=runtime_context.settings.api_prefix)

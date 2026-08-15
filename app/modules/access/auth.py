@@ -35,9 +35,11 @@ async def get_bearer_secret(
 BearerSecret = Annotated[str, Depends(get_bearer_secret)]
 
 
-async def get_current_actor(
-    secret: BearerSecret,
+async def _authenticate_request(
+    secret: str,
     request: Request,
+    *,
+    allow_pending_invitation: bool,
 ) -> ActorContext:
     try:
         settings = request.app.state.runtime_context.settings
@@ -51,6 +53,7 @@ async def get_current_actor(
                 rate_limit_requests=settings.access_rate_limit_requests,
                 rate_limit_window_seconds=settings.access_rate_limit_window_seconds,
                 cache_timeout_seconds=settings.cache_timeout_seconds,
+                allow_pending_invitation=allow_pending_invitation,
             )
             assert actor.job_id is not None
             set_correlation_job(actor.job_id)
@@ -69,7 +72,32 @@ async def get_current_actor(
         ) from error
 
 
+async def get_current_actor(
+    secret: BearerSecret,
+    request: Request,
+) -> ActorContext:
+    return await _authenticate_request(
+        secret,
+        request,
+        allow_pending_invitation=False,
+    )
+
+
 CurrentActor = Annotated[ActorContext, Depends(get_current_actor)]
+
+
+async def get_invitation_actor(
+    secret: BearerSecret,
+    request: Request,
+) -> ActorContext:
+    return await _authenticate_request(
+        secret,
+        request,
+        allow_pending_invitation=True,
+    )
+
+
+InvitationActor = Annotated[ActorContext, Depends(get_invitation_actor)]
 
 
 def authorize_job_actor(

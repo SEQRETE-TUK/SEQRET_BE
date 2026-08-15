@@ -36,7 +36,7 @@ query·mutation을 수행한다. 나머지 demo 화면 전이는
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
 이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개가 현재 OpenAPI에 등록됐다. 별도의
-소비자 onboarding 실행 계약도 등록됐다. 나머지는 제품
+소비자 onboarding·역할 초대 실행 계약 8개 operation도 등록됐다. 나머지는 제품
 범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
 frontend 실행 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
@@ -97,18 +97,29 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 
 ## 3. 제안 API 목록
 
-### 3.0 소비자 onboarding 실행 계약
+### 3.0 소비자 onboarding·역할 초대 실행 계약
 
 | Method | Path | 용도 | 인증 | 구현 상태 |
 | --- | --- | --- | --- | --- |
 | `POST` | `/api/v1/move-jobs/onboarding` | 작업과 고객 참여자·고객 전용 capability 하나 생성 | 공개 | 구현 |
+| `GET` | `/api/v1/me` | 현재 역할·초대 상태·명시적 permission 조회 | 모든 link | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/invitations` | 다음 역할 초대와 one-time secret 발급 | 고객, 업체 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/invitations` | 본인이 발급했거나 받은 초대 목록 | 고객, 업체 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/accept` | 받은 초대 수락 | pending 초대 대상 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/decline` | 받은 초대 거절·link 철회 | pending 초대 대상 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/revoke` | 발급한 초대·하위 초대 철회 | 발급자 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 기존 link·하위 초대 철회 후 재발급 | 발급자 | 구현 |
 
 요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
 `locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`과
 1~100개의 고유한 `room_zones`를 가진다. 응답은 `job`과 `customer_access_link`만 반환하며
 업체·현장기사 참여자나 secret을 미리 만들지 않는다. secret 응답은 `Cache-Control: no-store`다.
-업체와 현장기사 참여는 A-02 invitation lifecycle이 담당한다. 기존 `POST /move-jobs`의 세 역할
-동시 생성은 신뢰 bootstrap 호환 계약이며 일반 frontend onboarding에서 호출하지 않는다.
+초대 순서는 소비자→업체, 수락 업체→현장기사로 고정한다. 상태는
+`pending|accepted|declined|expired|revoked`이며 pending token은 `/me`와 자기 수락·거절 외 업무
+API에서 401이다. 하위 link 만료는 발급자 만료를 넘지 않고 상위 초대 폐기·재발급 또는 발급자
+access-link 직접 철회는 하위 초대를 함께 철회한다. 기존 `POST /move-jobs`의 세 역할 동시 생성은 신뢰 bootstrap 호환 계약이며 일반
+frontend onboarding에서 호출하지 않는다. secret 응답은 `Cache-Control: no-store`이며 frontend는
+query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 ### 3.1 고객·업체 공통 범위
 
@@ -558,7 +569,7 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 | 제외 항목 | 처리 방식 |
 | --- | --- |
-| 기존 세 역할 bootstrap과 운영용 link 회전 | 소비자 생성은 `/move-jobs/onboarding`을 사용한다. 역할별 초대·폐기·재발급은 A-02 실행 계약으로 분리한다. |
+| 기존 세 역할 bootstrap과 운영용 자기 link 회전 | 일반 frontend는 onboarding·invitation 실행 계약을 사용한다. 기존 route는 신뢰 bootstrap·운영 호환 범위다. |
 | 일반 작업·scope·change·completion CRUD/list | 화면 단위 view와 command로 대체 |
 | notification 목록·읽음 처리 | 목록 화면이 없으므로 header count만 view에 포함 |
 | audit event 전체 조회 | 화면에 필요한 변경·완료 기록만 completion summary에 포함 |
@@ -572,14 +583,15 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 27개 path와 32개 operation이 있다. `/api/v1` 업무 operation 29개와
+현재 OpenAPI에는 33개 path와 39개 operation이 있다. `/api/v1` 업무 operation 36개와
 운영 operation 3개다. 이 문서의 제안 17개 중 `analysis-review` 조회·완료 2개가 실행 계약으로
-등록됐고 소비자 onboarding 1개가 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
+등록됐고 소비자 onboarding·역할 초대 8개 operation이 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
 | `POST /move-jobs/onboarding` | 소비자 작업과 고객 capability 하나만 생성하는 공개 실행 계약이다. |
+| `GET /me`, invitation 생성·목록·action | 역할별 landing, 단계적 초대와 link lifecycle의 공개 실행 계약이다. |
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |

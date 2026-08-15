@@ -15,7 +15,11 @@ from sqlalchemy.orm import joinedload
 from app.contracts.actor import ActorContext, ActorKind
 from app.contracts.ports import CachePort, ProviderError, ProviderErrorKind
 from app.contracts.primitives import JobId, ParticipantId, RequestId, utc_now
-from app.modules.access.models import ParticipantAccessToken
+from app.modules.access.models import (
+    InvitationStatus,
+    ParticipantAccessToken,
+    ParticipantInvitation,
+)
 from app.modules.access.schemas import AccessLinkResponse
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
@@ -46,14 +50,30 @@ def _hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
+def access_link_matches_secret(
+    access_link: ParticipantAccessToken,
+    secret: str,
+) -> bool:
+    """Bind a command to the exact capability generation authenticated by the request."""
+
+    return secrets.compare_digest(access_link.token_hash, _hash_secret(secret))
+
+
 async def issue_access_link(
     session: AsyncSession,
     participant: JobParticipant,
+    *,
+    actor_participant_id: UUID | None = None,
+    operation: str | None = None,
+    invitation_id: UUID | None = None,
+    expires_at_limit: datetime | None = None,
 ) -> AccessLinkResponse:
     """Issue the initial high-entropy credential for a new participant."""
 
     now = utc_now()
     expiry = now + ACCESS_TOKEN_TTL
+    if expires_at_limit is not None:
+        expiry = min(expiry, _as_utc(expires_at_limit))
 
     secret = secrets.token_urlsafe(32)
     access_link = ParticipantAccessToken(
@@ -63,15 +83,21 @@ async def issue_access_link(
     )
     session.add(access_link)
     await session.flush()
+    payload = {
+        "access_link_id": str(access_link.id),
+        "participant_id": str(participant.id),
+        "role": participant.role.value,
+    }
+    if operation is not None:
+        payload["operation"] = operation
+    if invitation_id is not None:
+        payload["invitation_id"] = str(invitation_id)
     add_audit_event(
         session,
         participant.job_id,
         AuditEventType.ACCESS_LINK_ISSUED,
-        payload={
-            "access_link_id": str(access_link.id),
-            "participant_id": str(participant.id),
-            "role": participant.role.value,
-        },
+        actor_participant_id=actor_participant_id,
+        payload=payload,
     )
     return AccessLinkResponse(
         id=access_link.id,
@@ -246,6 +272,7 @@ async def authenticate_access_token(
     rate_limit_requests: int,
     rate_limit_window_seconds: int,
     cache_timeout_seconds: float,
+    allow_pending_invitation: bool = False,
 ) -> ActorContext:
     """Resolve one active bearer secret into the shared actor contract."""
 
@@ -263,6 +290,16 @@ async def authenticate_access_token(
         access_link is None
         or access_link.revoked_at is not None
         or _as_utc(access_link.expires_at) <= now
+    ):
+        raise InvalidAccessTokenError
+
+    invitation = await session.scalar(
+        select(ParticipantInvitation).where(ParticipantInvitation.access_link_id == access_link.id)
+    )
+    if invitation is not None and (
+        invitation.status not in {InvitationStatus.PENDING, InvitationStatus.ACCEPTED}
+        or _as_utc(invitation.expires_at) <= now
+        or (invitation.status is InvitationStatus.PENDING and not allow_pending_invitation)
     ):
         raise InvalidAccessTokenError
 
@@ -294,7 +331,7 @@ async def authenticate_access_token(
             .values(last_used_at=now)
             .execution_options(synchronize_session=False)
         )
-    else:
+    elif invitation is None or invitation.status is InvitationStatus.ACCEPTED:
         add_audit_event(
             session,
             participant.job_id,
