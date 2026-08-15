@@ -4,10 +4,10 @@
 >
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `f8d0862255810bd9e9d51b27a4e0f8dc69070b00` + 이 A-06 변경
+> backend 기능 기준 코드: `origin/main` `e922f08e26f860de28541db99823f66a9942484f`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`
+> `16b4a98b812e798ad62942f0d82d5d6d7e715068`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,7 +21,7 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb)는
+2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/16b4a98b812e798ad62942f0d82d5d6d7e715068)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
@@ -29,7 +29,8 @@ Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·
 
 frontend source에는 `VITE_API_BASE_URL`, `/api/v1`로 제한한 공통 client, 명시적 Bearer 전달,
 opaque signed PUT helper와 TanStack Query provider·retry 정책이 있다. `/consumer/capture`는 이
-기반으로 촬영·upload·분석 완료까지 실제 query·mutation을 수행한다. 나머지 demo 화면 전이는
+기반으로 촬영·upload·분석 완료, AI 초안 조회·편집·완료와 `409` 최신 상태 복구까지 실제
+query·mutation을 수행한다. 나머지 demo 화면 전이는
 여전히 component `useState`와 timer로 실행된다. frontend PRD 부록의 `/v1/jobs`,
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
@@ -565,8 +566,8 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | --- | --- |
 | `POST /move-jobs`, access-link 생성·철회 | 현재 bootstrap·운영 계약을 유지한다. 신뢰 bootstrap과 전달 채널이 결정된 뒤 공개 범위 변경을 별도 계약으로 다룬다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
-| capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. 첫 E2E는 현재 계약으로 연결하고, 이후 frontend는 화면용 capture command/view로 축소할지 결정한다. |
-| analysis review 조회·완료 2개 | 최신 완료 분석의 공간별 검증 수·AI provenance를 고객에게 제공하고, 검토 결과를 AI 원본의 불변 자식 scope version으로 한 번만 생성한다. 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
+| capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
+| analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
 | scope version 생성·목록·approval | `scope-review`, `scope-proposals`, `confirm`으로 교체 |
 | change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |

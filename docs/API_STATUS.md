@@ -2,10 +2,10 @@
 
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `f8d0862255810bd9e9d51b27a4e0f8dc69070b00` + 이 A-06 변경
+> backend 기능 기준 코드: `origin/main` `e922f08e26f860de28541db99823f66a9942484f`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`
+> `16b4a98b812e798ad62942f0d82d5d6d7e715068`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -17,13 +17,13 @@
 | --- | ---: | --- |
 | 현재 FastAPI 등록 operation | 31개 | 26개 path의 업무 operation 28개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
-| FE 화면의 실제 backend API 호출 | 6개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출을 호출; 별도 signed PUT 1개 |
+| FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
 | 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
 | 추가 P0 화면 포함 시 backend 제안 API | 19개 | 작업 완료 제출과 고객 완료 결정 2개 추가 |
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
 | 핵심 업무 상태부터 새로 만들 제안 API | 8개 | 19개 제안 기준 배차, 체크인, 완료 제출·요청, 문서 등 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 26개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 28개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -44,11 +44,11 @@
 | 항목 | 확인 결과 | backend 판단 |
 | --- | --- | --- |
 | runtime | Vite 7, React 19, TypeScript | `TECH_STACK.md`의 Vite 선택과 일치 |
-| 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 촬영 경로 1개만 실제 API E2E이고 나머지는 시각 demo |
+| 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | `/consumer/capture`만 촬영부터 AI 초안 검토까지 실제 API E2E이고 나머지는 시각 demo |
 | 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | 시각·상호작용 검증 자료로 사용; API 완료로 보지 않음 |
-| server state | TanStack Query 기반 촬영 query·mutation·polling과 나머지 demo의 `useState`, `setTimeout`이 공존 | 촬영·분석 terminal 상태 복구는 구현; 다른 화면은 아직 server 정합성 증거 없음 |
-| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 승인된 첫 OpenAPI slice를 화면 query·mutation에 연결할 단계 |
-| CI·배포 | FE #4 `Frontend quality` 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
+| server state | TanStack Query 기반 촬영·AI 검토 query·mutation·polling과 나머지 demo의 `useState`, `setTimeout`이 공존 | 촬영·분석 terminal, AI 검토 완료와 `409` 최신 상태 복구는 구현; 다른 화면은 아직 server 정합성 증거 없음 |
+| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 승인된 capture와 `analysis-review` OpenAPI slice를 화면 query·mutation에 연결함 |
+| CI·배포 | FE #5·#6·#7 `Frontend quality` 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
 
 ### 3.2 계약 불일치
 
@@ -185,5 +185,5 @@ INT-01은 실제 migration `int_01_0001`과 `capture_analysis_dispatch`로 제�
 - FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
-- 첫 촬영 E2E slice는 FE #4로 연결됐다. 다음 화면은 `analysis-review` 계약을 사용하고, 추가 P0 화면 2개 포함 여부는 별도로 결정한다.
+- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. 다음 화면 후보인 `scope-review`는 실행 계약이 OpenAPI에 추가된 뒤에만 연동한다.
 - FE canonical HTTPS origin이 생기기 전에는 staging 임시 origin과 GCS bucket CORS를 교체하지 않는다.
