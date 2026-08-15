@@ -21,7 +21,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
-from app.contracts.actor import ParticipantRole
+from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.fakes import FakeObjectStorage
@@ -39,10 +39,19 @@ from app.contracts.primitives import (
     BackgroundJobId,
     CaptureSessionId,
     EventId,
+    JobId,
     MediaAssetId,
+    ParticipantId,
+    RequestId,
     TraceId,
 )
+from app.modules.access.invitations import (
+    accept_invitation,
+    create_invitation,
+    reissue_invitation,
+)
 from app.modules.access.models import ParticipantAccessToken
+from app.modules.access.schemas import InvitationCreate
 from app.modules.access.service import (
     InvalidAccessTokenError,
     _increment_database_rate_window,
@@ -96,12 +105,13 @@ from app.modules.completion.service import (
 )
 from app.modules.move_job.models import JobParticipant, LocationKind, MoveJob, MoveJobStatus
 from app.modules.move_job.schemas import (
+    CustomerMoveJobCreate,
     LocationCreate,
     MoveJobCreate,
     ParticipantCreate,
     RoomZoneCreate,
 )
-from app.modules.move_job.service import create_move_job, get_move_job
+from app.modules.move_job.service import create_customer_move_job, create_move_job, get_move_job
 from app.modules.notification.models import (
     EventConsumption,
     NotificationDelivery,
@@ -489,6 +499,116 @@ def test_postgresql_event_history_guards() -> None:
             command.upgrade(configuration, "head")
         finally:
             engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_invitation_locking_works_with_postgresql_relationship_loads() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+
+        def actor(
+            job_id: UUID,
+            participant_id: UUID,
+            role: ParticipantRole,
+        ) -> ActorContext:
+            return ActorContext(
+                actor_kind=ActorKind.PARTICIPANT,
+                participant_id=ParticipantId(participant_id),
+                participant_role=role,
+                job_id=JobId(job_id),
+                request_id=RequestId(uuid4()),
+                trace_id=TraceId("a" * 32),
+            )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_customer_move_job(
+                    session,
+                    CustomerMoveJobCreate(
+                        title="PostgreSQL invitation locking",
+                        customer_display_name="Customer",
+                        locations=(
+                            LocationCreate(
+                                kind=LocationKind.ORIGIN,
+                                label="Origin",
+                                room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                            ),
+                        ),
+                    ),
+                )
+            customer_id = created.customer_access_link.participant_id
+            customer_actor = actor(
+                created.job.id,
+                customer_id,
+                ParticipantRole.CUSTOMER,
+            )
+
+            async with transactional_session(factory) as session:
+                manager = await create_invitation(
+                    session,
+                    created.job.id,
+                    customer_actor,
+                    InvitationCreate(
+                        role=ParticipantRole.COMPANY_MANAGER,
+                        display_name="Manager",
+                    ),
+                )
+            manager_actor = actor(
+                created.job.id,
+                manager.access_link.participant_id,
+                ParticipantRole.COMPANY_MANAGER,
+            )
+            async with transactional_session(factory) as session:
+                accepted_manager = await accept_invitation(
+                    session,
+                    created.job.id,
+                    manager.invitation.id,
+                    manager_actor,
+                    secret=manager.access_link.secret,
+                )
+            assert accepted_manager.status.value == "accepted"
+
+            async with transactional_session(factory) as session:
+                worker = await create_invitation(
+                    session,
+                    created.job.id,
+                    manager_actor,
+                    InvitationCreate(
+                        role=ParticipantRole.FIELD_WORKER,
+                        display_name="Worker",
+                    ),
+                )
+            worker_actor = actor(
+                created.job.id,
+                worker.access_link.participant_id,
+                ParticipantRole.FIELD_WORKER,
+            )
+            async with transactional_session(factory) as session:
+                accepted_worker = await accept_invitation(
+                    session,
+                    created.job.id,
+                    worker.invitation.id,
+                    worker_actor,
+                    secret=worker.access_link.secret,
+                )
+            assert accepted_worker.status.value == "accepted"
+
+            async with transactional_session(factory) as session:
+                reissued = await reissue_invitation(
+                    session,
+                    created.job.id,
+                    manager.invitation.id,
+                    customer_actor,
+                )
+            assert reissued.invitation.status.value == "pending"
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.anyio
