@@ -79,6 +79,18 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("post", f"{job_path}/scope-proposals"): {403, 409},
         ("post", f"{job_path}/scope-review/revision-request"): {403, 409},
         ("post", f"{job_path}/scope-review/confirm"): {403, 409},
+        ("post", f"{job_path}/field-issues"): {403, 409},
+        ("get", f"{job_path}/field-issues"): {403},
+        ("post", f"{job_path}/change-proposals"): {403, 409},
+        ("get", f"{job_path}/change-proposals/{{proposal_id}}"): {403, 409, 503},
+        ("post", f"{job_path}/change-proposals/{{proposal_id}}/decision"): {
+            403,
+            409,
+        },
+        ("post", f"{job_path}/change-proposals/{{proposal_id}}/explanation"): {
+            403,
+            409,
+        },
         ("post", f"{job_path}/change-requests"): {403, 409},
         ("get", f"{job_path}/change-requests"): set(),
         (

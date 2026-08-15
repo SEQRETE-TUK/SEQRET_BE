@@ -53,6 +53,16 @@
 ## 미디어 열람
 
 - 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부된 `READY` 상태의 `change_evidence` 미디어와 저장된 generation만 허용한다.
+- 변경 제안 화면은 같은 `READY` 증거의 generation-pinned 5분 preview를 응답에 묶어 제공하고 object key·generation은 노출하지 않는다. 응답은 `Cache-Control: no-store`다.
+
+## 현장 이슈와 변경 제안
+
+- 현장기사는 현재 잠긴 범위를 `base_scope_version_id`로 지정하고 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 하나 이상 첨부해 무가격 `field_issue`를 만든다. 업체가 변경 제안을 만들 때는 모든 증거가 generation을 가진 `READY`여야 한다. 이슈 종류는 `out_of_scope|damage_risk|site_blocker`이며 금액·고객 결정은 입력할 수 없다.
+- `field_issue`는 작업별 `client_reference`로 식별한다. 같은 reference와 정확히 같은 payload는 기존 결과를 반환하고 다른 payload, stale·잠기지 않은 범위 또는 다른 작업·촬영자의 증거는 거부한다.
+- 업체만 이슈 하나를 기존 `change_request`에 연결된 `change_proposal_detail`로 전환한다. 제안의 기준 금액은 현재 확정 범위의 견적 또는 앞서 승인된 변경 제안 금액과 정확히 같아야 하며, 새 견적은 합계 불변식을 만족해야 한다.
+- 제안 전송은 기존 `change_requested.v1` event를 재사용한다. 고객 승인 시 변경 결과 범위를 만들고 업체·고객 approval과 잠금을 한 transaction에 기록하며 기존 `scope_locked.v1`을 재사용한다. 현장기사나 업체는 고객 결정을 대신할 수 없다.
+- 고객의 `approve|reject|request_clarification` 결정과 업체 설명은 terminal 또는 동일 설명의 정확 재전송만 멱등이다. 상충 결정·설명, 과거 기준 범위, 이슈 재사용과 승인 뒤 후속 변경은 거부한다.
+- `field_issue`, `field_issue_evidence` 또는 `change_proposal_detail` 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## 미디어 검증 작업
 

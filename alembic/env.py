@@ -13,6 +13,7 @@ from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
 from app.modules.background_job.models import BackgroundJob
 from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
+from app.modules.field_change.models import FieldIssue
 from app.modules.notification.models import NotificationDelivery
 from app.modules.scope.models import ScopeApproval
 from app.modules.scope_review.models import ScopeProposal
@@ -32,6 +33,7 @@ _REGISTERED_MODELS = (
     MediaAsset,
     ScopeApproval,
     ScopeProposal,
+    FieldIssue,
     AuditEvent,
     OutboxEvent,
     NotificationDelivery,
