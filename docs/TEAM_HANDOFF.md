@@ -37,10 +37,11 @@
 - staging은 FE 도메인 미구매 상태라 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 이는 공개 API edge 확인용이지 canonical FE origin 증적이 아니며, FE 배포 후 GitHub environment 변수와 bucket CORS를 함께 교체한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
-- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. secret은 React 메모리에만 보관하며 390x844 mock browser E2E에서 콘솔 오류·영구 저장소·DOM secret 노출이 없음을 확인했다. 다른 27개 시각 demo 흐름은 여전히 local state와 timer이므로 API 완료 증거로 보지 않는다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `16b4a98b812e798ad62942f0d82d5d6d7e715068`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. secret은 React 메모리에만 보관하며 390x844 mock browser E2E에서 정상 확정, 충돌 복구, 콘솔·영구 저장소·DOM secret 노출 여부를 검증했다. 나머지 시각 demo 흐름은 여전히 local state와 timer이므로 API 완료 증거로 보지 않는다.
+- FE [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)은 화면 단위 dynamic import로 초기 JS를 224.60 kB까지 줄이고 500 kB 경고를 제거했다. production preview에서 7개 진입 경로와 전용 chunk 로드를 검증했다.
 - FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
-- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)·[#3](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/3)·[#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)의 필수 CI는 성공했다. GitHub deployment와 environment는 여전히 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)부터 [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)까지 필수 CI는 성공했다. GitHub deployment와 environment는 2026-08-15 재확인 기준 각각 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
 
 ## B 트랙 인계
 
