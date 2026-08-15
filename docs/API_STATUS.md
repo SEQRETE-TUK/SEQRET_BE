@@ -2,10 +2,10 @@
 
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `a59dac44daf5c388d3c8c91db30cae26752e068a` + 이 A-03 변경
+> backend 기준 코드: `origin/main` `f8d0862255810bd9e9d51b27a4e0f8dc69070b00` + 이 A-06 변경
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `aabf2da2221d63d4debc5f06b4d40e92f061289a`
+> `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -15,9 +15,9 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 29개 | 24개 path의 업무 operation 26개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 31개 | 26개 path의 업무 operation 28개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
-| FE 화면의 실제 API 호출 | 0개 | 공통 client·Query provider는 있으나 어떤 demo 화면도 호출하지 않음 |
+| FE 화면의 실제 backend API 호출 | 6개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출을 호출; 별도 signed PUT 1개 |
 | 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
 | 추가 P0 화면 포함 시 backend 제안 API | 19개 | 작업 완료 제출과 고객 완료 결정 2개 추가 |
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
@@ -44,11 +44,11 @@
 | 항목 | 확인 결과 | backend 판단 |
 | --- | --- | --- |
 | runtime | Vite 7, React 19, TypeScript | `TECH_STACK.md`의 Vite 선택과 일치 |
-| 사용자 경로 | `/`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 역할별 UI demo 경로만 존재 |
+| 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 촬영 경로 1개만 실제 API E2E이고 나머지는 시각 demo |
 | 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | 시각·상호작용 검증 자료로 사용; API 완료로 보지 않음 |
-| server state | TanStack Query provider·공통 retry 정책 존재; 화면은 `useState`, `setTimeout` | 기반은 준비됐지만 새로고침·동시 사용자·server 정합성 E2E는 아직 없음 |
+| server state | TanStack Query 기반 촬영 query·mutation·polling과 나머지 demo의 `useState`, `setTimeout`이 공존 | 촬영·분석 terminal 상태 복구는 구현; 다른 화면은 아직 server 정합성 증거 없음 |
 | API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 승인된 첫 OpenAPI slice를 화면 query·mutation에 연결할 단계 |
-| CI·배포 | Actions 4회 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
+| CI·배포 | FE #4 `Frontend quality` 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
 
 ### 3.2 계약 불일치
 
@@ -57,7 +57,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/capture-sessions/*/submit`, `/change-requests`, `/scope-versions` 등 26개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/capture-sessions/*/submit`, `/analysis-review`, `/change-requests`, `/scope-versions` 등 28개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -75,8 +75,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객 수정 요청 접수 | 신규 | 사전 범위 수정요청 record와 상태 전이 필요 |
 | 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 현재 범위 확인 | 전환 | 기존 `approve_scope_version` 재사용; 고객 전용 계약으로 노출 |
 | 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액 제안을 고객에게 전송 | 확장 | 범위 version 생성 재사용; 수량·작업·금액·제안 상태 추가 |
-| 고객 AI 검토 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 업로드와 AI 검토 초안 조회 | 확장 | 저장된 분석 원본과 media 재사용; 화면 view와 AI schema v2 필요 |
-| 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 확장 | `import_analysis_draft` 재사용; HTTP command와 수정된 항목 계약 필요 |
+| 고객 AI 검토 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 업로드와 AI 검토 초안 조회 | 구현 | 최신 고객 소유 완료 분석, 공간별 media 수와 AI provenance를 provider-neutral view로 반환 |
+| 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 구현 | AI 원본을 기준으로 불변 고객 편집본을 생성하고 동일 payload 재전송은 멱등 처리 |
 | 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 확장 | 변경요청 record 재사용; 금액과 signed preview 조합 필요 |
 | 고객 변경 승인 | `POST /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인·거절·설명 요청 | 확장 | 기존 결정·설명 상태 전이 재사용; 고객 권한과 제안 계약으로 정리 |
 | 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 신규 | 차량, 작업자 자원, 가용성, 배정 model·service 필요 |
@@ -105,7 +105,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객·업체가 최초 사진을 직접 등록 | 화면용 `capture-submissions` adapter | 현재 저수준 capture 생성·upload·complete·submit·status 계약을 한 화면 command/view로 감쌀 때만 추가 |
 | 업체가 작업과 고객 link를 직접 생성 | 작업 생성·초대 API | admin seed가 아닌 실제 업체 onboarding을 MVP에 넣을 때만 확정 |
 
-## 5. 현재 서버 업무 operation 26개
+## 5. 현재 서버 업무 operation 28개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -119,6 +119,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `GET /api/v1/move-jobs/{job_id}/capture-sessions` | 본인 세션·미디어 validation·분석 상태 복구 | 첫 촬영·AI E2E slice의 query로 바로 사용 가능; signed capability와 provider 내부값은 제외 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit` | READY inventory 촬영을 동결하고 분석 intent 생성 | 첫 촬영·AI E2E slice의 command로 바로 사용 가능; 화면용 adapter 여부는 FE 연동 후 결정 |
 | `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis` | 분석 queue·실행·범위 초안 terminal 상태 조회 | 첫 촬영·AI E2E slice의 polling query로 바로 사용 가능; review item view는 별도 필요 |
+| `GET /api/v1/move-jobs/{job_id}/analysis-review` | 최신 완료 분석의 공간별 검증 수·편집 항목 조회 | FE AI 검토 화면의 단일 query; model·prompt·provider task 정보는 제외 |
+| `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 검토 결과를 불변 scope version으로 확정 | FE AI 검토 CTA의 단일 command; stale 원본과 상충 재전송은 `409` |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload` | signed upload URL 발급 | `POST /media-uploads`로 축소 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/{media_asset_id}/complete` | 업로드 metadata 검증·확정 | 이슈·완료 제출 시 server 검증으로 흡수 |
 | `POST /api/v1/move-jobs/{job_id}/scope-versions` | 불변 범위 version 생성 | `POST /scope-proposals` 내부 logic으로 재사용 |
@@ -159,9 +161,9 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 
 ### 계약·조회 재구성
 
-- 화면 단위 view 6개: `scope-review`, `analysis-review`, `change-proposals/{id}`, `dispatch`, `completion-summary`, `field-brief`
+- 남은 화면 단위 view 5개: `scope-review`, `change-proposals/{id}`, `dispatch`, `completion-summary`, `field-brief`
 - 공통 `JobHeader`, `ScopeLineV2`, `QuoteSnapshot`, signed `MediaPreview`
-- AI `AnalysisResult` v2와 B consumer 영향 확인
+- 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
 ### 신규 업무 상태
 
@@ -183,5 +185,5 @@ INT-01은 실제 migration `int_01_0001`과 `capture_analysis_dispatch`로 제�
 - FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
-- 최신 FE 27개 중 첫 E2E slice와 추가 P0 화면 2개 포함 여부를 결정한 뒤 API 기준을 고정한다.
+- 첫 촬영 E2E slice는 FE #4로 연결됐다. 다음 화면은 `analysis-review` 계약을 사용하고, 추가 P0 화면 2개 포함 여부는 별도로 결정한다.
 - FE canonical HTTPS origin이 생기기 전에는 staging 임시 origin과 GCS bucket CORS를 교체하지 않는다.

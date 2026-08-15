@@ -8,8 +8,8 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 24개 path에 29개다: `/api/v1` 업무 operation 26개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 작업 bootstrap, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- OpenAPI operation은 26개 path에 31개다: `/api/v1` 업무 operation 28개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 작업 bootstrap, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
 - Alembic은 단일 head `int_01_0001`이다. 감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
@@ -27,6 +27,8 @@
 - `GET /move-jobs/{job_id}/capture-sessions`는 호출자가 만든 세션만 최신순으로 반환한다. 각 세션의 `media_assets`에서 validation 상태를 복구하고 선택적 `analysis`에서 분석 상태를 이어간다. object key, generation, signed URL과 provider task ID는 이 응답에 없다.
 - 촬영 소유자는 모든 inventory 미디어가 비동기 validation을 마쳐 `READY`가 된 뒤 `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`을 한 번 호출한다. `202` 응답의 `analysis_run_id`를 보관하고 `GET .../analysis`로 상태를 조회할 수 있다. 제출 뒤 해당 촬영 세션의 새 upload·미완료 upload 확정은 `409`다.
 - 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.
+- `GET /move-jobs/{job_id}/analysis-review`는 고객이 가장 최근에 제출한 분석이 `completed`일 때만 공간별 전체·READY·FAILED media 수와 현재 편집 항목을 반환한다. AI 항목에는 신뢰도·검토 필요·source media ID를 제공하지만 model·prompt·provider 정보는 노출하지 않는다.
+- `POST /move-jobs/{job_id}/analysis-review/complete`는 응답의 `source_scope_version_id`와 최종 항목 전체를 받아 고객 편집본을 불변 자식 scope version으로 생성한다. 같은 항목의 재전송은 같은 결과를 반환하고 stale 원본, 다른 내용의 재전송, 다른 참여자가 만든 자식 version은 `409`다. 현재 v1은 항목 key·공간·설명을 지원하며 수량·단위·작업 메모는 AI schema v2 범위다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
 
 ## FE 현재 상태와 blocker
@@ -35,10 +37,10 @@
 - staging은 FE 도메인 미구매 상태라 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 이는 공개 API edge 확인용이지 canonical FE origin 증적이 아니며, FE 배포 후 GitHub environment 변수와 bucket CORS를 함께 교체한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `aabf2da2221d63d4debc5f06b4d40e92f061289a`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
-- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer 전달, opaque signed PUT과 TanStack Query 공통 정책을 마련했다. 다만 이 client와 query hook을 호출하는 화면은 아직 0개이고 demo 동작은 계속 local state와 timer다. FE PRD 부록의 `/v1/jobs`, `consumer|provider|crew`, error envelope와 화면 API 표도 현재 OpenAPI가 아닌 별도 제안이므로 [API 현황](API_STATUS.md)과 [목표 API 제안](API_SPEC.md)을 대조해 첫 E2E slice를 계약 PR로 확정한다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 `main`은 `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`다. Vite 7·React 19 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. secret은 React 메모리에만 보관하며 390x844 mock browser E2E에서 콘솔 오류·영구 저장소·DOM secret 노출이 없음을 확인했다. 다른 27개 시각 demo 흐름은 여전히 local state와 timer이므로 API 완료 증거로 보지 않는다.
 - FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
-- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)와 [#3](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/3)의 PR·`main` CI 4회는 모두 성공했고 최신 run의 annotation은 0개다. GitHub deployment와 environment는 여전히 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
+- FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)·[#3](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/3)·[#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)의 필수 CI는 성공했다. GitHub deployment와 environment는 여전히 0개이며 canonical HTTPS origin도 없으므로 FE가 배포됐다고 간주하거나 API·GCS CORS를 실제 origin으로 교체하지 않는다.
 
 ## B 트랙 인계
 
