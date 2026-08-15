@@ -1,5 +1,6 @@
 resource "google_project_service" "required" {
   for_each = toset([
+    "aiplatform.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudscheduler.googleapis.com",
     "cloudtasks.googleapis.com",
@@ -63,6 +64,12 @@ resource "google_service_account" "task_invoker" {
 resource "google_project_iam_member" "worker_cloud_sql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_project_iam_member" "worker_vertex_ai_user" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
   member  = "serviceAccount:${google_service_account.worker.email}"
 }
 
@@ -445,6 +452,7 @@ resource "google_cloud_run_v2_service" "worker" {
     google_project_service.required,
     google_project_service.observability,
     google_project_iam_member.worker_cloud_sql_client,
+    google_project_iam_member.worker_vertex_ai_user,
     google_project_iam_member.worker_trace_writer,
     google_project_iam_member.worker_telemetry_consumer,
     google_secret_manager_secret_iam_member.worker_database,

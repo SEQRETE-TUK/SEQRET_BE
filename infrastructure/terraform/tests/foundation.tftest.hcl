@@ -104,6 +104,10 @@ run "staging_runtime_isolation" {
       google_cloud_run_v2_service.worker.ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY",
       google_cloud_run_v2_service.worker.template[0].containers[0].image == var.container_image,
       join(" ", google_cloud_run_v2_service.worker.template[0].containers[0].command) == "python -m uvicorn app.entrypoints.worker:app",
+      one([
+        for env in google_cloud_run_v2_service.worker.template[0].containers[0].env : env.value
+        if env.name == "SEQRET_ANALYSIS_LOCATION"
+      ]) == "asia-northeast3",
       google_cloud_run_v2_service.worker.deletion_protection,
     ])
     error_message = "The private media worker must be provisioned with the current immutable application image."
@@ -131,6 +135,7 @@ run "staging_runtime_isolation" {
     condition = (
       toset(keys(google_project_service.required)) ==
       toset([
+        "aiplatform.googleapis.com",
         "artifactregistry.googleapis.com",
         "cloudscheduler.googleapis.com",
         "cloudtasks.googleapis.com",
@@ -228,6 +233,8 @@ run "staging_runtime_isolation" {
       google_project_iam_member.api_cloud_sql_client.role == "roles/cloudsql.client",
       google_project_iam_member.worker_cloud_sql_client.role == "roles/cloudsql.client",
       google_project_iam_member.worker_cloud_sql_client.member == "serviceAccount:${google_service_account.worker.email}",
+      google_project_iam_member.worker_vertex_ai_user.role == "roles/aiplatform.user",
+      google_project_iam_member.worker_vertex_ai_user.member == "serviceAccount:${google_service_account.worker.email}",
       google_project_iam_member.migration_cloud_sql_client.role == "roles/cloudsql.client",
       google_secret_manager_secret_iam_member.worker_database.role == "roles/secretmanager.secretAccessor",
       google_secret_manager_secret_iam_member.worker_database.member == "serviceAccount:${google_service_account.worker.email}",
@@ -235,7 +242,7 @@ run "staging_runtime_isolation" {
       google_storage_bucket_iam_member.worker_media_objects.bucket == var.media_bucket_name,
       google_storage_bucket_iam_member.worker_media_objects.member == "serviceAccount:${google_service_account.worker.email}",
     ])
-    error_message = "The API and migration gate must use the same authenticated Cloud SQL Unix socket."
+    error_message = "The runtimes must keep their authenticated Cloud SQL, media, and Vertex AI permissions."
   }
 
   assert {
