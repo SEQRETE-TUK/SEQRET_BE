@@ -15,7 +15,7 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 32개 | 27개 path의 업무 operation 29개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 39개 | 33개 path의 업무 operation 36개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
 | 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
@@ -23,7 +23,7 @@
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
 | 핵심 업무 상태부터 새로 만들 제안 API | 8개 | 19개 제안 기준 배차, 체크인, 완료 제출·요청, 문서 등 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 29개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 36개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -57,7 +57,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/capture-sessions/*/submit`, `/analysis-review`, `/change-requests`, `/scope-versions` 등 29개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/change-requests`, `/scope-versions` 등 36개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -104,19 +104,26 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | --- | --- | --- |
 | 고객·업체가 최초 사진을 직접 등록 | 화면용 `capture-submissions` adapter | 현재 저수준 capture 생성·upload·complete·submit·status 계약을 한 화면 command/view로 감쌀 때만 추가 |
 | 소비자가 작업을 직접 생성 | `POST /api/v1/move-jobs/onboarding` | 구현. 고객 참여자와 고객 secret 하나만 발급 |
-| 소비자가 업체를, 업체가 현장기사를 초대 | 역할별 invitation API | A-02에서 상태·폐기·재발급 계약 구현 필요 |
+| 소비자가 업체를, 업체가 현장기사를 초대 | `/me`, invitation 생성·목록·수락·거절·폐기·재발급 | 구현. pending 업무 접근 차단과 상위 철회 cascade 포함 |
 
-## 5. 현재 서버 업무 operation 29개
+## 5. 현재 서버 업무 operation 36개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
 | 현재 Method · Path | 현재 용도 | 최종 처리 |
 | --- | --- | --- |
 | `POST /api/v1/move-jobs/onboarding` | 소비자 작업과 소비자 capability 하나 생성 | 실제 소비자 onboarding 생성 경로로 사용 |
+| `GET /api/v1/me` | 현재 역할·초대 상태·허용 기능 조회 | 역할별 landing에서 사용 |
+| `POST /api/v1/move-jobs/{job_id}/invitations` | 다음 역할 참여자와 pending capability 생성 | 소비자→업체, 수락 업체→현장기사만 허용 |
+| `GET /api/v1/move-jobs/{job_id}/invitations` | 본인이 발급했거나 받은 초대 상태 조회 | 초대 관리 화면에서 사용 |
+| `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/accept` | 받은 초대 수락 | 수락 뒤에만 일반 업무 권한 활성화 |
+| `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/decline` | 받은 초대 거절 | 현재 link 즉시 철회 |
+| `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/revoke` | 발급한 초대 폐기 | link와 하위 초대 즉시 철회 |
+| `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 발급한 초대 재발급 | 기존 link·하위 초대를 철회하고 pending link 한 번 반환 |
 | `POST /api/v1/move-jobs` | 작업과 정확히 세 역할의 초기 capability 생성 | 신뢰 bootstrap·전달 채널 결정 전 일반 frontend 연동에서 제외 |
 | `GET /api/v1/move-jobs/{job_id}` | 작업·참여자·공간 구성 조회 | 화면별 view에 필요한 header만 재사용 |
 | `POST /api/v1/move-jobs/{job_id}/participants/{participant_id}/access-links` | 역할 link 재발급 | private bootstrap·운영으로 유지 |
-| `POST /api/v1/move-jobs/{job_id}/access-links/{access_link_id}/revoke` | 역할 link 철회 | private bootstrap·운영으로 유지 |
+| `POST /api/v1/move-jobs/{job_id}/access-links/{access_link_id}/revoke` | 역할 link와 위임한 하위 초대 철회 | private bootstrap·운영으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions` | 촬영 session 생성 | media upload 내부 logic으로 재사용 |
 | `GET /api/v1/move-jobs/{job_id}/capture-sessions` | 본인 세션·미디어 validation·분석 상태 복구 | 첫 촬영·AI E2E slice의 query로 바로 사용 가능; signed capability와 provider 내부값은 제외 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit` | READY inventory 촬영을 동결하고 분석 intent 생성 | 첫 촬영·AI E2E slice의 command로 바로 사용 가능; 화면용 adapter 여부는 FE 연동 후 결정 |
@@ -177,7 +184,7 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 
 ### 예상 migration
 
-INT-01은 실제 migration `int_01_0001`과 `capture_analysis_dispatch`로 제출·dispatch·terminal 상태를 추가했다. 배차·체크인, 견적, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
+INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`을 추가했다. 배차·체크인, 견적, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
 
 ## 8. frontend 연동 기준
 

@@ -10,6 +10,17 @@
 - `DomainEvent.schema_version`의 최초 값은 `1`이다. 기존 event payload를 깨는 변경은 event 이름과 schema version을 새로 추가한다.
 - signed URL, 역할 토큰, 주소 원문과 원본 미디어는 모델 repr이나 로그에 남기지 않는다.
 
+## 역할 초대와 capability
+
+- 공개 `POST /api/v1/move-jobs/onboarding`은 고객 참여자와 고객 access secret 하나만 발급한다. 기존 세 역할 동시 bootstrap은 일반 frontend onboarding에서 사용하지 않는다.
+- 역할 위임 순서는 `customer → company_manager → field_worker`로 고정한다. 다른 역할 초대와 아직 수락하지 않은 발급자의 하위 초대는 거부한다.
+- 초대 상태는 작업 상태와 분리된 `pending|accepted|declined|expired|revoked`다. pending token은 `/me`와 자신의 수락·거절 command에서만 인증되고 다른 업무 API에서는 유효한 참여자로 취급하지 않는다.
+- `GET /api/v1/me`는 현재 link의 작업·참여자·역할, 표시명, 명시적 permission 목록, 만료와 선택적 초대 상태만 반환한다. secret과 token hash는 반환하지 않는다.
+- 초대·재발급 응답의 평문 secret은 한 번만 반환하고 `Cache-Control: no-store`를 사용한다. DB에는 SHA-256 hash와 현재 link ID만 저장한다.
+- 하위 초대 만료는 발급자 access link 만료를 넘지 않는다. 상위 초대를 폐기·재발급하거나 발급자의 access link를 직접 철회하면 그 참여자가 발급한 모든 하위 초대와 access link도 같은 transaction에서 철회한다.
+- 수락 시에만 `PARTICIPANT_CONNECTED` 감사 event를 기록한다. 초대 landing 조회는 참여 완료로 기록하지 않으며, 감사 payload에는 invitation·link·participant ID와 역할만 남기고 secret은 넣지 않는다.
+- `participant_invitation` 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 schema를 유지한 application revision 전환으로 수행한다.
+
 ## Port 소유권과 동작
 
 | Port | adapter 소유자 | 입력·출력 | 멱등성 | timeout | 오류 계약 |

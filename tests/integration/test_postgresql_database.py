@@ -141,7 +141,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_01_0001"
+ALEMBIC_HEAD = "a_02_0002"
+ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
 ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
@@ -158,6 +159,7 @@ BUSINESS_TABLES = {
     "media_asset",
     "move_job",
     "participant_access_token",
+    "participant_invitation",
     "room_zone",
     "scope_version",
     "scope_approval",
@@ -338,7 +340,7 @@ def test_postgresql_migration_round_trip_preserves_existing_schema() -> None:
                 )
             with pytest.raises(RuntimeError, match="roll back the application"):
                 command.downgrade(configuration, ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS)
-            assert _current_revision(engine) == ALEMBIC_HEAD
+            assert _current_revision(engine) == ALEMBIC_INVITATION_PREVIOUS
             with engine.begin() as connection:
                 connection.execute(text("DELETE FROM capture_analysis_dispatch"))
                 connection.execute(text("DELETE FROM capture_session"))

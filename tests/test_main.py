@@ -41,7 +41,14 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
     schema = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
     job_path = "/api/v1/move-jobs/{job_id}"
     route_failures = {
+        ("get", "/api/v1/me"): set(),
         ("get", job_path): set(),
+        ("post", f"{job_path}/invitations"): {403, 409},
+        ("get", f"{job_path}/invitations"): {403},
+        ("post", f"{job_path}/invitations/{{invitation_id}}/accept"): {409},
+        ("post", f"{job_path}/invitations/{{invitation_id}}/decline"): {409},
+        ("post", f"{job_path}/invitations/{{invitation_id}}/revoke"): {403},
+        ("post", f"{job_path}/invitations/{{invitation_id}}/reissue"): {403, 409},
         ("post", f"{job_path}/participants/{{participant_id}}/access-links"): {403},
         ("post", f"{job_path}/access-links/{{access_link_id}}/revoke"): {403},
         ("post", f"{job_path}/capture-sessions"): {409},
@@ -105,9 +112,11 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         if operation.get("security") == [{"HTTPBearer": []}]
     }
 
-    assert protected_operations == {
+    expected_operations = {
         route: common_statuses | failures for route, failures in route_failures.items()
     }
+    expected_operations[("get", "/api/v1/me")] = {401, 429}
+    assert protected_operations == expected_operations
     assert schema["components"]["schemas"]["HttpExceptionResponse"] == {
         "description": (
             "The string-detail body emitted by the current FastAPI exception handlers."
@@ -126,7 +135,10 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
 
     for method, path in route_failures:
         responses = schema["paths"][path][method]["responses"]
-        for code in common_statuses | route_failures[(method, path)]:
+        expected_codes = common_statuses | route_failures[(method, path)]
+        if path == "/api/v1/me":
+            expected_codes = expected_codes - {404}
+        for code in expected_codes:
             assert responses[str(code)]["content"]["application/json"]["schema"] == {
                 "$ref": "#/components/schemas/HttpExceptionResponse"
             }
