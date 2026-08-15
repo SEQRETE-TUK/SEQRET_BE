@@ -37,6 +37,7 @@ from app.modules.scope_review.models import (
     ScopeRevisionRequest,
 )
 from app.modules.scope_review.schemas import (
+    QuoteAdjustment,
     QuoteSnapshot,
     ScopeProposalCreate,
     ScopeRevisionRequestCreate,
@@ -744,7 +745,7 @@ def test_scope_review_rejects_invalid_storage_read_urls(value: str) -> None:
 def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> None:
     zone_id = uuid4()
     source_id = uuid4()
-    base = {
+    base: dict[str, Any] = {
         "source_scope_version_id": str(source_id),
         "content": {
             "items": [
@@ -766,7 +767,7 @@ def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> N
     }
     assert ScopeProposalCreate.model_validate(base).quote == QuoteSnapshot(
         base_amount_krw=1000,
-        adjustments=({"label": "추가", "amount_krw": 100},),
+        adjustments=(QuoteAdjustment(label="추가", amount_krw=100),),
         total_amount_krw=1100,
     )
     invalid_total = {**base, "quote": {**base["quote"], "total_amount_krw": 1200}}
