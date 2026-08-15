@@ -35,7 +35,7 @@
 | ID | 시나리오 | 주도 | 상태 | 막는 것 |
 |---|---|---|---|---|
 | **INT-01** | 촬영 제출 → AI 분석 → 범위 초안 | A | 🟡 | A runtime 배포 완료 / 실제 3건 분석 실패, #93 해결 뒤 성공 E2E 재검증 |
-| **INT-04** | 완료 미디어 → 완료 확인 → 보존 정책 | A | ✅ | 최신 main staging 실경로 검증 필요 |
+| **INT-04** | 완료 미디어 → 완료 확인 → 보존 정책 | A | ✅ | `f4b0619` staging GCS·Cloud Tasks·완료·문서·보존 실경로 검증 완료 |
 | **INT-06** | task 재시도·provider 장애·복구 | B | ⬜ | provider 실패 진단·재시도·동시 실행 recovery — [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93) |
 
 ---
@@ -45,13 +45,14 @@
 - **병합 완료:** GCS SDK #37, B-01 #39, B-02 #73, B-03 #35, B-04 #79, B-05 validation, B-06 #81·#82·#84, B-07 #36
 - **INT-01 완료 범위:** MIME 계약 #85·#86, event 계약 #87, 촬영 제출·durable dispatch·범위 초안 import, Vertex runtime wiring과 staging 배포 `c7b6e77`
 - **INT-01 남은 증적:** validation `READY`와 private worker 실행은 확인했지만 실제 분석 3건이 모두 `failed`로 종료됐다. [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93) 해결 뒤 `completed`·범위 초안 import를 재검증한다.
+- **INT-04 완료 증적:** [staging #31881107839](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31881107839)에서 실제 GCS upload·Cloud Tasks validation부터 완료 제출·고객 확인·PDF archive·30일 보존 예약까지 통과했다.
 - **남은 구현:** INT-06 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93)과 승인된 파생 처리 정책. FE 첫 촬영 E2E slice는 #4, A-06 분석 검토는 #5·#6으로 연동됐다.
 
 ## 의존성 흐름
 
 ```
 [B-01 #39 ✅] ───────────────→ B-05
-[B-01 #39 + B-02 + B-07 #36] → INT-04
+[B-01 #39 + B-02 + B-07 #36] → INT-04 ✅
 [B-02 + B-03 #35 + B-04 #79 + B-06 #81/#82/#84] ─→ INT-01 🟡 → #93
 [B-02 + B-04 #79 + B-06] ──────────────────────────→ INT-06 ⬜ → #93
 [B-05 validation] ──────────────────────────────────→ 파생 처리 정책 결정
