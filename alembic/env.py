@@ -15,6 +15,7 @@ from app.modules.capture.models import MediaAsset
 from app.modules.completion.models import AuditEvent
 from app.modules.notification.models import NotificationDelivery
 from app.modules.scope.models import ScopeApproval
+from app.modules.scope_review.models import ScopeProposal
 from app.platform.event_bus.models import OutboxEvent
 
 config = context.config
@@ -30,6 +31,7 @@ _REGISTERED_MODELS = (
     BackgroundJob,
     MediaAsset,
     ScopeApproval,
+    ScopeProposal,
     AuditEvent,
     OutboxEvent,
     NotificationDelivery,

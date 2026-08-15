@@ -151,7 +151,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_02_0002"
+ALEMBIC_HEAD = "int_02_0001"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -173,6 +173,8 @@ BUSINESS_TABLES = {
     "room_zone",
     "scope_version",
     "scope_approval",
+    "scope_proposal",
+    "scope_revision_request",
     "change_request",
     "change_request_evidence",
     "completion_confirmation",

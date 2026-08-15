@@ -15,15 +15,15 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 39개 | 33개 path의 업무 operation 36개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 43개 | 37개 path의 업무 operation 40개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
-| 기존 8화면 기준 backend 제안 API | 17개 | 현재 OpenAPI가 아닌 목표 계약 초안 |
+| 기존 8화면 기준 backend 목표 API | 17개 | `analysis-review` 2개와 `scope-review` 흐름 4개는 실행 계약, 나머지는 초안 |
 | 추가 P0 화면 포함 시 backend 제안 API | 19개 | 작업 완료 제출과 고객 완료 결정 2개 추가 |
 | 기존 핵심 logic을 재사용할 제안 API | 11개 | 19개 제안 기준 route 전환 2개 + 기능·응답 확장 9개 |
-| 핵심 업무 상태부터 새로 만들 제안 API | 8개 | 19개 제안 기준 배차, 체크인, 완료 제출·요청, 문서 등 |
+| 핵심 업무 상태부터 새로 만들 남은 API | 6개 | 19개 목표 기준 배차, 체크인, 완료 제출·요청, 문서 등 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 36개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 40개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -57,7 +57,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/change-requests`, `/scope-versions` 등 36개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/change-requests` 등 40개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -71,10 +71,10 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 
 | 화면 | Method · Path | 용도 | 상태 | 재사용 기반·남은 일 |
 | --- | --- | --- | --- | --- |
-| 고객·업체 범위 | `GET /api/v1/move-jobs/{job_id}/scope-review` | 최신 범위, 금액, 사진, 양측 확인 상태 조회 | 확장 | 작업·범위 version 조회 재사용; 화면 view와 금액 snapshot 추가 |
-| 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객 수정 요청 접수 | 신규 | 사전 범위 수정요청 record와 상태 전이 필요 |
-| 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 현재 범위 확인 | 전환 | 기존 `approve_scope_version` 재사용; 고객 전용 계약으로 노출 |
-| 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액 제안을 고객에게 전송 | 확장 | 범위 version 생성 재사용; 수량·작업·금액·제안 상태 추가 |
+| 고객·업체 범위 | `GET /api/v1/move-jobs/{job_id}/scope-review` | 최신 범위, 금액, 사진, 양측 확인 상태 조회 | 구현 | 현재 불변 범위·견적·수정요청·양측 확인과 generation-pinned preview를 한 view로 반환 |
+| 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객 수정 요청 접수 | 구현 | 현재 고객 확인 대기 제안에 한해 immutable 요청을 생성하고 동일 요청은 재사용 |
+| 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 현재 범위 확인 | 구현 | 현재 업체 제안만 확인하며 기존 approval·scope lock·event를 원자적으로 재사용 |
+| 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액 제안을 고객에게 전송 | 구현 | 범위 v1 snapshot, 원화 견적·포함·제외·사유를 저장하고 업체 확인을 함께 기록 |
 | 고객 AI 검토 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 업로드와 AI 검토 초안 조회 | 구현 | 최신 고객 소유 완료 분석, 공간별 media 수와 AI provenance를 provider-neutral view로 반환 |
 | 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 구현 | AI 원본을 기준으로 불변 고객 편집본을 생성하고 동일 payload 재전송은 멱등 처리 |
 | 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 확장 | 변경요청 record 재사용; 금액과 signed preview 조합 필요 |
@@ -106,7 +106,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 소비자가 작업을 직접 생성 | `POST /api/v1/move-jobs/onboarding` | 구현. 고객 참여자와 고객 secret 하나만 발급 |
 | 소비자가 업체를, 업체가 현장기사를 초대 | `/me`, invitation 생성·목록·수락·거절·폐기·재발급 | 구현. pending 업무 접근 차단과 상위 철회 cascade 포함 |
 
-## 5. 현재 서버 업무 operation 36개
+## 5. 현재 서버 업무 operation 40개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -135,6 +135,10 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/scope-versions` | 불변 범위 version 생성 | `POST /scope-proposals` 내부 logic으로 재사용 |
 | `GET /api/v1/move-jobs/{job_id}/scope-versions` | 범위 version 이력 조회 | `GET /scope-review` 화면 view로 교체 |
 | `POST /api/v1/move-jobs/{job_id}/scope-versions/{scope_version_id}/approvals` | 고객·업체 범위 확인 | 고객 `POST /scope-review/confirm`으로 전환 |
+| `GET /api/v1/move-jobs/{job_id}/scope-review` | 현재 범위·견적·수정요청·양측 확인·AI 원본 preview 조회 | 고객·업체 범위 화면의 실행 계약 |
+| `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 현재 범위의 불변 자식과 원화 견적 snapshot 전송 | 업체 범위 화면의 실행 계약 |
+| `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객이 현재 제안의 수정 요청 생성 | 고객 범위 화면의 실행 계약 |
+| `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객이 현재 업체 제안을 확인하고 양측 범위를 잠금 | 고객 범위 화면의 실행 계약 |
 | `POST /api/v1/move-jobs/{job_id}/change-requests` | 현장 변경요청 생성 | `field-issues`와 업체 `scope-proposals`로 단계 분리 |
 | `GET /api/v1/move-jobs/{job_id}/change-requests` | 현장 변경요청 목록 조회 | 변경 상세와 완료 요약 view에 흡수 |
 | `GET /api/v1/move-jobs/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url` | READY 변경 증거의 generation-pinned 열람 URL 발급 | 제안 화면 view의 signed preview와 통합 여부 검토 |
@@ -170,21 +174,19 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 
 ### 계약·조회 재구성
 
-- 남은 화면 단위 view 5개: `scope-review`, `change-proposals/{id}`, `dispatch`, `completion-summary`, `field-brief`
-- 공통 `JobHeader`, `ScopeLineV2`, `QuoteSnapshot`, signed `MediaPreview`
+- 남은 화면 단위 view 4개: `change-proposals/{id}`, `dispatch`, `completion-summary`, `field-brief`
+- 후속 공통 `JobHeader`, `ScopeLineV2`; `QuoteSnapshot`과 signed 범위 preview v1은 구현됨
 - 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
 ### 신규 업무 상태
 
-- 범위 수정요청
-- 견적·금액 snapshot
 - 배차·작업자·차량 가용성·체크인
 - 작업자 완료 제출, 완료 확인 요청, 고객 결정·문제 신고
 - 문서 생성 상태와 ZIP archive
 
 ### 예상 migration
 
-INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`을 추가했다. 배차·체크인, 견적, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
+INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`를 추가했다. 배차·체크인, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
 
 ## 8. frontend 연동 기준
 
@@ -194,5 +196,5 @@ INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_
 - FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
-- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. 다음 화면 후보인 `scope-review`는 실행 계약이 OpenAPI에 추가된 뒤에만 연동한다.
+- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. 다음 화면 후보인 `scope-review` 4개 operation도 실행 계약과 권한·멱등·충돌 test가 준비돼 FE가 연동할 수 있다.
 - FE canonical HTTPS origin이 생기기 전에는 staging 임시 origin과 GCS bucket CORS를 교체하지 않는다.
