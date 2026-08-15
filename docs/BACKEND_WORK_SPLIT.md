@@ -291,6 +291,7 @@ event consumer는 `event_id`를 기준으로 중복 처리를 방지한다.
 | A-10 | Redis·rate limit·fallback | A-02 | Redis 장애 시 원본 DB 기반 제한 동작이 가능하다. |
 | A-11 | Cloud Run·Terraform·CI/CD·OTel | FND-A04 | staging 배포, rollback과 핵심 경보가 검증된다. |
 | A-12 | 삭제·재처리·정합성 정책 | A-03, A-09 | 대상 결정, job 생성과 재실행 API가 동작한다. |
+| A-13 | 배차·현장 브리프·체크인 | A-05, A-09 | 현재 범위에 묶인 자원 snapshot으로 배차를 확정하고 대표 현장기사가 당일 체크인한다. |
 
 #### 트랙 B
 

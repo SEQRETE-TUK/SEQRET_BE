@@ -79,6 +79,11 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("post", f"{job_path}/scope-proposals"): {403, 409},
         ("post", f"{job_path}/scope-review/revision-request"): {403, 409},
         ("post", f"{job_path}/scope-review/confirm"): {403, 409},
+        ("post", f"{job_path}/dispatch/setup"): {403, 409},
+        ("get", f"{job_path}/dispatch"): {403, 409},
+        ("put", f"{job_path}/dispatch"): {403, 409},
+        ("get", f"{job_path}/field-brief"): {403, 409},
+        ("post", f"{job_path}/check-ins"): {403, 409},
         ("post", f"{job_path}/field-issues"): {403, 409},
         ("get", f"{job_path}/field-issues"): {403},
         ("post", f"{job_path}/change-proposals"): {403, 409},
@@ -174,10 +179,10 @@ def test_cors_allows_only_the_configured_browser_origin() -> None:
 
     with TestClient(application) as client:
         allowed = client.options(
-            "/api/v1/move-jobs",
+            "/api/v1/move-jobs/00000000-0000-4000-8000-000000000000/dispatch",
             headers={
                 "Origin": origin,
-                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Method": "PUT",
                 "Access-Control-Request-Headers": "authorization,content-type,traceparent",
             },
         )
@@ -191,6 +196,7 @@ def test_cors_allows_only_the_configured_browser_origin() -> None:
 
     assert allowed.status_code == 200
     assert allowed.headers["access-control-allow-origin"] == origin
+    assert "PUT" in allowed.headers["access-control-allow-methods"]
     assert allowed.headers.get("access-control-allow-credentials") != "true"
     assert rejected.status_code == 400
     assert "access-control-allow-origin" not in rejected.headers

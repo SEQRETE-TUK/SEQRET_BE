@@ -108,6 +108,12 @@ def _event_payload(event_type: DomainEventType) -> dict[str, Any]:
             "base_scope_version_id": str(uuid4()),
             "evidence_media_asset_ids": [str(uuid4())],
         }
+    if event_type is DomainEventType.DISPATCH_CONFIRMED_V1:
+        return {
+            "dispatch_id": resource_id,
+            "scope_version_id": str(uuid4()),
+            "field_worker_participant_id": str(uuid4()),
+        }
     if event_type is DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1:
         return {
             "capture_session_id": resource_id,

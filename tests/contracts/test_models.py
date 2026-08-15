@@ -186,6 +186,14 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
             },
         ),
         (
+            DomainEventType.DISPATCH_CONFIRMED_V1,
+            {
+                "dispatch_id": str(uuid4()),
+                "scope_version_id": str(uuid4()),
+                "field_worker_participant_id": str(uuid4()),
+            },
+        ),
+        (
             DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1,
             {
                 "capture_session_id": str(uuid4()),
@@ -297,6 +305,13 @@ def test_documented_v1_event_payloads_accept_exact_producer_shape(
                 "scope_version_id": str(uuid4()),
                 "content_hash": "a" * 64,
                 "signed_url": "https://storage.invalid/read?signature=must-not-leak",
+            },
+        ),
+        (
+            DomainEventType.DISPATCH_CONFIRMED_V1,
+            {
+                "dispatch_id": str(uuid4()),
+                "scope_version_id": str(uuid4()),
             },
         ),
         (

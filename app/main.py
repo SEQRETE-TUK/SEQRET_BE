@@ -15,6 +15,7 @@ from app.modules.analysis_review.router import router as analysis_review_router
 from app.modules.background_job.router import router as background_job_router
 from app.modules.capture.router import router as capture_router
 from app.modules.completion.router import router as completion_router
+from app.modules.dispatch.router import router as dispatch_router
 from app.modules.field_change.router import router as field_change_router
 from app.modules.move_job.router import router as move_job_router
 from app.modules.notification.router import router as notification_router
@@ -92,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(scope_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(scope_review_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(field_change_router, prefix=runtime_context.settings.api_prefix)
+    application.include_router(dispatch_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(completion_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(notification_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(background_job_router, prefix=runtime_context.settings.api_prefix)
@@ -100,7 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.add_middleware(
             CORSMiddleware,
             allow_origins=[runtime_context.settings.frontend_origin],
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type", "traceparent"],
             expose_headers=["Retry-After", "X-Request-ID"],
         )

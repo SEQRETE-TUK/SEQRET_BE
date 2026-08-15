@@ -15,14 +15,14 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 49개 | 42개 path의 업무 operation 46개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 54개 | 46개 path의 업무 operation 51개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
-| 기존 8화면 기준 backend 목표 API | 17개 | 9개 구현: `analysis-review` 2, `scope-review` 4, 변경 제안 조회·결정 2, 현장 이슈 보고 1 |
-| 추가 P0 화면 포함 시 backend 제안 API | 19개 | 현재 9개 구현; 작업 완료 제출과 고객 완료 결정 2개 추가 |
-| 남은 목표 API | 10개 | 배차 2, 완료·문서 3, field brief·체크인 2, upload adapter 1, 추가 P0 완료 2 |
+| 기존 8화면 기준 backend 목표 API | 17개 | 13개 구현: 기존 9개 + 배차 조회·확정 2 + field brief·체크인 2 |
+| 추가 P0 화면 포함 시 backend 제안 API | 19개 | 현재 13개 구현; 작업 완료 제출과 고객 완료 결정 2개 추가 |
+| 남은 목표 API | 6개 | 완료·문서 3, upload adapter 1, 추가 P0 완료 2 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 46개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 51개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -56,7 +56,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/field-issues`, `/change-proposals` 등 46개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins` 등 51개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -78,13 +78,13 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 구현 | AI 원본을 기준으로 불변 고객 편집본을 생성하고 동일 payload 재전송은 멱등 처리 |
 | 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 구현 | 변경요청·견적 snapshot과 generation-pinned READY preview를 한 view로 반환 |
 | 고객 변경 승인 | `POST /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인·거절·설명 요청 | 구현 | 고객 전용 결정, 정확 replay, 승인 시 양측 확인·scope lock을 원자적으로 수행 |
-| 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 신규 | 차량, 작업자 자원, 가용성, 배정 model·service 필요 |
-| 업체 배차 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 배정 확정과 알림 생성 | 신규 | 원자적 충돌 검증, 배정 저장과 알림 연결 필요 |
+| 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 구현 | 현재 범위에 묶인 작업별 immutable 후보 snapshot, 요구사항·충돌·선택 상태 반환 |
+| 업체 배차 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 배정 확정과 알림 생성 | 구현 | 용량·인원·기술·자격·대표 기사를 원자 검증하고 `dispatch_confirmed.v1` 알림 연결 |
 | 업체 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 문서 요약 | 확장 | 완료 확인·감사 기반 재사용; 작업자 제출·체크리스트·금액·문서 data 추가 |
 | 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 완료 확인 요청 | 신규 | 요청 lifecycle과 deep-link 알림 trigger 필요 |
 | 업체 완료 | `GET /api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF ZIP 다운로드 | 신규 | 문서 생성 상태와 archive 생성 service 필요 |
-| 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 신규 | 기존 작업·범위에 배정·체크인 data를 합치는 view 필요 |
-| 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 신규 | 배정된 기사 검증과 check-in record 필요 |
+| 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 구현 | 확정 배정·현재 잠긴 범위·마스킹 위치·checklist와 체크인 상태를 한 view로 반환 |
+| 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 구현 | 배정된 대표 기사, 예정일 당일과 checklist 전체 확인을 검증하고 정확 replay 허용 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 signed upload URL 발급 | 전환 | 기존 capture 3단계와 `StoragePort` 재사용; frontend path 단순화 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 기사 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 제안 전에는 READY 필수 |
 
@@ -108,7 +108,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 현장 변경 화면을 지원하기 위해 목표 17개 밖의 업체용 `GET /field-issues`,
 `POST /change-proposals`, `POST /change-proposals/{id}/explanation`도 실행 계약으로 등록됐다.
 
-## 5. 현재 서버 업무 operation 46개
+## 5. 현재 서버 업무 operation 51개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -141,6 +141,11 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 현재 범위의 불변 자식과 원화 견적 snapshot 전송 | 업체 범위 화면의 실행 계약 |
 | `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객이 현재 제안의 수정 요청 생성 | 고객 범위 화면의 실행 계약 |
 | `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객이 현재 업체 제안을 확인하고 양측 범위를 잠금 | 고객 범위 화면의 실행 계약 |
+| `POST /api/v1/move-jobs/{job_id}/dispatch/setup` | 업체 연동이 현재 범위·일정의 요구사항과 차량·인력 후보 snapshot 등록 | 작업별 immutable resource 연동 경계; master CRUD는 별도 범위 |
+| `GET /api/v1/move-jobs/{job_id}/dispatch` | 배차 요구사항·후보·충돌·현재 선택 조회 | 업체 배차 화면의 실행 계약 |
+| `PUT /api/v1/move-jobs/{job_id}/dispatch` | 차량·인력 선택 원자 확정과 현장기사 알림 생성 | 업체 배차 CTA의 멱등 command |
+| `GET /api/v1/move-jobs/{job_id}/field-brief` | 배정 기사에게 현재 범위·일정·현장 조건·checklist 제공 | 현장기사 상세 화면의 실행 계약; 신뢰 source 없는 연락 URI는 `null` |
+| `POST /api/v1/move-jobs/{job_id}/check-ins` | 예정일 당일 checklist 전체 확인과 도착 기록 | 현장기사 체크인 CTA의 멱등 command |
 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 현장기사가 잠긴 범위에 무가격 이슈·READY 증거 보고 | 현장기사 이슈 화면의 실행 계약 |
 | `GET /api/v1/move-jobs/{job_id}/field-issues` | 업체·현장기사의 이슈와 제안 처리 상태 조회 | 업체 후속 처리와 기사 상태 복구에 사용 |
 | `POST /api/v1/move-jobs/{job_id}/change-proposals` | 업체가 이슈를 변경 범위·원화 견적 제안으로 전환 | 업체 현장 변경 command 실행 계약 |
@@ -165,7 +170,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 별도 complete command가 generation·MIME type·크기를 고정한 비동기 validation intent를 만든다.
 제안 `POST /media-uploads`가 complete API를 흡수하려면 이 상태 전이와 재시도 계약을 먼저
 versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idempotency-Key` 공통 header는
-없고 API CORS 허용 method도 `GET`, `POST`이므로 제안 계약을 문서만으로 frontend에 적용할 수 없다.
+없고 API CORS는 실제 공개 mutation에 필요한 `GET`, `POST`, `PUT`만 허용한다. 제안 계약은
+OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 촬영 제출은 capture 소유자에게 멱등이며 제출 뒤 추가 media mutation을 막는다. 분석 상태 API는
 `scope_version_id` 또는 provider-neutral 실패만 노출하므로, FE는 provider task ID나 오류 원문을
 별도 계약으로 추정하지 않는다.
@@ -182,19 +188,18 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 
 ### 계약·조회 재구성
 
-- 남은 화면 단위 view 3개: `dispatch`, `completion-summary`, `field-brief`
+- 남은 화면 단위 view 1개: `completion-summary`
 - 후속 공통 `JobHeader`, `ScopeLineV2`; `QuoteSnapshot`과 signed 범위 preview v1은 구현됨
 - 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
 ### 신규 업무 상태
 
-- 배차·작업자·차량 가용성·체크인
 - 작업자 완료 제출, 완료 확인 요청, 고객 결정·문제 신고
 - 문서 생성 상태와 ZIP archive
 
 ### 예상 migration
 
-INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`을 추가했다. 배차·체크인, 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
+INT-01은 migration `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`을 추가했다. 완료 제출·요청·문제 신고와 문서 상태는 추가 persistence가 필요하므로 후속 migration 대상이다. 기존 범위 version, 승인, 변경요청, media, audit, notification table은 가능한 범위에서 재사용한다.
 
 ## 8. frontend 연동 기준
 
