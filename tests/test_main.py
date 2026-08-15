@@ -84,6 +84,18 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("put", f"{job_path}/dispatch"): {403, 409},
         ("get", f"{job_path}/field-brief"): {403, 409},
         ("post", f"{job_path}/check-ins"): {403, 409},
+        ("post", f"{job_path}/completion-submissions"): {403, 409},
+        ("get", f"{job_path}/completion-summary"): {403, 409, 503},
+        ("post", f"{job_path}/completion-requests"): {403, 409},
+        (
+            "post",
+            f"{job_path}/completion-requests/{{request_id}}/revoke",
+        ): {403, 409},
+        (
+            "post",
+            f"{job_path}/completion-requests/{{request_id}}/decision",
+        ): {403, 409, 503},
+        ("get", f"{job_path}/documents/archive"): {403, 409, 503},
         ("post", f"{job_path}/field-issues"): {403, 409},
         ("get", f"{job_path}/field-issues"): {403},
         ("post", f"{job_path}/change-proposals"): {403, 409},

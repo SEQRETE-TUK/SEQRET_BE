@@ -397,7 +397,7 @@ async def test_claim_validates_bounds_and_recovers_expired_lease(
         assert claimed_second.dispatch_token != old_token
 
     async with factory.begin() as session:
-        assert await claim_capture_analyses(session, limit=1) == ()
+        assert await claim_capture_analyses(session, now=NOW, limit=1) == ()
 
 
 @pytest.mark.anyio

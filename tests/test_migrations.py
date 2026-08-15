@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_13_0001"
+ALEMBIC_HEAD = "int_04_0001"
+ALEMBIC_COMPLETION_PREVIOUS = "a_13_0001"
 ALEMBIC_DISPATCH_PREVIOUS = "int_03_0002"
 ALEMBIC_FIELD_CHANGE_PREVIOUS = "int_02_0001"
 ALEMBIC_SCOPE_REVIEW_PREVIOUS = "a_02_0002"
@@ -52,6 +53,10 @@ BUSINESS_TABLES = {
     "dispatch_setup",
     "dispatch_plan",
     "field_check_in",
+    "completion_submission",
+    "completion_submission_evidence",
+    "completion_request",
+    "completion_problem_report",
     "change_request",
     "change_request_evidence",
     "completion_confirmation",
@@ -427,6 +432,7 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
         scope_id = uuid4().hex
         setup_id = uuid4().hex
         event_id = uuid4().hex
+        completion_event_id = uuid4().hex
         with engine.begin() as connection:
             connection.execute(
                 metadata.tables["move_job"].insert(),
@@ -487,6 +493,11 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
                     "required_skills": [],
                     "required_certifications": [],
                     "check_in_items": [{"key": "safety", "label": "safety"}],
+                    "completion_check_items": [
+                        {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
+                        {"key": "site_restored", "label": "출발지와 도착지 정리"},
+                        {"key": "changes_recorded", "label": "변경·이슈 기록 확인"},
+                    ],
                     "origin_conditions": [],
                     "safety_notice": "safety",
                     "vehicle_options": [],
@@ -525,10 +536,60 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
                     "created_at": now,
                 },
             )
+            connection.execute(
+                metadata.tables["outbox_event"].insert(),
+                {
+                    "event_id": completion_event_id,
+                    "event_type": "COMPLETION_SUBMITTED_V1",
+                    "schema_version": 1,
+                    "aggregate_id": job_id,
+                    "actor_id": worker_id,
+                    "trace_id": "1" * 32,
+                    "payload": {
+                        "completion_submission_id": uuid4().hex,
+                        "scope_version_id": scope_id,
+                        "field_worker_participant_id": worker_id,
+                    },
+                    "occurred_at": now,
+                    "next_attempt_at": now,
+                },
+            )
+
+        with pytest.raises(RuntimeError, match="INT-04 completion"):
+            command.downgrade(configuration, ALEMBIC_COMPLETION_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["outbox_event"]
+                .delete()
+                .where(metadata.tables["outbox_event"].c.event_id == completion_event_id)
+            )
+            connection.execute(
+                metadata.tables["dispatch_setup"]
+                .update()
+                .values(
+                    completion_check_items=[{"key": "custom_handoff", "label": "고객 맞춤 인계"}]
+                )
+            )
+        with pytest.raises(RuntimeError, match="dispatch checklist history"):
+            command.downgrade(configuration, ALEMBIC_COMPLETION_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["dispatch_setup"]
+                .update()
+                .values(
+                    completion_check_items=[
+                        {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
+                        {"key": "site_restored", "label": "출발지와 도착지 정리"},
+                        {"key": "changes_recorded", "label": "변경·이슈 기록 확인"},
+                    ]
+                )
+            )
 
         with pytest.raises(RuntimeError, match="dispatch or check-in history"):
             command.downgrade(configuration, ALEMBIC_DISPATCH_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_COMPLETION_PREVIOUS
 
         with engine.begin() as connection:
             connection.execute(metadata.tables["notification_delivery"].delete())

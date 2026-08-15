@@ -83,6 +83,12 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/clarification`: 설명 요청
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/explanation`: 설명 제출
 - `POST /move-jobs/{job_id}/change-requests/{change_request_id}/decision`: 승인 또는 거절
+- `POST /move-jobs/{job_id}/completion-submissions`: 대표 현장기사의 체크리스트·근무·선택적 완료 미디어 제출
+- `GET /move-jobs/{job_id}/completion-summary`: 업체·요청받은 고객의 완료·금액·문서 상태 조회
+- `POST /move-jobs/{job_id}/completion-requests`: 업체의 7일 고객 완료 확인 요청
+- `POST /move-jobs/{job_id}/completion-requests/{request_id}/revoke`: 미결 완료 요청 철회
+- `POST /move-jobs/{job_id}/completion-requests/{request_id}/decision`: 고객 완료 확인 또는 문제 신고
+- `GET /move-jobs/{job_id}/documents/archive`: 업체용 결정적 PDF 4종·manifest ZIP 다운로드
 - `POST /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인
 - `GET /move-jobs/{job_id}/completion-confirmations`: 작업 완료 확인 이력 조회
 - `GET /move-jobs/{job_id}/audit-events`: 작업 감사 이력 조회
@@ -108,9 +114,11 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 배차는 회사 관리자가 현재 잠긴 leaf 범위와 작업 일정에 묶인 차량·작업자 가용성 snapshot을 먼저 한 번 등록한 뒤 확정합니다. 서버는 차량 용량, 요구 인원, 일정, 필수 기술·자격과 대표 현장기사 배정을 다시 검증하고 `dispatch_confirmed.v1`을 같은 transaction에 기록합니다. 현장기사는 확정된 배차와 최신 범위에 대해서만 마스킹 위치·현장 조건·안전 checklist를 조회하고 작업 예정일 당일 모든 항목을 확인해 체크인할 수 있습니다. 연락처·채팅·지도 원본이 없으므로 관련 URI는 임의 생성하지 않고 `null`로 반환합니다.
 
-현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 매분 relay가 due 작업을 Cloud Tasks에 넣고 OIDC private worker가 generation-pinned validation·삭제를 수행합니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
+대표 현장기사는 체크인된 현재 배차·잠긴 범위에 대해 setup의 완료 checklist 전체, 실제 근무 구간, 현장 고객 확인 시각과 선택적 `READY` completion 미디어를 `completion-submissions`에 불변 기록합니다. 업체는 최신 제출만 7일 유효한 고객 확인 요청으로 보낼 수 있고, 고객은 확인하거나 별도 문제 기록을 남깁니다. 문제 신고는 책임을 자동 판단하지 않으며 정정 제출과 새 요청을 허용합니다. 고객 확인 시 고객·업체 완료 확인, 작업 `completed` 전이, generation-pinned 미디어 보존 삭제 intent와 `completion_decided.v1`을 같은 transaction에 기록합니다. 미디어가 없는 완료도 허용하며 이 경우 삭제 intent는 0개입니다. 기존 양측 `completion-confirmations` route는 신뢰 bootstrap·호환 계약으로 남습니다.
 
-촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 배차 확정, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
+완료 요약은 최종 견적, 승인된 현장 변경, 체크리스트, 근무, 선택적 미디어 preview, 요청·문제 상태와 보존기한을 한 view로 반환합니다. 문서가 준비되면 서버가 외부 PDF 의존성 없이 견적서·변경 승인 기록·작업 완료 기록·완료 확인 기록과 JSON manifest를 결정적 ZIP으로 생성합니다. 완료 사실은 문서 생성 또는 storage read URL 실패와 독립적으로 DB에 보존됩니다.
+
+촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 배차 확정, 완료 미디어 등록, 완료 제출·요청·고객 결정은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
 
 같은 scheduled relay Job이 Pub/Sub `DomainEvent`를 `consume_notification_event` application command에 전달하고 DB commit 뒤 ack합니다. 최초 31일 replay와 DLQ 운영 절차는 [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](docs/NOTIFICATION_CONSUMER_RUNBOOK.md)를 따릅니다. 실제 연락처 해석과 이메일·메시지 provider 호출은 destination 계약이 없어 이 런타임에 포함하지 않으며 현재는 `PENDING` in-app intent까지만 생성합니다.
 

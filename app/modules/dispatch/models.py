@@ -56,6 +56,15 @@ class DispatchSetup(Base):
     required_skills: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     required_certifications: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     check_in_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    completion_check_items: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: [
+            {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
+            {"key": "site_restored", "label": "출발지와 도착지 정리"},
+            {"key": "changes_recorded", "label": "변경·이슈 기록 확인"},
+        ],
+    )
     origin_conditions: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     safety_notice: Mapped[str] = mapped_column(String(2000), nullable=False)
     vehicle_options: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)

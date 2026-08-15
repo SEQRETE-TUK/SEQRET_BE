@@ -6,10 +6,10 @@
 >
 > 우선순위: MVP end-to-end flow 완성
 >
-> 상태: 최신 FE 시각 demo·공통 API 기반 반영 확인, backend 실행 계약 미확정
+> 상태: 최신 FE 시각 demo 반영, backend INT-04 실행 계약 확정, FE 완료 화면 연동 대기
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `aabf2da2221d63d4debc5f06b4d40e92f061289a` (2026-08-15)
+> `16b4a98b812e798ad62942f0d82d5d6d7e715068` (2026-08-15)
 >
 > backend 실행 계약: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -27,8 +27,8 @@
 2. 업체가 완료 확인 요청을 보내도 고객이 확인하거나 문제를 신고할 화면이 없다.
 3. 현장기사의 이슈 보고를 업체가 검토하고 금액이 있는 변경안으로 만드는 상태가 없다.
 
-[API 명세](API_SPEC.md)는 이 화면 요청을 구현하기 위한 목표 계약 제안이며 현재 실행 계약이
-아니다. 화면과 제품 범위가 확정된 뒤 A 소유 계약, 구현과 OpenAPI 반영 순서로 확정한다.
+[API 명세](API_SPEC.md)의 완료 제출·요청·결정·요약·문서 경로는 승인되어 A 소유 실행 계약과
+OpenAPI에 반영됐다. FE PRD 부록의 대안 경로나 화면 local state는 실행 계약이 아니다.
 B 소유 Port·event·AI 결과 schema를 바꾸는 경우에만 해당 영향 범위를 별도로 조정한다.
 
 ## 2. 요청 범위 요약
@@ -50,17 +50,16 @@ B 소유 Port·event·AI 결과 schema를 바꾸는 경우에만 해당 영향 �
 
 | 요청 항목 | 최신 FE 위치 | 시각 demo | 실행 계약 |
 | --- | --- | --- | --- |
-| 현장기사 작업 완료 기록 | `/crew?screen=4` | 반영 | 미구현 |
-| 고객 완료 확인·문제 신고 | `/?role=consumer&screen=7` | 반영 | 미구현 |
-| 업체 현장 이슈 견적 | `/provider/web?view=quote&state=field-issue-stale` 등 | 반영 | 미구현 |
-| 고객 범위 수정 요청 | `/?role=consumer&screen=11` | 반영 | 미구현 |
-| 고객 변경 설명 요청·거절 | `/?role=consumer&screen=6` | 반영 | 미구현 |
-| 공통 실패·충돌 state | 역할별 `state` query variant | 반영 | 미구현 |
+| 현장기사 작업 완료 기록 | `/crew?screen=4` | 반영 | BE 구현, FE 연동 대기 |
+| 고객 완료 확인·문제 신고 | `/?role=consumer&screen=7` | 반영 | BE 구현, FE 연동 대기 |
+| 업체 현장 이슈 견적 | `/provider/web?view=quote&state=field-issue-stale` 등 | 반영 | BE 구현, FE 연동 대기 |
+| 고객 범위 수정 요청 | `/?role=consumer&screen=11` | 반영 | BE 구현, FE 연동 대기 |
+| 고객 변경 설명 요청·거절 | `/?role=consumer&screen=6` | 반영 | BE 구현, FE 연동 대기 |
+| 공통 실패·충돌 state | 역할별 `state` query variant | 반영 | 일부 BE 오류 계약 구현, FE 화면별 복구 연동 대기 |
 
-따라서 이 문서의 **화면 추가 요청은 시각 demo 관점에서는 완료**됐다. FE source에 공통 API
-client와 TanStack Query provider는 마련됐지만 이를 호출하는 화면은 0개이고 동작은 local state와
-timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 OpenAPI에 없는 경로를 `기존 API`로
-부르거나 바로 연동하지 않는다.
+따라서 이 문서의 **화면 추가 요청과 backend 완료 계약은 완료**됐다. FE source의 공통 API client와
+TanStack Query provider는 촬영·AI 검토에 사용되지만 아래 완료 화면은 아직 local state와 timer로
+동작한다. 최신 비운영 OpenAPI의 완료 경로만 사용하고 FE PRD 부록의 대안 경로와 혼용하지 않는다.
 
 ## 3. P0 신규 화면 1 — 현장기사 작업 완료 기록
 
@@ -96,7 +95,7 @@ timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 O
 
 ### 제출 제한
 
-- backend가 지정한 필수 사진 group이 모두 충족되어야 한다.
+- 완료 사진은 선택 사항이며 0장 상태도 제출할 수 있다. 첨부한 사진은 모두 `READY`여야 한다.
 - 필수 체크리스트가 모두 완료되어야 한다.
 - 고객 현장 확인이 있어야 한다.
 - 현장기사는 최종 금액과 변경 승인 결과를 수정할 수 없다.
@@ -109,11 +108,11 @@ timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 O
 - offline 또는 API 실패 후 입력 내용 유지
 - 제출 완료 success state
 
-### 목표 API 후보
+### 확정 API
 
-- 제안 `GET /api/v1/move-jobs/{job_id}/field-brief`에 완료 checklist와 배정 인력 추가
-- 제안 `POST /api/v1/move-jobs/{job_id}/media-uploads`의 `purpose`에 `completion` 추가
-- 제안 `POST /api/v1/move-jobs/{job_id}/completion-submissions`
+- `GET /api/v1/move-jobs/{job_id}/field-brief`: 완료 checklist와 배정 인력 포함
+- 기존 capture session upload·complete의 `media_purpose: completion`: 선택적 완료 사진
+- `POST /api/v1/move-jobs/{job_id}/completion-submissions`
 
 ## 4. P0 신규 화면 2 — 고객 완료 확인
 
@@ -157,10 +156,10 @@ timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 O
 - 완료 사진 일부 load 실패
 - 최종 범위나 금액 data load 실패
 
-### 목표 API 후보
+### 확정 API
 
-- 제안 `GET /api/v1/move-jobs/{job_id}/completion-summary`를 고객 role에도 제공
-- 제안 `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision`
+- `GET /api/v1/move-jobs/{job_id}/completion-summary`: 완료 요청을 받은 고객 role에도 제공
+- `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision`
 - decision: `confirm` 또는 `report_issue`
 
 ## 5. P0 기존 화면 variant — 업체 현장 이슈 견적
@@ -199,10 +198,11 @@ timer로만 처리된다. 아래 API 항목은 모두 목표 후보다. 현재 O
 - 기준 scope version이 바뀐 stale 상태
 - 작업 일시 중지 경고
 
-### 목표 API 후보
+### 확정 API
 
-- 제안 `GET /api/v1/move-jobs/{job_id}/scope-review`에 `source_field_issue_id` query 또는 동등한 mode 입력 추가
-- 제안 `POST /api/v1/move-jobs/{job_id}/scope-proposals`의 `source_field_issue_id` 사용
+- `GET /api/v1/move-jobs/{job_id}/field-issues`: 업체의 미처리 현장 이슈 목록
+- `POST /api/v1/move-jobs/{job_id}/change-proposals`: 이슈를 범위·견적 변경 제안으로 전환
+- `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}`: 증거·기존·추가·최종 금액과 처리 상태
 
 ## 6. P0 bottom sheet
 

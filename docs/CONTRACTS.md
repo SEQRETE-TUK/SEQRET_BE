@@ -100,6 +100,9 @@
 - `change_requested.v1`
 - `dispatch_confirmed.v1`
 - `completion_media_submitted.v1`
+- `completion_submitted.v1`
+- `completion_requested.v1`
+- `completion_decided.v1`
 - `media_deleted.v1`
 
 현재 A 업무 command가 생성하는 event payload는 아래 key만 정확히 포함한다. 모든 ID는 canonical UUID 문자열이고 `content_hash`는 64자 소문자 16진수다. 증거 ID 배열은 비어 있지 않고 중복이 없다. 주소·자유서술·역할 링크·signed URL은 event에 넣지 않는다.
@@ -111,6 +114,9 @@
 - `change_requested.v1`: 문자열 `change_request_id`, 문자열 `base_scope_version_id`, 문자열 배열 `evidence_media_asset_ids`
 - `dispatch_confirmed.v1`: 문자열 `dispatch_id`, 문자열 `scope_version_id`, 문자열 `field_worker_participant_id`
 - `completion_media_submitted.v1`: 문자열 `capture_session_id`, 문자열 `media_asset_id`, 문자열 `room_zone_id`
+- `completion_submitted.v1`: 문자열 `completion_submission_id`, 문자열 `scope_version_id`, 문자열 `field_worker_participant_id`
+- `completion_requested.v1`: 문자열 `completion_request_id`, 문자열 `completion_submission_id`, 문자열 `customer_participant_id`
+- `completion_decided.v1`: 문자열 `completion_request_id`, 문자열 `completion_submission_id`, `confirm|report_issue` `decision`, 선택적 문자열 `problem_report_id`
 - `media_deleted.v1`: 문자열 `background_job_id`, 문자열 `media_asset_id`
 
 ## AI 분석 실행
@@ -127,15 +133,21 @@
 
 ## 완료와 감사 이력
 
+- 대표 현장기사만 현재 확정 배차의 체크인 뒤 `completion_submission`을 만든다. 현재 잠긴 leaf 범위, setup의 완료 checklist 전체, 배정 작업자 전원의 중복 없는 근무 구간, 작업 종료·현장 고객 확인 시각과 선택적 completion 미디어를 검증한다. 미디어가 있으면 해당 기사가 만든 `READY` 객체와 비어 있지 않은 generation만 받는다.
+- `client_reference`와 정확한 제출 payload 재전송은 최초 불변 제출을 반환한다. 상충 재전송, 살아 있는 고객 요청 또는 이미 확인된 제출 뒤의 새 제출은 거부한다. 고객 문제 신고·요청 만료·철회 뒤에는 정정 제출을 허용한다.
+- 업체는 최신 제출에 대해 7일 유효한 `completion_request`를 만들거나 살아 있는 요청을 철회한다. 같은 `client_reference`와 정확한 payload만 멱등이며, 이전 제출·중복 활성 요청·이미 문제 신고된 같은 제출의 재요청은 거부한다.
+- 고객은 최신 살아 있는 요청 하나만 `confirm|report_issue`로 결정한다. 문제 신고는 `missing_work|damage|amount|other`와 설명을 별도 append-only row에 저장하며 원인·책임을 자동 판정하지 않는다. 확인은 고객·업체 `completion_confirmation`, 작업 `COMPLETED`, 감사·Outbox와 선택적 미디어 보존 intent를 한 transaction에서 기록한다.
+- `completion-summary`는 업체와 완료 요청을 받은 고객에게만 현재 제출·요청, 최종 견적·변경, 체크리스트·근무·선택적 generation-pinned preview, 문서 준비 상태와 보존기한을 제공한다. 고객은 요청 전 요약을 읽을 수 없고 업체만 문서 ZIP을 내려받는다.
+- 문서 archive는 준비된 견적과 완료 제출을 바탕으로 견적서, 변경 승인 기록, 작업 완료 기록, 완료 확인 기록 PDF와 schema v1 manifest를 결정적으로 생성한다. 문서 실패는 완료·결정 DB 사실을 되돌리지 않으며 필수 자료가 없으면 빈 ZIP 대신 `409`다.
 - 유효한 access link의 `last_used_at`이 처음 기록되는 인증 transaction은 `PARTICIPANT_CONNECTED` 감사 event를 정확히 한 번 함께 기록한다. 이후 같은 link 사용은 시각만 갱신한다.
 - `PARTICIPANT_CONNECTED`의 actor는 해당 참여자이며 payload는 문자열 `access_link_id`, 문자열 `participant_id`, 역할 `role`만 포함한다. bearer secret, token hash와 request 식별자는 넣지 않는다.
 - `audit_event`는 DB에서 UPDATE·DELETE를 거부하고 PostgreSQL에서는 TRUNCATE도 거부한다. application에는 수정·삭제 command를 두지 않는다.
-- 감사 event, 완료 확인 또는 완료 증거가 하나라도 생성된 뒤에는 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 schema를 유지한 채 이전 application revision으로 되돌린다.
+- 감사 event, 완료 확인·제출·요청·문제 또는 사용자 지정 완료 checklist가 하나라도 생성된 뒤에는 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 schema를 유지한 채 이전 application revision으로 되돌린다.
 
 ## 미디어 보존 작업
 
 - 보존기간은 `SEQRET_MEDIA_RETENTION_DAYS`로 운영 환경이 명시한다. 값이 없으면 완료 확인과 삭제 작업 생성 API는 fail-closed로 동작한다.
-- 완료 증거는 첫 확인부터 generation이 필요하다. 최종 양측 확인은 모든 완료 증거의 object key·generation을 고정하고 `completed_at + SEQRET_MEDIA_RETENTION_DAYS` 시각의 `PENDING` 삭제 intent를 같은 transaction에 만든다.
+- 완료 미디어는 선택 사항이지만 제공된 증거는 제출 시점부터 `READY` 상태와 generation이 필요하다. 최종 고객 확인은 모든 제출 증거의 object key·generation을 고정하고 결정 시각 + `SEQRET_MEDIA_RETENTION_DAYS`의 `PENDING` 삭제 intent를 같은 transaction에 만든다. 미디어가 없으면 삭제 intent는 만들지 않는다.
 - 기존 완료 작업을 보완하는 수동 API는 보존기간이 지난 `UPLOADED`, `READY`, `FAILED` 미디어 중 generation이 확인된 객체만 즉시 삭제 대상으로 고정한다. 실행 중이거나 업로드·generation이 확인되지 않은 미디어는 대상에 넣지 않는다.
 - `MediaDeletionTaskV1` queue payload는 `background_job_id`, `job_type`, `attempt_count`, `schema_version`, `trace_id`만 포함한다. object key와 generation은 B handler가 `start_media_deletion` application query로 얻는다.
 - enqueue는 DB intent commit 뒤 lease dispatcher가 수행하고 `background-job:{id}:attempt:{n}` key로 중복 생성을 막는다.

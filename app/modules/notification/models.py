@@ -57,6 +57,8 @@ class NotificationDelivery(Base):
             "'CAPTURE_SUBMITTED_V1', 'ANALYSIS_COMPLETED_V1', "
             "'ANALYSIS_FAILED_V1', 'SCOPE_LOCKED_V1', 'CHANGE_REQUESTED_V1', "
             "'DISPATCH_CONFIRMED_V1', 'COMPLETION_MEDIA_SUBMITTED_V1', "
+            "'COMPLETION_SUBMITTED_V1', 'COMPLETION_REQUESTED_V1', "
+            "'COMPLETION_DECIDED_V1', "
             "'MEDIA_DELETED_V1')",
             name="notification_event_type",
         ),

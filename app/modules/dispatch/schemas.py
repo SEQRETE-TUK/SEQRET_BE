@@ -23,6 +23,13 @@ class DispatchCheckInItemCreate(DispatchRequestModel):
     label: Label
 
 
+DEFAULT_COMPLETION_CHECK_ITEMS = (
+    DispatchCheckInItemCreate(key="tools_removed", label="작업 도구와 자재 회수"),
+    DispatchCheckInItemCreate(key="site_restored", label="출발지와 도착지 정리"),
+    DispatchCheckInItemCreate(key="changes_recorded", label="변경·이슈 기록 확인"),
+)
+
+
 class DispatchVehicleCreate(DispatchRequestModel):
     external_reference: Reference
     display_name: Label
@@ -67,6 +74,9 @@ class DispatchSetupCreate(DispatchRequestModel):
     check_in_items: Annotated[
         tuple[DispatchCheckInItemCreate, ...], Field(min_length=1, max_length=20)
     ]
+    completion_check_items: Annotated[
+        tuple[DispatchCheckInItemCreate, ...], Field(min_length=1, max_length=20)
+    ] = DEFAULT_COMPLETION_CHECK_ITEMS
     origin_conditions: Annotated[tuple[Label, ...], Field(max_length=100)] = ()
     safety_notice: Annotated[str, Field(min_length=1, max_length=2000)]
     vehicles: Annotated[tuple[DispatchVehicleCreate, ...], Field(min_length=1, max_length=100)]
@@ -78,6 +88,7 @@ class DispatchSetupCreate(DispatchRequestModel):
             self.required_skills,
             self.required_certifications,
             tuple(item.key for item in self.check_in_items),
+            tuple(item.key for item in self.completion_check_items),
             tuple(vehicle.external_reference for vehicle in self.vehicles),
             tuple(worker.external_reference for worker in self.workers),
         )
@@ -183,6 +194,14 @@ class FieldBriefCheckItem(ContractModel):
     confirmed: bool
 
 
+class FieldBriefWorker(ContractModel):
+    worker_id: UUID
+    external_reference: str
+    display_name: str
+    role_label: str
+    is_lead: bool
+
+
 class FieldBriefView(ContractModel):
     job: ScopeReviewJobHeader
     dispatch_id: UUID
@@ -197,8 +216,12 @@ class FieldBriefView(ContractModel):
     origin_conditions: tuple[str, ...]
     field_check_required_count: int
     check_in_items: tuple[FieldBriefCheckItem, ...]
+    completion_check_items: tuple[FieldBriefCheckItem, ...]
+    completion_required_count: int
+    completion_submission_id: UUID | None
     assigned_vehicle: DispatchVehicleOption
     assigned_worker_count: int
+    assigned_workers: tuple[FieldBriefWorker, ...]
     required_skills: tuple[str, ...]
     safety_notice: str
     navigation_uri: None = None
