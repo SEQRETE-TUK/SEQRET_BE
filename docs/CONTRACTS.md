@@ -42,6 +42,14 @@
 - `AnalysisRequest.source_media_asset_ids[n]`, `object_keys[n]`, `content_types[n]`은 같은 미디어를 가리킨다. 세 배열은 길이가 같고 ID와 object key 배열 안에서 중복이 없어야 한다. `content_types`는 A가 validation을 끝낸 `image/jpeg`, `image/png`, `video/mp4` 중 하나이며 B adapter는 확장자가 없는 object key에서 MIME type을 추정하지 않는다.
 - merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.
 
+## 범위 검토와 견적
+
+- 업체 범위 제안은 고객이 만든 현재 `scope_version` 또는 고객 수정요청이 열린 현재 제안 version만 source로 사용한다. 제안은 새 불변 자식 version, 업체 approval, 원화 견적 snapshot, 포함·제외 작업과 사유를 한 transaction에 기록한다.
+- 원화 견적은 `base_amount_krw + sum(adjustments.amount_krw) == total_amount_krw`를 만족해야 하고 adjustment label, 포함 작업과 제외 작업은 중복될 수 없다. 포함·제외 작업은 서로 겹칠 수 없다.
+- 고객 수정요청은 업체 제안에 하나만 존재하고 후속 제안이 해결 관계를 기록한다. 과거 제안·요청·견적은 덮어쓰지 않는다.
+- 고객 확인은 기존 `approve_scope_version`을 호출해 업체 approval과 합쳐 현재 version을 잠근다. 별도 event를 추가하지 않고 기존 `scope_locked.v1` envelope를 그대로 사용한다.
+- 범위 preview는 `StoragePort.create_read_url`에 검증된 object key와 저장된 generation을 전달하지만 HTTP 응답에는 provider 내부값 대신 opaque 5분 HTTPS URL만 노출한다.
+
 ## 미디어 열람
 
 - 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부된 `READY` 상태의 `change_evidence` 미디어와 저장된 generation만 허용한다.

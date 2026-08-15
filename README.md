@@ -64,6 +64,10 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/scope-versions`: 불변 작업범위 버전 생성
 - `GET /move-jobs/{job_id}/scope-versions`: 작업범위 버전 이력 조회
 - `POST /move-jobs/{job_id}/scope-versions/{scope_version_id}/approvals`: 작업범위 버전 확인
+- `GET /move-jobs/{job_id}/scope-review`: 현재 범위·견적·수정요청·양측 확인 화면 조회
+- `POST /move-jobs/{job_id}/scope-proposals`: 업체 범위·원화 견적 제안
+- `POST /move-jobs/{job_id}/scope-review/revision-request`: 고객 범위 수정 요청
+- `POST /move-jobs/{job_id}/scope-review/confirm`: 고객 현재 제안 확인과 범위 잠금
 - `POST /move-jobs/{job_id}/change-requests`: 현장 변경요청 생성
 - `GET /move-jobs/{job_id}/change-requests`: 현장 변경요청 이력 조회
 - `GET /move-jobs/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url`: 고객·회사 관리자용 변경 증거 열람 URL 발급
@@ -86,6 +90,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 작업범위 편집은 기존 row를 덮어쓰지 않고 현재 버전을 부모로 삼는 새 snapshot을 생성합니다. 각 버전은 작업별 순번과 canonical JSON의 SHA-256 content hash를 가지며, 한 부모에서 두 갈래 버전이 생기지 않도록 데이터베이스 제약으로 선형 이력을 유지합니다.
 
 고객과 회사 관리자가 같은 현재 버전을 각각 확인하면 해당 버전이 잠깁니다. 이미 다음 버전이 있는 과거 버전, 중복 확인, 잠긴 버전의 후속 편집은 거부합니다.
+
+일반 frontend의 범위 화면은 저수준 scope API 대신 `scope-review` 흐름을 사용합니다. 업체 제안은 고객이 작성한 현재 범위 또는 고객 수정요청이 열린 현재 제안을 source로 새 불변 자식 version과 원화 견적 snapshot을 만들고 업체 확인을 함께 기록합니다. 고객은 수정요청 또는 확인 중 하나를 선택하며, 확인되면 기존 scope lock·Outbox·감사 계약을 재사용합니다. 같은 source와 정확히 같은 command 재전송은 기존 결과를 반환하고 다른 payload나 stale source는 거부합니다. 범위 조회의 AI 원본 사진은 READY 객체의 짧은 generation-pinned signed URL만 제공하며 provider 내부값은 노출하지 않습니다. 현재 범위 schema v1은 항목 key·공간·설명을 지원하고 수량·단위·작업 메모는 후속 AI schema v2 범위입니다.
 
 내부 `import_analysis_draft` application command는 공용 `AnalysisResult`를 검증해 새 작업범위 버전으로 변환합니다. AI 제안의 출처 미디어와 구역을 확인하고 모델·프롬프트·confidence·검토 필요 여부를 provenance로 보존하며, 같은 analysis run은 한 번만 가져옵니다. 외부 HTTP에서 raw AI 결과를 직접 등록하는 경로는 제공하지 않습니다.
 

@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_02_0002"
+ALEMBIC_HEAD = "int_02_0001"
+ALEMBIC_SCOPE_REVIEW_PREVIOUS = "a_02_0002"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_MEDIA_VALIDATION_PREVIOUS = "a_08_0002"
@@ -41,6 +42,8 @@ BUSINESS_TABLES = {
     "room_zone",
     "scope_version",
     "scope_approval",
+    "scope_proposal",
+    "scope_revision_request",
     "change_request",
     "change_request_evidence",
     "completion_confirmation",
@@ -180,12 +183,125 @@ def test_invitation_history_blocks_schema_downgrade(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, "int_01_0001")
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_SCOPE_REVIEW_PREVIOUS
 
         with engine.begin() as connection:
             connection.execute(metadata.tables["participant_invitation"].delete())
         command.downgrade(configuration, "int_01_0001")
         assert "participant_invitation" not in inspect(engine).get_table_names()
+        command.upgrade(configuration, "head")
+    finally:
+        engine.dispose()
+
+
+def test_scope_review_history_blocks_schema_downgrade(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'scope-review-guard.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "scope_version",
+                "scope_proposal",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        customer_id = uuid4().hex
+        manager_id = uuid4().hex
+        source_scope_id = uuid4().hex
+        result_scope_id = uuid4().hex
+        proposal_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "scope review guard",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                [
+                    {
+                        "id": customer_id,
+                        "job_id": job_id,
+                        "role": "CUSTOMER",
+                        "display_name": "customer",
+                        "created_at": now,
+                    },
+                    {
+                        "id": manager_id,
+                        "job_id": job_id,
+                        "role": "COMPANY_MANAGER",
+                        "display_name": "manager",
+                        "created_at": now,
+                    },
+                ],
+            )
+            connection.execute(
+                metadata.tables["scope_version"].insert(),
+                {
+                    "id": source_scope_id,
+                    "job_id": job_id,
+                    "sequence_number": 1,
+                    "content": {"schema_version": 1, "items": []},
+                    "content_hash": "a" * 64,
+                    "created_by_participant_id": customer_id,
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["scope_version"].insert(),
+                {
+                    "id": result_scope_id,
+                    "job_id": job_id,
+                    "parent_version_id": source_scope_id,
+                    "sequence_number": 2,
+                    "content": {"schema_version": 1, "items": []},
+                    "content_hash": "b" * 64,
+                    "created_by_participant_id": manager_id,
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["scope_proposal"].insert(),
+                {
+                    "id": proposal_id,
+                    "job_id": job_id,
+                    "source_scope_version_id": source_scope_id,
+                    "result_scope_version_id": result_scope_id,
+                    "proposed_by_participant_id": manager_id,
+                    "kind": "INITIAL",
+                    "status": "CUSTOMER_REVIEW",
+                    "base_amount_krw": 100_000,
+                    "adjustments": [],
+                    "total_amount_krw": 100_000,
+                    "included_works": [],
+                    "exclusions": [],
+                    "reason": "initial quote",
+                    "sent_at": now,
+                },
+            )
+
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_SCOPE_REVIEW_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            connection.execute(metadata.tables["scope_proposal"].delete())
+        command.downgrade(configuration, ALEMBIC_SCOPE_REVIEW_PREVIOUS)
+        assert "scope_proposal" not in inspect(engine).get_table_names()
+        assert "scope_revision_request" not in inspect(engine).get_table_names()
         command.upgrade(configuration, "head")
     finally:
         engine.dispose()

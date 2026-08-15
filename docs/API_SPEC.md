@@ -1,6 +1,6 @@
 # SEQRET MVP 프론트엔드 목표 API 제안서
 
-> 상태: 제품·frontend 검토용 목표 계약 초안, 실행 계약 아님
+> 상태: 목표 계약 문서. 구현으로 표시한 경로만 현재 실행 계약
 >
 > 기준일: 2026-08-15
 >
@@ -35,8 +35,9 @@ query·mutation을 수행한다. 나머지 demo 화면 전이는
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
-이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개가 현재 OpenAPI에 등록됐다. 별도의
-소비자 onboarding·역할 초대 실행 계약 8개 operation도 등록됐다. 나머지는 제품
+이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개와 `scope-review` 조회·제안·수정요청·확인
+4개가 현재 OpenAPI에 등록됐다. 별도의 소비자 onboarding·역할 초대 실행 계약 8개 operation도
+등록됐다. 나머지는 제품
 범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
 frontend 실행 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
@@ -63,7 +64,7 @@ B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 �
 - 업체 담당자: `company_manager`
 - 현장기사: `field_worker`
 - 작업 ID와 인증 actor의 작업이 다르면 정보 노출 방지를 위해 `404`를 반환한다.
-- 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없으므로 별도 선행 계약과 저장 정책이 필요하다.
+- 후속 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없다. 구현된 `analysis-review` 완료와 범위 제안·수정요청·확인은 현재 source ID와 정확한 payload를 기준으로 재전송을 식별한다.
 
 MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본다. 팀장을 포함한 배차 화면의 작업자들은 로그인 participant가 아니라 업체의 배정 인력 record다.
 
@@ -125,10 +126,10 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 부분 구현·response 재구성 필요 |
-| `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 미구현 |
-| `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 기존 approval logic 재사용 |
-| `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·사유를 고객에게 전송 | 업체 | 기존 scope version logic 확장 |
+| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 구현·범위 v1 |
+| `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·사유를 고객에게 전송 | 업체 | 구현·범위 v1 |
 
 ### 3.2 고객 사진·AI 검토
 
@@ -197,10 +198,10 @@ Response `ScopeReviewView`:
 
 | Field | Type | 와이어프레임 표시 |
 | --- | --- | --- |
-| `job` | `JobHeader` | 고객명·일정·경로·단계 |
+| `job` | `ScopeReviewJobHeader` | 작업 ID·표시 code·제목·고객·업체·현재 역할·일정·출발/도착 label |
 | `scope.id` | UUID | 확인 command 대상 |
 | `scope.version_label` | string | `v3` |
-| `scope.status` | enum | AI 검토 완료, 수정 중, 고객 확인 대기, 확인됨 |
+| `scope.status` | enum | `company_review`, `customer_review`, `revision_requested`, `confirmed` |
 | `scope.item_count` | integer | 물품 34개 |
 | `scope.work_count` | integer | 작업 8개 |
 | `scope.exclusion_count` | integer | 제외 2개 |
@@ -208,13 +209,20 @@ Response `ScopeReviewView`:
 | `scope.room_groups[]` | `RoomScopeGroup[]` | 거실·침실·주방별 항목과 상태 |
 | `scope.included_works[]` | string[] | 포장, 운반, 조립 등 |
 | `scope.exclusions[]` | string[] | 에어컨 이전, 귀중품 등 |
-| `quote` | `QuoteSnapshot` | 기본·추가·제안 총액 |
+| `proposal_id` | UUID/null | 현재 범위에 연결된 업체 제안 |
+| `quote` | `QuoteSnapshot`/null | 기본·추가·제안 총액 |
 | `proposal_reason` | string/null | 업체 변경 사유 |
 | `media_previews[]` | `MediaPreview[]` | 공간별 원본 사진 |
 | `company_confirmed_at` | datetime/null | 업체 상태 |
 | `customer_confirmed_at` | datetime/null | 고객 상태 |
+| `revision_request` | object/null | 수정 요청 ID·대상·사유·요청/해결 상태와 시각 |
 
-`RoomScopeGroup`은 `room_zone_id`, `label`, `item_count`, `review_status`, `items[]`를 가진다.
+`RoomScopeGroup`은 `room_zone_id`, `label`, `item_count`, `review_required_count`, `items[]`를 가진다.
+각 item은 `item_key`, `room_zone_id`, `description`, `review_required`,
+`source_media_asset_ids`를 반환한다. `MediaPreview`는 READY media만 대상으로
+`media_asset_id`, `room_zone_id`, `content_type`, 5분짜리 generation-pinned `read_url`,
+`expires_at`을 반환한다. object key, generation, model·prompt·provider 값은 응답에 포함하지 않는다.
+현재 범위 v1은 항목 key·공간·설명만 지원하며 수량·단위·작업 메모는 AI schema v2 이후 확장한다.
 
 ### 4.3 `GET /analysis-review`
 
@@ -311,8 +319,9 @@ Response `FieldBriefView`:
 ```
 
 - `reason`: 1..2000자
-- 성공: `201`, `{revision_request_id, status: "requested", requested_at}`
+- 성공: `201`, `{revision_request_id, scope_proposal_id, scope_version_id, status, reason, requested_at, resolved_by_scope_proposal_id, resolved_at}`
 - 현재 고객 확인 대기 version에만 요청할 수 있다.
+- 같은 참여자가 같은 version과 reason을 재전송하면 기존 요청을 반환하고 다른 payload나 stale version은 `409`다.
 
 ### 5.2 범위 확인
 
@@ -322,8 +331,9 @@ Response `FieldBriefView`:
 {"scope_version_id": "uuid"}
 ```
 
-- 성공: `200`, `{scope_version_id, status: "confirmed", confirmed_at}`
+- 성공: `200`, `{proposal_id, scope_version_id, status: "confirmed", confirmed_at}`
 - 업체가 전송한 현재 version만 확인할 수 있다.
+- 같은 고객 확인의 재전송은 기존 확인 시각을 반환한다. 고객 확인은 기존 업체 확인과 합쳐 해당 범위를 잠그고 `scope_locked.v1`을 기록한다.
 
 ### 5.3 AI 검토 완료
 
@@ -356,29 +366,19 @@ Response `FieldBriefView`:
 
 ```json
 {
-  "source_scope_draft_id": "uuid",
-  "base_scope_version_id": null,
-  "source_field_issue_id": null,
-  "lines": [
-    {
-      "item_key": "living-sofa-1",
-      "kind": "item",
-      "room_zone_id": "uuid",
-      "name": "3인 소파",
-      "quantity": 1,
-      "unit": "개",
-      "work_note": "일반 운반"
-    },
-    {
-      "item_key": "work-packing",
-      "kind": "work",
-      "room_zone_id": null,
-      "name": "포장",
-      "quantity": null,
-      "unit": null,
-      "work_note": null
-    }
-  ],
+  "source_scope_version_id": "uuid",
+  "content": {
+    "schema_version": 1,
+    "items": [
+      {
+        "item_key": "living-sofa-1",
+        "room_zone_id": "uuid",
+        "description": "3인 소파 일반 운반"
+      }
+    ]
+  },
+  "included_works": ["포장", "운반"],
+  "exclusions": ["에어컨 이전"],
   "quote": {
     "base_amount_krw": 1160000,
     "adjustments": [
@@ -390,11 +390,14 @@ Response `FieldBriefView`:
 }
 ```
 
-- server는 `base + sum(adjustments) == total`을 검증한다.
-- 최초 제안은 AI 검토 완료가 반환한 `source_scope_draft_id`를 사용한다.
-- 현장 이슈 후 제안은 `base_scope_version_id`와 `source_field_issue_id`를 함께 넣고 `source_scope_draft_id`는 null로 둔다.
-- 전송 자체가 업체 확인을 의미한다.
-- 성공: `201`, `{proposal_id, proposal_kind, status: "customer_review", sent_at}`
+- `content.items`: 1..500개, `item_key` 중복 불가. 현재 schema version은 1이다.
+- `included_works`와 `exclusions`: 각각 최대 100개, 내부 중복과 양쪽 겹침 불가.
+- server는 `base + sum(adjustments) == total`과 adjustment label 고유성을 검증한다.
+- 최초 제안은 고객이 만든 현재 scope version을 source로 사용한다.
+- 수정 제안은 고객이 수정 요청한 제안의 현재 result version을 source로 사용한다.
+- 전송 자체가 업체 확인을 의미하고 새 불변 자식 scope version을 생성한다.
+- 성공: `201`, `{proposal_id, proposal_kind, status, source_scope_version_id, result_scope_version_id, quote, included_works, exclusions, reason, sent_at, confirmed_at}`
+- 같은 업체가 같은 source와 정확히 같은 payload를 재전송하면 기존 제안을 반환한다. 다른 payload, 과거 source, 수정 요청 없는 재제안은 `409`다.
 
 ### 5.5 현장 변경 결정
 
@@ -583,9 +586,10 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 33개 path와 39개 operation이 있다. `/api/v1` 업무 operation 36개와
-운영 operation 3개다. 이 문서의 제안 17개 중 `analysis-review` 조회·완료 2개가 실행 계약으로
-등록됐고 소비자 onboarding·역할 초대 8개 operation이 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
+현재 OpenAPI에는 37개 path와 43개 operation이 있다. `/api/v1` 업무 operation 40개와
+운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개와
+`scope-review` 조회·제안·수정요청·확인 4개가 실행 계약으로 등록됐고 소비자 onboarding·역할 초대
+8개 operation이 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
@@ -596,7 +600,8 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
-| scope version 생성·목록·approval | `scope-review`, `scope-proposals`, `confirm`으로 교체 |
+| scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1만 노출한다. |
+| scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
 | change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |
 | background job 생성·목록·재시도 3개 | 내부 운영 기능으로 유지하고 frontend 계약에서 제외 |

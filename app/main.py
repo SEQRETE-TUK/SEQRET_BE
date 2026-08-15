@@ -18,6 +18,7 @@ from app.modules.completion.router import router as completion_router
 from app.modules.move_job.router import router as move_job_router
 from app.modules.notification.router import router as notification_router
 from app.modules.scope.router import router as scope_router
+from app.modules.scope_review.router import router as scope_review_router
 from app.platform.cache import create_redis_cache
 from app.platform.db import create_database_engine, create_session_factory
 from app.platform.http_observability import HttpObservabilityMiddleware
@@ -88,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(capture_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(analysis_review_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(scope_router, prefix=runtime_context.settings.api_prefix)
+    application.include_router(scope_review_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(completion_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(notification_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(background_job_router, prefix=runtime_context.settings.api_prefix)

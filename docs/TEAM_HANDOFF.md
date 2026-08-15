@@ -8,11 +8,11 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 33개 path에 39개다: `/api/v1` 업무 operation 36개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
+- OpenAPI operation은 37개 path에 43개다: `/api/v1` 업무 operation 40개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 현장 변경요청과 증거 열람, 완료 확인, 감사·알림 조회, 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `a_02_0002`다. 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `int_02_0001`이다. 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
@@ -31,6 +31,9 @@
 - 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.
 - `GET /move-jobs/{job_id}/analysis-review`는 고객이 가장 최근에 제출한 분석이 `completed`일 때만 공간별 전체·READY·FAILED media 수와 현재 편집 항목을 반환한다. AI 항목에는 신뢰도·검토 필요·source media ID를 제공하지만 model·prompt·provider 정보는 노출하지 않는다.
 - `POST /move-jobs/{job_id}/analysis-review/complete`는 응답의 `source_scope_version_id`와 최종 항목 전체를 받아 고객 편집본을 불변 자식 scope version으로 생성한다. 같은 항목의 재전송은 같은 결과를 반환하고 stale 원본, 다른 내용의 재전송, 다른 참여자가 만든 자식 version은 `409`다. 현재 v1은 항목 key·공간·설명을 지원하며 수량·단위·작업 메모는 AI schema v2 범위다.
+- `GET /move-jobs/{job_id}/scope-review`는 고객과 업체에게 현재 불변 범위, 원화 견적, 포함·제외 작업, 수정요청, 양측 확인 시각과 AI 출처 media preview를 한 번에 반환한다. preview는 READY 객체의 generation-pinned 5분 read URL이며 object key·generation·model·prompt·provider 값은 노출하지 않는다.
+- `POST /move-jobs/{job_id}/scope-proposals`는 업체만 호출한다. 고객 작성 현재 version 또는 고객 수정요청이 열린 제안 version을 source로 새 불변 자식과 견적 snapshot을 만들고 업체 확인을 함께 기록한다. 정확히 같은 payload 재전송만 기존 제안을 반환하며 stale·다른 payload는 `409`다.
+- `POST /move-jobs/{job_id}/scope-review/revision-request`와 `/confirm`은 고객 전용이다. 현재 고객 확인 대기 제안만 수정 요청하거나 확인할 수 있고, 확인은 기존 업체 approval과 합쳐 현재 scope를 잠그고 기존 `scope_locked.v1` event를 기록한다.
 - production은 `/docs`, `/redoc`, `/openapi.json`을 노출하지 않는다. client schema는 검증된 `main`으로 비운영 환경에서 생성한다.
 
 ## FE 현재 상태와 blocker
@@ -63,6 +66,8 @@
 
 ## staging 운영 증적
 
+- [Deploy staging #31873864857](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31873864857): A-02 PostgreSQL 잠금 hotfix `dc1e2c0`에서 전체 rollout gate와 promotion 성공. API는 `seqret-stg-api-00011-qxm`이고 live OpenAPI는 33개 path·39개 operation이다. 합성 작업 `c310a736-2fab-4bb4-90da-d9ede0d171db`에서 고객 온보딩 → 업체 초대·수락 → 기사 초대·수락 → 업체 초대 재발급과 하위 link 철회 cascade를 확인했으며 secret은 출력·저장하지 않았다.
+- [Deploy staging #31872234823](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31872234823): A-02 `0173290`에서 migration gate, Terraform apply, 예약 relay, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00010-fhk`이며 live OpenAPI는 33개 path·39개 operation이다.
 - [Deploy staging #31869334530](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31869334530): `c7b6e77`에서 migration, Terraform apply, 예약 Outbox relay, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00009-2l4`, private worker는 `seqret-stg-worker-00002-98n`이며 live OpenAPI는 26개 path·31개 operation이다.
 - 2026-08-15 INT-01 staging canary: 합성 `image/png` 3건을 API bootstrap → signed GCS PUT → upload complete → validation `READY` → 분석 제출 → Cloud Tasks private worker 순서로 실행했다. 분석 run `52db6941-2490-487f-a252-ff2d2c04188b`는 `failed/unavailable/retryable=true`, `6522a439-86a9-467a-9c86-e656033e8c00`과 `a2ffdca8-1b94-422d-a2b4-06b0f2ed2830`은 `failed/invalid_input/retryable=false`였다. access secret, signed URL과 원본 미디어는 증적에 저장하지 않았다. 실패 단계 관측성과 재시도 복구는 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93)의 완료 조건이다.
 - [Deploy staging #31811161952](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31811161952): 최신 application·migration 기준 `ecb325e`에서 migration, Terraform apply, 예약 Outbox relay, readiness, 10% canary와 promotion 성공. API `seqret-stg-api-00008-4b6`과 private worker `seqret-stg-worker-00001-xdf`가 동일 image digest `sha256:5cbf5c4ec7cc6d4fb27f7adc8e64d1b086cface8dac2e6cff65bafc023ee1f9a`를 사용한다.
@@ -78,6 +83,6 @@
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-현재 staging application·schema는 `c7b6e77` 배포 증적과 일치한다. `72c4840`에서 수정한 recovery workflow는 위 PITR drill로 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
+현재 staging application·schema는 `dc1e2c0` 배포 증적과 일치한다. `72c4840`에서 수정한 recovery workflow는 위 PITR drill로 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.
