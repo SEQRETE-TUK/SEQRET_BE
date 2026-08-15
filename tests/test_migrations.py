@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_02_0001"
+ALEMBIC_HEAD = "int_03_0002"
+ALEMBIC_FIELD_CHANGE_PREVIOUS = "int_02_0001"
 ALEMBIC_SCOPE_REVIEW_PREVIOUS = "a_02_0002"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
@@ -44,6 +45,9 @@ BUSINESS_TABLES = {
     "scope_approval",
     "scope_proposal",
     "scope_revision_request",
+    "field_issue",
+    "field_issue_evidence",
+    "change_proposal_detail",
     "change_request",
     "change_request_evidence",
     "completion_confirmation",
@@ -295,13 +299,99 @@ def test_scope_review_history_blocks_schema_downgrade(tmp_path: Path) -> None:
 
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_SCOPE_REVIEW_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_FIELD_CHANGE_PREVIOUS
 
         with engine.begin() as connection:
             connection.execute(metadata.tables["scope_proposal"].delete())
         command.downgrade(configuration, ALEMBIC_SCOPE_REVIEW_PREVIOUS)
         assert "scope_proposal" not in inspect(engine).get_table_names()
         assert "scope_revision_request" not in inspect(engine).get_table_names()
+        command.upgrade(configuration, "head")
+    finally:
+        engine.dispose()
+
+
+def test_field_change_history_blocks_schema_downgrade(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'field-change-guard.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "scope_version",
+                "field_issue",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        worker_id = uuid4().hex
+        scope_id = uuid4().hex
+        issue_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "field change guard",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                {
+                    "id": worker_id,
+                    "job_id": job_id,
+                    "role": "FIELD_WORKER",
+                    "display_name": "worker",
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["scope_version"].insert(),
+                {
+                    "id": scope_id,
+                    "job_id": job_id,
+                    "sequence_number": 1,
+                    "content": {"schema_version": 1, "items": []},
+                    "content_hash": "c" * 64,
+                    "created_by_participant_id": worker_id,
+                    "created_at": now,
+                    "locked_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["field_issue"].insert(),
+                {
+                    "id": issue_id,
+                    "job_id": job_id,
+                    "client_reference": uuid4().hex,
+                    "base_scope_version_id": scope_id,
+                    "reported_by_participant_id": worker_id,
+                    "issue_type": "SITE_BLOCKER",
+                    "title": "site blocker",
+                    "description": "synthetic evidence",
+                    "created_at": now,
+                },
+            )
+
+        with pytest.raises(RuntimeError, match="roll back the application"):
+            command.downgrade(configuration, ALEMBIC_FIELD_CHANGE_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            connection.execute(metadata.tables["field_issue"].delete())
+        command.downgrade(configuration, ALEMBIC_FIELD_CHANGE_PREVIOUS)
+        assert "field_issue" not in inspect(engine).get_table_names()
+        assert "field_issue_evidence" not in inspect(engine).get_table_names()
+        assert "change_proposal_detail" not in inspect(engine).get_table_names()
         command.upgrade(configuration, "head")
     finally:
         engine.dispose()

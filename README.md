@@ -68,6 +68,11 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/scope-proposals`: 업체 범위·원화 견적 제안
 - `POST /move-jobs/{job_id}/scope-review/revision-request`: 고객 범위 수정 요청
 - `POST /move-jobs/{job_id}/scope-review/confirm`: 고객 현재 제안 확인과 범위 잠금
+- `POST·GET /move-jobs/{job_id}/field-issues`: 현장기사 이슈 보고와 업체·현장기사 처리 상태 조회
+- `POST /move-jobs/{job_id}/change-proposals`: 업체 변경 범위·원화 견적 제안
+- `GET /move-jobs/{job_id}/change-proposals/{proposal_id}`: 고객·업체용 변경 사유·증거·견적 화면 조회
+- `POST /move-jobs/{job_id}/change-proposals/{proposal_id}/decision`: 고객 승인·거절·설명 요청
+- `POST /move-jobs/{job_id}/change-proposals/{proposal_id}/explanation`: 업체 변경 설명 제출
 - `POST /move-jobs/{job_id}/change-requests`: 현장 변경요청 생성
 - `GET /move-jobs/{job_id}/change-requests`: 현장 변경요청 이력 조회
 - `GET /move-jobs/{job_id}/change-requests/{change_request_id}/evidence/{media_asset_id}/read-url`: 고객·회사 관리자용 변경 증거 열람 URL 발급
@@ -95,7 +100,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 내부 `import_analysis_draft` application command는 공용 `AnalysisResult`를 검증해 새 작업범위 버전으로 변환합니다. AI 제안의 출처 미디어와 구역을 확인하고 모델·프롬프트·confidence·검토 필요 여부를 provenance로 보존하며, 같은 analysis run은 한 번만 가져옵니다. 외부 HTTP에서 raw AI 결과를 직접 등록하는 경로는 제공하지 않습니다.
 
-현장 작업자는 잠긴 현재 범위를 기준으로 자신이 촬영한 `change_evidence` 미디어와 변경안을 제출할 수 있습니다. 고객 또는 회사 관리자는 한 번 설명을 요청한 뒤 승인하거나 사유와 함께 거절합니다. 승인된 요청만 기준 범위의 결과 버전을 만들며, 결과 버전은 다시 양측 확인을 받아야 잠깁니다.
+일반 frontend의 현장 변경 흐름은 역할을 분리합니다. 현장 작업자는 잠긴 현재 범위와 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 기준으로 무가격 이슈를 보고합니다. 회사 관리자는 모든 증거의 validation이 `READY`가 된 이슈 하나를 현재 확정 금액 기준의 변경 범위·견적 제안으로 전환하고, 고객은 generation-pinned 증거 preview를 확인한 뒤 승인·거절·설명 요청 중 하나를 선택합니다. 설명 요청에는 업체가 한 번 설명을 제출할 수 있습니다. 승인된 제안은 기존 변경요청과 범위 승인 로직을 재사용해 결과 범위를 만들고 양측 확인과 잠금을 같은 command 안에서 완료합니다. 같은 client reference 또는 동일 command 재전송은 같은 결과를 반환하고 stale 범위나 상충 payload는 거부합니다. 기존 `change-requests` route는 신뢰 bootstrap·내부 호환 계약으로 남습니다.
 
 현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 매분 relay가 due 작업을 Cloud Tasks에 넣고 OIDC private worker가 generation-pinned validation·삭제를 수행합니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
 

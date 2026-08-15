@@ -35,9 +35,9 @@ query·mutation을 수행한다. 나머지 demo 화면 전이는
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
-이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개와 `scope-review` 조회·제안·수정요청·확인
-4개가 현재 OpenAPI에 등록됐다. 별도의 소비자 onboarding·역할 초대 실행 계약 8개 operation도
-등록됐다. 나머지는 제품
+이 문서의 17개 화면 경로 중 `analysis-review` 조회·완료 2개, `scope-review` 조회·제안·수정요청·확인
+4개, 변경 제안 조회·결정 2개와 현장 이슈 보고가 현재 OpenAPI에 등록됐다. 업체 이슈 목록·변경
+제안·설명 3개와 소비자 onboarding·역할 초대 8개 operation도 별도 실행 계약으로 등록됐다. 나머지는 제품
 범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
 frontend 실행 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
@@ -64,7 +64,7 @@ B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 �
 - 업체 담당자: `company_manager`
 - 현장기사: `field_worker`
 - 작업 ID와 인증 actor의 작업이 다르면 정보 노출 방지를 위해 `404`를 반환한다.
-- 후속 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없다. 구현된 `analysis-review` 완료와 범위 제안·수정요청·확인은 현재 source ID와 정확한 payload를 기준으로 재전송을 식별한다.
+- 후속 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없다. 구현된 `analysis-review` 완료와 범위 제안·수정요청·확인은 현재 source ID와 정확한 payload를 기준으로 재전송을 식별한다. 현장 이슈는 작업별 `client_reference`와 정확한 payload, 변경 제안은 이슈 ID와 정확한 payload, 결정·설명은 기존 terminal 상태와 정확한 payload로 replay를 식별한다.
 
 MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본다. 팀장을 포함한 배차 화면의 작업자들은 로그인 participant가 아니라 업체의 배정 인력 record다.
 
@@ -142,8 +142,10 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 사유, 증빙 사진, 기존·추가·최종 금액과 기록 정보 조회 | 고객, 업체 | 기존 change response 확장 필요 |
-| `POST` | `/api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인, 거절 또는 설명 요청 | 고객 | 기존 change command 교체 필요 |
+| `POST` | `/api/v1/move-jobs/{job_id}/change-proposals` | 현장 이슈를 범위·견적 변경안으로 전환 | 업체 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 사유, 증빙 사진, 기존·추가·최종 금액과 기록 정보 조회 | 고객, 업체 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인, 거절 또는 설명 요청 | 고객 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/explanation` | 고객 설명 요청에 업체 설명 제출 | 업체 | 구현 |
 
 ### 3.4 업체 배차·인력
 
@@ -167,7 +169,8 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 | `GET` | `/api/v1/move-jobs/{job_id}/field-brief` | 승인 범위, 일정, 마스킹 경로, 담당자, 현장 조건과 배정 자원 조회 | 현장기사 | 미구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/check-ins` | `현장 도착 체크인` 기록 | 현장기사 | 미구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
-| `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 업체에 보고 | 현장기사 | 기존 change request와 분리 필요 |
+| `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 업체에 보고 | 현장기사 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 업체, 현장기사 | 구현 |
 
 ## 4. 화면 조회 계약
 
@@ -249,11 +252,17 @@ Response `AnalysisReviewView`:
 Response `ChangeProposalView`:
 
 - `job: JobHeader`
-- `proposal_id`, `status`, `title`, `reason`
+- `proposal_id`, `field_issue_id`, `status`, `title`, `reason`
+- `base_scope_version_id`, `base_scope_version_label`, `result_scope_version_id`
 - `evidence_media: MediaPreview[]`
 - `quote: QuoteSnapshot`
 - `requested_by`, `requested_at`
-- `clarification_note`, `decided_by`, `decided_at`, `decision_note`
+- `clarification_note`, `clarification_requested_at`
+- `explanation`, `explained_at`
+- `decided_by`, `decided_at`, `decision_note`
+
+`requested_by`와 `decided_by`는 참여자 ID, 표시명과 역할만 반환한다. 증거 preview는 `READY`
+객체의 generation-pinned 5분 URL이고 object key·generation은 포함하지 않는다.
 
 ### 4.5 `GET /dispatch`
 
@@ -399,21 +408,51 @@ Response `FieldBriefView`:
 - 성공: `201`, `{proposal_id, proposal_kind, status, source_scope_version_id, result_scope_version_id, quote, included_works, exclusions, reason, sent_at, confirmed_at}`
 - 같은 업체가 같은 source와 정확히 같은 payload를 재전송하면 기존 제안을 반환한다. 다른 payload, 과거 source, 수정 요청 없는 재제안은 `409`다.
 
+### 5.4.1 업체 현장 변경 제안
+
+`POST /change-proposals`
+
+```json
+{
+  "field_issue_id": "uuid",
+  "base_scope_version_id": "uuid",
+  "title": "사다리차 추가",
+  "reason": "도착지 엘리베이터 고장으로 외부 운반이 필요합니다.",
+  "proposed_content": {
+    "schema_version": 1,
+    "items": [{"item_key": "ladder-truck", "room_zone_id": "uuid", "description": "사다리차 운반"}]
+  },
+  "quote": {
+    "base_amount_krw": 1050000,
+    "adjustments": [{"label": "사다리차", "amount_krw": 180000}],
+    "total_amount_krw": 1230000
+  }
+}
+```
+
+- 업체만 제안할 수 있고 현장 이슈 하나에는 제안 하나만 연결한다.
+- 기준 범위는 현재 잠긴 leaf여야 한다. `quote.base_amount_krw`는 현재 확정 견적 또는 앞서 승인된 변경 제안 최종 금액과 정확히 같아야 한다.
+- 제안 내용은 기준 범위와 달라야 하고 견적 합계 불변식을 만족해야 한다.
+- 성공: `201`, `{proposal_id, field_issue_id, status, base_scope_version_id, result_scope_version_id, quote, requested_at}`
+- 같은 이슈와 정확히 같은 payload 재전송만 기존 제안을 반환한다. 이슈 재사용, stale 범위나 상충 payload는 `409`다.
+
 ### 5.5 현장 변경 결정
 
 `POST /change-proposals/{proposal_id}/decision`
 
 ```json
 {
-  "action": "approve",
+  "decision": "approve",
   "note": null
 }
 ```
 
-- `action`: `approve`, `reject`, `request_clarification`
+- `decision`: `approve`, `reject`, `request_clarification`
 - `reject`와 `request_clarification`은 `note` 1..2000자 필수
-- 승인하면 제안 내용을 새 확정 scope version과 금액 snapshot으로 저장한다.
-- 성공: `200`, `{proposal_id, status, result_scope_version_id, decided_at}`
+- 승인하면 제안 내용을 새 scope version으로 저장하고 업체·고객 확인과 잠금을 같은 transaction에서 완료한다.
+- 성공: `200`, `{proposal_id, status, result_scope_version_id, clarification_requested_at, decided_at}`
+- 같은 terminal 결정 또는 설명 요청의 정확 재전송은 기존 결과를 반환하고 상충 결정은 `409`다.
+- 설명 요청 뒤 업체는 `POST /change-proposals/{proposal_id}/explanation`에 1..2000자 `explanation`을 보내며 같은 설명 replay만 허용한다.
 
 ### 5.6 배정 확정
 
@@ -460,11 +499,12 @@ Response `FieldBriefView`:
 }
 ```
 
-- 이번 frontend contract에서 `purpose`는 `field_issue`만 허용한다.
-- MIME: `image/jpeg`, `image/png`; 최대 20 MiB
-- 성공: `201`, `{media_asset_id, upload_url, required_headers, expires_at}`
-- upload URL은 15분 동안 유효하다.
-- 별도 complete API를 만들지 않는다. `POST /field-issues`가 object metadata를 검증하고 증빙을 확정한다.
+- 이 단순화 경로는 아직 구현되지 않았다. 현재 실행 계약은 현장기사가 자기 capture session을 만든 뒤
+  기존 `/media-assets/upload`에서 `purpose: "change_evidence"`로 URL을 받고 opaque header를 적용해
+  PUT한 다음 별도 `/complete` command를 호출하는 3단계다.
+- 업로드 완료 뒤 `UPLOADED`부터 `POST /field-issues`가 해당 media ID를 받을 수 있다. 비동기
+  validation이 generation·MIME type·크기·SHA-256을 확인해 모든 증거가 `READY`가 된 뒤에만 업체가
+  변경 제안을 만들 수 있다. `PENDING_UPLOAD|PROCESSING|FAILED` 증거는 이슈 보고에서 거부한다.
 
 ### 5.10 현장 이슈 보고
 
@@ -472,19 +512,22 @@ Response `FieldBriefView`:
 
 ```json
 {
-  "issue_type": "site_obstacle",
+  "client_reference": "uuid",
+  "base_scope_version_id": "uuid",
+  "issue_type": "site_blocker",
+  "title": "도착지 엘리베이터 고장",
   "description": "도착지 엘리베이터 고장으로 사다리차가 필요합니다.",
-  "evidence_media_asset_ids": ["uuid"],
-  "requested_action": "사다리차 비용 산정 및 고객 승인 요청",
-  "pause_work": true
+  "evidence_media_asset_ids": ["uuid"]
 }
 ```
 
-- `issue_type`: `out_of_scope`, `damage_risk`, `site_obstacle`
-- `description`: 1..2000자
-- 증빙: 1..5장, 현재 actor가 발급받은 업로드만 허용
+- `issue_type`: `out_of_scope`, `damage_risk`, `site_blocker`
+- `title`: 1..200자, `description`: 1..2000자
+- 증빙: 1..50장, 현재 현장기사가 촬영하고 upload complete를 마친 `UPLOADED|READY change_evidence`만 허용
+- `base_scope_version_id`는 현재 잠긴 leaf여야 한다.
 - 현장기사는 금액이나 고객 승인 결과를 입력할 수 없다.
-- 성공: `201`, `{field_issue_id, status: "reported", reported_at}`
+- 성공: `201`, `{field_issue_id, client_reference, job_id, base_scope_version_id, issue_type, title, description, evidence_media_asset_ids, reported_by_participant_id, reported_at, status: "open", change_proposal_id}`
+- 작업별 `client_reference`와 정확히 같은 payload 재전송은 기존 결과를 반환하고 다른 payload는 `409`다.
 
 ## 6. 핵심 data model
 
@@ -561,12 +604,12 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | --- | --- | --- |
 | 고객 작업범위 확인 | `GET /scope-review` | `수정 요청` → `revision-request`; `이 범위 확인` → `confirm` |
 | 고객 사진·AI 검토 | `GET /analysis-review` | `AI 검토 완료` → `analysis-review/complete` |
-| 고객 현장 변경 승인 | `GET /change-proposals/{id}` | `설명 요청 또는 거절`, `변경 승인하기` → `change-proposals/{id}/decision`의 action 구분 |
+| 고객 현장 변경 승인 | `GET /change-proposals/{id}` | `설명 요청 또는 거절`, `변경 승인하기` → `change-proposals/{id}/decision`의 decision 구분 |
 | 업체 작업범위 검토·확정 | `GET /scope-review` | `수정안 고객에게 보내기` → `POST /scope-proposals` |
 | 업체 배차·인력 배정 | `GET /dispatch` | `배정 확정 및 알림 발송` → `PUT /dispatch` |
 | 업체 완료·변경 내역 | `GET /completion-summary` | `완료 확인 요청 보내기` → `POST /completion-requests`; `PDF 일괄 내려받기` → `GET /documents/archive` |
 | 현장기사 상세·체크인 | `GET /field-brief` | `현장 도착 체크인` → `POST /check-ins`; 전화·채팅·길 안내는 URI |
-| 현장기사 변경·이슈 보고 | `GET /field-brief`의 공통 context | `＋ 추가` → `POST /media-uploads`; `업체에 이슈 보고` → `POST /field-issues`; `팀장에게 먼저 알리기`는 전화 URI |
+| 현장기사 변경·이슈 보고 | `GET /field-brief`의 공통 context | `＋ 추가`는 기존 capture upload·complete 계약 사용; `업체에 이슈 보고` → `POST /field-issues`; `팀장에게 먼저 알리기`는 전화 URI |
 
 ## 8. frontend contract에서 제외한 항목
 
@@ -586,11 +629,11 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 37개 path와 43개 operation이 있다. `/api/v1` 업무 operation 40개와
-운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개와
-`scope-review` 조회·제안·수정요청·확인 4개가 실행 계약으로 등록됐고 소비자 onboarding·역할 초대
-8개 operation이 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD
-부록의 경로는 아직 등록되지 않았다.
+현재 OpenAPI에는 42개 path와 49개 operation이 있다. `/api/v1` 업무 operation 46개와
+운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
+`scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개와 현장 이슈 보고가 실행
+계약으로 등록됐다. 업체 이슈 목록·변경 제안·설명 3개와 소비자 onboarding·역할 초대 8개
+operation도 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
@@ -602,7 +645,7 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
 | scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1만 노출한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
-| change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
+| change request 생성·목록·증거 read URL·설명·결정 | 호환 경로로 유지한다. 일반 FE는 역할을 분리하고 증거 preview를 묶은 `field-issues`와 `change-proposals` 실행 계약을 사용한다. |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |
 | background job 생성·목록·재시도 3개 | 내부 운영 기능으로 유지하고 frontend 계약에서 제외 |
 | `/healthz`, `/edgez`, `/readyz` | 유지하되 운영 endpoint로 분류 |
