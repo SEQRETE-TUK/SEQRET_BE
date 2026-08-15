@@ -46,7 +46,7 @@
 ## B 트랙 인계
 
 - 병합 완료: GCS SDK [#37](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/37), B-01 GCS adapter [#39](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/39), B-03 분석 실행 [#35](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/35), B-04 Vertex adapter [#79](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/79), B-06 worker [#81](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/81)·[#82](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/82)·[#84](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/84), B-07 삭제 handler [#36](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/36).
-- upload 완료는 generation-pinned validation intent를 만들고 B-05 handler가 metadata·MIME type·크기·SHA-256을 검증해 `PROCESSING → READY|FAILED` command로 반영한다. INT-01은 검증된 MIME 계약 [#85](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/85)·[#86](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/86), event 계약 [#87](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/87)과 현재 촬영 제출·durable dispatch·범위 초안 import 구현으로 연결됐다. 남은 B 범위는 INT-06 provider 재시도·동시 실행 recovery와 승인된 파생 처리 정책이다.
+- upload 완료는 generation-pinned validation intent를 만들고 B-05 handler가 metadata·MIME type·크기·SHA-256을 검증해 `PROCESSING → READY|FAILED` command로 반영한다. INT-01은 검증된 MIME 계약 [#85](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/85)·[#86](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/86), event 계약 [#87](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/87), 촬영 제출·durable dispatch·범위 초안 import와 runtime wiring [#92](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/92)로 연결됐다. 남은 B 범위는 INT-06 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93)과 승인된 파생 처리 정책이다.
 - Outbox 전달은 at-least-once다. consumer는 `(consumer_name, event_id)` receipt로 중복 효과를 막고, B handler는 A ORM을 우회 갱신하지 않는다. 저장된 object generation은 read/delete까지 그대로 전달한다.
 
 ## 외부 활성화 전 확인
@@ -56,11 +56,13 @@
 - **DB 역할:** API, migration, Outbox relay와 recovery가 현재 같은 `DATABASE_URL_SECRET_ID`를 사용한다. `audit_event` mutation trigger는 이 owner의 일반 DML도 거부하지만 owner는 DDL로 우회할 수 있으므로 tamper-proof 권한 경계로 간주하지 않는다. 별도 DB 사용자·grant·Secret ID와 자격증명이 외부에서 준비되기 전에는 Terraform secret만 나누지 않는다.
 - **DB 연결 경보:** Cloud SQL `num_backends` 임계치는 승인된 instance `max_connections`와 connection budget이 정해진 뒤 추가한다. 임의 임계치로 경보를 만들지 않는다.
 - **Artifact Registry:** 90일 초과 삭제 후보와 최신 50개 보존 정책은 계속 dry-run이다. provider cleanup audit log를 검토한 뒤에만 실제 삭제로 전환한다.
-- **B runtime:** Cloud Tasks queue·OIDC private worker 배포와 validation 실경로는 staging에서 확인했다. B-04 코드와 SDK는 병합됐으며 실제 Vertex 분석에는 staging runtime IAM·location·model 접근을 검증해야 한다.
-- **INT-01 runtime:** 현재 변경은 로컬·CI PostgreSQL에서 제출·dispatch·worker 결과 import를 검증했지만 staging에는 아직 배포하지 않았다. 병합 뒤 Vertex IAM·model 설정을 확인하고 실제 분석 1건의 `completed|failed` terminal 상태와 Outbox를 증적으로 남긴다.
+- **B runtime:** Cloud Tasks queue·OIDC private worker와 validation 실경로를 staging에서 확인했다. worker service account에는 `roles/aiplatform.user`가 있고 Vertex AI API와 `asia-northeast3` location 설정도 적용됐다. 다만 실제 분석 3건이 모두 `failed`로 종료됐고 현재 provider-neutral 응답과 로그만으로 실패 단계를 구분할 수 없어, B 소유 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93)에서 진단 지표와 재시도 복구를 보강해야 한다.
+- **INT-01 runtime:** A의 제출·durable dispatch·worker 결과 import와 Vertex runtime wiring은 `c7b6e77`로 staging에 배포됐다. 실제 이미지 3건은 validation `READY`와 private worker 실행까지 통과했지만 분석은 `unavailable` 1건과 `invalid_input` 2건으로 종료돼 범위 초안 생성 성공 증적은 아직 없다. 따라서 INT-01의 성공 E2E는 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93) 해결 뒤 재검증한다.
 
 ## staging 운영 증적
 
+- [Deploy staging #31869334530](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31869334530): `c7b6e77`에서 migration, Terraform apply, 예약 Outbox relay, readiness, 10% canary와 promotion 성공. API는 `seqret-stg-api-00009-2l4`, private worker는 `seqret-stg-worker-00002-98n`이며 live OpenAPI는 26개 path·31개 operation이다.
+- 2026-08-15 INT-01 staging canary: 합성 `image/png` 3건을 API bootstrap → signed GCS PUT → upload complete → validation `READY` → 분석 제출 → Cloud Tasks private worker 순서로 실행했다. 분석 run `52db6941-2490-487f-a252-ff2d2c04188b`는 `failed/unavailable/retryable=true`, `6522a439-86a9-467a-9c86-e656033e8c00`과 `a2ffdca8-1b94-422d-a2b4-06b0f2ed2830`은 `failed/invalid_input/retryable=false`였다. access secret, signed URL과 원본 미디어는 증적에 저장하지 않았다. 실패 단계 관측성과 재시도 복구는 [#93](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/93)의 완료 조건이다.
 - [Deploy staging #31811161952](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31811161952): 최신 application·migration 기준 `ecb325e`에서 migration, Terraform apply, 예약 Outbox relay, readiness, 10% canary와 promotion 성공. API `seqret-stg-api-00008-4b6`과 private worker `seqret-stg-worker-00001-xdf`가 동일 image digest `sha256:5cbf5c4ec7cc6d4fb27f7adc8e64d1b086cface8dac2e6cff65bafc023ee1f9a`를 사용한다.
 - [Notification replay #31812191122](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31812191122): `ecb325e`에서 31일 retained-event seek와 relay smoke 성공. subscription label은 `replay_contract=v1`, `seqret_replay_state=complete`다.
 - 2026-08-15 staging worker canary: API bootstrap → signed GCS PUT → upload complete → Outbox relay → Cloud Tasks → private worker validation을 실행했다. move job `fde893e4-d934-435e-b7ec-950763d39bc4`의 background job `31458876-8262-437a-9c7d-a24220a06548`이 1회 시도에 `succeeded`했고, 대상은 68-byte `image/png`였다. access secret과 signed URL은 저장하거나 출력하지 않았다.
@@ -74,6 +76,6 @@
 - [Roll-forward #31630440137](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31630440137): 최신 revision 재배포와 promotion 성공.
 - [PITR recovery #31633614222](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31633614222): 복구 구간 확인, clone, Alembic head·marker 검증과 clone 삭제 성공.
 
-현재 staging application·schema는 `ecb325e` 배포 증적과 일치한다. `72c4840`은 recovery workflow만 수정했으며 이 SHA에서 PITR까지 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
+현재 staging application·schema는 `c7b6e77` 배포 증적과 일치한다. `72c4840`에서 수정한 recovery workflow는 위 PITR drill로 재검증했다. 이후 application, migration 또는 Terraform 변경이 병합되면 다시 배포하고 workflow summary의 source SHA와 image digest를 새 증거로 남긴다.
 
 상세 운영 절차와 외부 GCP·GitHub 변수는 [`infrastructure/README.md`](../infrastructure/README.md)를 따른다.
