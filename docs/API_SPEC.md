@@ -4,10 +4,10 @@
 >
 > 기준일: 2026-08-15
 >
-> backend 기준 코드: `origin/main` `55720089c293de6729e6dfc529fcde5b9dae5503`
+> backend 기준 코드: `origin/main` `f8d0862255810bd9e9d51b27a4e0f8dc69070b00` + 이 A-06 변경
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `aabf2da2221d63d4debc5f06b4d40e92f061289a`
+> `a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,21 +21,22 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/aabf2da2221d63d4debc5f06b4d40e92f061289a)는
+2026-08-15에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/a0ddeb5d4881fd68a5b4487f5ecf833a8d991feb)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
 `state` query variant가 있다. 이 수치는 시각 demo 범위이며 backend E2E 완료 수가 아니다.
 
 frontend source에는 `VITE_API_BASE_URL`, `/api/v1`로 제한한 공통 client, 명시적 Bearer 전달,
-opaque signed PUT helper와 TanStack Query provider·retry 정책이 있다. 그러나 이를 import해 실제
-query·mutation을 수행하는 demo 화면은 0개이며 모든 화면 전이는 여전히 component `useState`와
-timer로 실행된다. frontend PRD 부록의 `/v1/jobs`, `consumer|provider|crew`, 공통 error envelope와
-CRUD 경로도 현재 backend 계약이 아니라 별도 제안이다. 이 문서의 17개 경로와 frontend PRD 경로
-중 하나를 암묵적으로 선택하거나 혼용하지 않는다.
+opaque signed PUT helper와 TanStack Query provider·retry 정책이 있다. `/consumer/capture`는 이
+기반으로 촬영·upload·분석 완료까지 실제 query·mutation을 수행한다. 나머지 demo 화면 전이는
+여전히 component `useState`와 timer로 실행된다. frontend PRD 부록의 `/v1/jobs`,
+`consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
+제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
 
-이 문서의 경로와 schema는 아직 현재 OpenAPI에 등록되지 않았다. 제품 범위와 A 소유 업무 계약을
-확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야 frontend 실행 계약이 된다.
+이 문서의 17개 경로 중 `analysis-review` 조회·완료 2개만 현재 OpenAPI에 등록됐다. 나머지는 제품
+범위와 A 소유 업무 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야
+frontend 실행 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
 이 초안만으로 client를 생성하거나 현재 route를 제거하지 않는다.
 
@@ -107,8 +108,8 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/analysis-review` | 공간별 업로드 수, 실패 수, AI 항목·수량·신뢰도 조회 | 고객 | 내부 AI schema 있음·view 미구현 |
-| `POST` | `/api/v1/move-jobs/{job_id}/analysis-review/complete` | 수정·직접 추가를 반영한 최종 AI 검토 결과 제출 | 고객 | 내부 import command 있음·HTTP 미구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/analysis-review` | 공간별 업로드 수, 실패 수, AI 항목·신뢰도 조회 | 고객 | 구현·현재 AI schema v1 범위 |
+| `POST` | `/api/v1/move-jobs/{job_id}/analysis-review/complete` | 수정·직접 추가를 반영한 최종 AI 검토 결과 제출 | 고객 | 구현·불변 고객 편집본 생성 |
 
 ### 3.3 고객 현장 변경 승인
 
@@ -507,6 +508,24 @@ Response `FieldBriefView`:
 
 AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거치기 전에는 확정 scope나 금액을 변경하지 않는다.
 
+### 6.5 현재 `AnalysisReview` v1 실행 계약
+
+`GET /api/v1/move-jobs/{job_id}/analysis-review`는 호출 고객이 제출한 가장 최신 분석이
+`completed`일 때만 성공한다. 더 최신 분석이 진행·실패 상태면 이전 결과로 자동 후퇴하지 않고
+`409`를 반환한다.
+
+- `source_scope_version_id`: AI import로 만든 불변 원본 version
+- `review_scope_version_id`: 고객 검토 완료 전 `null`, 완료 후 불변 자식 version ID
+- `zones[]`: 출발지 공간별 `total_media_count`, `ready_media_count`, `failed_media_count`
+- `items[]`: 현재 편집 내용과 `source`, 선택적 `confidence`, `review_required`,
+  `source_media_asset_ids`
+
+model·prompt version, provider task ID, object key와 signed URL은 이 view에 포함하지 않는다.
+`POST .../analysis-review/complete`는 `source_scope_version_id`와 최종 `items[]` 전체를 받는다.
+현재 v1 item은 `item_key`, `room_zone_id`, `description`을 지원한다. 같은 고객이 같은 최종
+내용을 재전송하면 기존 자식 version을 반환하고, stale 원본·상충 내용·다른 참여자가 만든 자식
+version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승인 뒤 확장한다.
+
 ## 7. 화면과 API 대응
 
 | 와이어프레임 | 조회 | 화면 행동 → API |
@@ -538,14 +557,16 @@ AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 24개 path와 29개 operation이 있다. `/api/v1` 업무 operation 26개와
-운영 operation 3개이며, 이 문서의 제안 경로 17개와 FE PRD 부록의 경로는 아직 등록되지 않았다.
+현재 OpenAPI에는 26개 path와 31개 operation이 있다. `/api/v1` 업무 operation 28개와
+운영 operation 3개다. 이 문서의 제안 17개 중 `analysis-review` 조회·완료 2개가 실행 계약으로
+등록됐으며 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
 | `POST /move-jobs`, access-link 생성·철회 | 현재 bootstrap·운영 계약을 유지한다. 신뢰 bootstrap과 전달 채널이 결정된 뒤 공개 범위 변경을 별도 계약으로 다룬다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. 첫 E2E는 현재 계약으로 연결하고, 이후 frontend는 화면용 capture command/view로 축소할지 결정한다. |
+| analysis review 조회·완료 2개 | 최신 완료 분석의 공간별 검증 수·AI provenance를 고객에게 제공하고, 검토 결과를 AI 원본의 불변 자식 scope version으로 한 번만 생성한다. 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
 | scope version 생성·목록·approval | `scope-review`, `scope-proposals`, `confirm`으로 교체 |
 | change request 생성·목록·증거 read URL·설명·결정 | `field-issues`와 `change-proposals`로 역할을 분리하고 화면 view에 증거 preview를 묶는 방안을 검토 |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |

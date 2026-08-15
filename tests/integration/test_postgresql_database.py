@@ -57,7 +57,15 @@ from app.modules.analysis.service import (
     load_analysis_result,
     start_analysis_run,
 )
-from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
+from app.modules.analysis_review.schemas import (
+    AnalysisReviewComplete,
+    AnalysisReviewItemInput,
+)
+from app.modules.analysis_review.service import complete_analysis_review
+from app.modules.analysis_workflow.models import (
+    CaptureAnalysisDispatch,
+    CaptureAnalysisStatus,
+)
 from app.modules.analysis_workflow.service import (
     claim_capture_analyses,
     submit_capture_analysis,
@@ -1643,6 +1651,134 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
             assert preserved_creator is None
         finally:
             downgraded_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_analysis_review_same_payload_replays_serialize_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+        job_command = MoveJobCreate(
+            title="AI review replay",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                customer = next(
+                    participant
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
+                room_zone_id = created.job.locations[0].room_zones[0].id
+                capture = await create_capture_session(session, created.job.id, customer.id)
+                media_asset_id = uuid4()
+                session.add(
+                    MediaAsset(
+                        id=media_asset_id,
+                        capture_session_id=capture.id,
+                        room_zone_id=room_zone_id,
+                        media_purpose=MediaPurpose.INVENTORY,
+                        status=MediaAssetStatus.READY,
+                        object_key=f"jobs/{created.job.id}/review/{media_asset_id}",
+                        content_type="image/jpeg",
+                        expected_size_bytes=10,
+                        actual_size_bytes=10,
+                        sha256_hex="a" * 64,
+                        generation="1",
+                        created_at=now,
+                        uploaded_at=now,
+                    )
+                )
+                await session.flush()
+                analysis_run_id = uuid4()
+                result = AnalysisResult(
+                    analysis_run_id=AnalysisRunId(analysis_run_id),
+                    capture_session_id=CaptureSessionId(capture.id),
+                    model_name="test-model",
+                    model_version="1",
+                    prompt_version="1",
+                    draft_items=(
+                        DraftItem(
+                            item_key="sofa",
+                            description="Sofa",
+                            confidence=0.9,
+                            source_media_asset_ids=(MediaAssetId(media_asset_id),),
+                        ),
+                    ),
+                )
+                source = await import_analysis_draft(session, created.job.id, result)
+                session.add(
+                    CaptureAnalysisDispatch(
+                        analysis_run_id=analysis_run_id,
+                        capture_session_id=capture.id,
+                        move_job_id=created.job.id,
+                        submitted_by_participant_id=customer.id,
+                        status=CaptureAnalysisStatus.COMPLETED,
+                        trace_id="2" * 32,
+                        scheduled_at=now,
+                        dispatch_attempt_count=1,
+                        provider_task_id="provider-task",
+                        last_attempt_at=now,
+                        scope_version_id=source.id,
+                        submitted_at=now,
+                        completed_at=now,
+                    )
+                )
+            review_command = AnalysisReviewComplete(
+                source_scope_version_id=source.id,
+                items=(
+                    AnalysisReviewItemInput(
+                        item_key="sofa",
+                        room_zone_id=room_zone_id,
+                        description="Wrapped sofa",
+                    ),
+                ),
+            )
+
+            async def finish_review() -> UUID | None:
+                async with transactional_session(factory) as session:
+                    response = await complete_analysis_review(
+                        session,
+                        created.job.id,
+                        customer.id,
+                        review_command,
+                    )
+                    return response.review_scope_version_id
+
+            first, second = await gather(finish_review(), finish_review())
+            async with transactional_session(factory) as session:
+                versions = await list_scope_versions(session, created.job.id)
+
+            assert first is not None
+            assert first == second
+            assert [version.sequence_number for version in versions] == [1, 2]
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.anyio
