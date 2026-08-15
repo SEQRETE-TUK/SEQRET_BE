@@ -18,6 +18,7 @@ class DomainEventType(StrEnum):
     ANALYSIS_FAILED_V1 = "analysis_failed.v1"
     SCOPE_LOCKED_V1 = "scope_locked.v1"
     CHANGE_REQUESTED_V1 = "change_requested.v1"
+    DISPATCH_CONFIRMED_V1 = "dispatch_confirmed.v1"
     COMPLETION_MEDIA_SUBMITTED_V1 = "completion_media_submitted.v1"
     MEDIA_DELETED_V1 = "media_deleted.v1"
 
@@ -156,6 +157,25 @@ class DomainEvent(ContractModel):
                         for media_asset_id in evidence_ids
                     )
                     and len(set(evidence_ids)) == len(evidence_ids)
+                )
+            elif self.event_type is DomainEventType.DISPATCH_CONFIRMED_V1:
+                dispatch_id = payload.get("dispatch_id")
+                scope_version_id = payload.get("scope_version_id")
+                field_worker_participant_id = payload.get("field_worker_participant_id")
+                valid = (
+                    set(payload)
+                    == {
+                        "dispatch_id",
+                        "scope_version_id",
+                        "field_worker_participant_id",
+                    }
+                    and isinstance(dispatch_id, str)
+                    and str(UUID(dispatch_id)) == dispatch_id
+                    and isinstance(scope_version_id, str)
+                    and str(UUID(scope_version_id)) == scope_version_id
+                    and isinstance(field_worker_participant_id, str)
+                    and str(UUID(field_worker_participant_id))
+                    == field_worker_participant_id
                 )
             elif self.event_type is DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1:
                 capture_session_id = payload.get("capture_session_id")

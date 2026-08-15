@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_03_0002"
+ALEMBIC_HEAD = "a_13_0001"
+ALEMBIC_DISPATCH_PREVIOUS = "int_03_0002"
 ALEMBIC_FIELD_CHANGE_PREVIOUS = "int_02_0001"
 ALEMBIC_SCOPE_REVIEW_PREVIOUS = "a_02_0002"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
@@ -48,6 +49,9 @@ BUSINESS_TABLES = {
     "field_issue",
     "field_issue_evidence",
     "change_proposal_detail",
+    "dispatch_setup",
+    "dispatch_plan",
+    "field_check_in",
     "change_request",
     "change_request_evidence",
     "completion_confirmation",
@@ -384,7 +388,7 @@ def test_field_change_history_blocks_schema_downgrade(tmp_path: Path) -> None:
 
         with pytest.raises(RuntimeError, match="roll back the application"):
             command.downgrade(configuration, ALEMBIC_FIELD_CHANGE_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_DISPATCH_PREVIOUS
 
         with engine.begin() as connection:
             connection.execute(metadata.tables["field_issue"].delete())
@@ -392,6 +396,149 @@ def test_field_change_history_blocks_schema_downgrade(tmp_path: Path) -> None:
         assert "field_issue" not in inspect(engine).get_table_names()
         assert "field_issue_evidence" not in inspect(engine).get_table_names()
         assert "change_proposal_detail" not in inspect(engine).get_table_names()
+        command.upgrade(configuration, "head")
+    finally:
+        engine.dispose()
+
+
+def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'dispatch-guard.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+
+    try:
+        command.upgrade(configuration, "head")
+        metadata.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "scope_version",
+                "dispatch_setup",
+                "outbox_event",
+                "notification_delivery",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        manager_id = uuid4().hex
+        worker_id = uuid4().hex
+        scope_id = uuid4().hex
+        setup_id = uuid4().hex
+        event_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "dispatch guard",
+                    "status": "DRAFT",
+                    "scheduled_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                [
+                    {
+                        "id": manager_id,
+                        "job_id": job_id,
+                        "role": "COMPANY_MANAGER",
+                        "display_name": "manager",
+                        "created_at": now,
+                    },
+                    {
+                        "id": worker_id,
+                        "job_id": job_id,
+                        "role": "FIELD_WORKER",
+                        "display_name": "worker",
+                        "created_at": now,
+                    },
+                ],
+            )
+            connection.execute(
+                metadata.tables["scope_version"].insert(),
+                {
+                    "id": scope_id,
+                    "job_id": job_id,
+                    "sequence_number": 1,
+                    "content": {"schema_version": 1, "items": []},
+                    "content_hash": "d" * 64,
+                    "created_by_participant_id": manager_id,
+                    "created_at": now,
+                    "locked_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["dispatch_setup"].insert(),
+                {
+                    "id": setup_id,
+                    "job_id": job_id,
+                    "client_reference": uuid4().hex,
+                    "source_scope_version_id": scope_id,
+                    "created_by_participant_id": manager_id,
+                    "command_hash": "e" * 64,
+                    "start_at": now,
+                    "expected_duration_minutes": 60,
+                    "required_vehicle_capacity_m2": 1,
+                    "required_worker_count": 1,
+                    "required_skills": [],
+                    "required_certifications": [],
+                    "check_in_items": [{"key": "safety", "label": "safety"}],
+                    "origin_conditions": [],
+                    "safety_notice": "safety",
+                    "vehicle_options": [],
+                    "worker_options": [],
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["outbox_event"].insert(),
+                {
+                    "event_id": event_id,
+                    "event_type": "DISPATCH_CONFIRMED_V1",
+                    "schema_version": 1,
+                    "aggregate_id": job_id,
+                    "actor_id": manager_id,
+                    "trace_id": "0" * 32,
+                    "payload": {
+                        "dispatch_id": uuid4().hex,
+                        "scope_version_id": scope_id,
+                        "field_worker_participant_id": worker_id,
+                    },
+                    "occurred_at": now,
+                    "next_attempt_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["notification_delivery"].insert(),
+                {
+                    "id": uuid4().hex,
+                    "event_id": event_id,
+                    "event_type": "DISPATCH_CONFIRMED_V1",
+                    "job_id": job_id,
+                    "recipient_participant_id": worker_id,
+                    "status": "PENDING",
+                    "attempt_count": 0,
+                    "created_at": now,
+                },
+            )
+
+        with pytest.raises(RuntimeError, match="dispatch or check-in history"):
+            command.downgrade(configuration, ALEMBIC_DISPATCH_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            connection.execute(metadata.tables["notification_delivery"].delete())
+            connection.execute(metadata.tables["outbox_event"].delete())
+            connection.execute(metadata.tables["dispatch_setup"].delete())
+        command.downgrade(configuration, ALEMBIC_DISPATCH_PREVIOUS)
+        table_names = inspect(engine).get_table_names()
+        assert "dispatch_setup" not in table_names
+        assert "dispatch_plan" not in table_names
+        assert "field_check_in" not in table_names
         command.upgrade(configuration, "head")
     finally:
         engine.dispose()

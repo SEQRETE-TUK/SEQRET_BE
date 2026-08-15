@@ -34,6 +34,7 @@ NOTIFICATION_ROLES = {
     DomainEventType.CHANGE_REQUESTED_V1: frozenset(
         {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER}
     ),
+    DomainEventType.DISPATCH_CONFIRMED_V1: frozenset({ParticipantRole.FIELD_WORKER}),
     DomainEventType.COMPLETION_MEDIA_SUBMITTED_V1: frozenset(
         {ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER}
     ),

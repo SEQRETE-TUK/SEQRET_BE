@@ -8,6 +8,7 @@
 - `participant_invitation`은 작업별 비고객 역할 하나의 발급자·대상·현재 access-link ID와 `PENDING|ACCEPTED|DECLINED|EXPIRED|REVOKED` 상태만 저장한다. 평문 secret은 저장하지 않으며 하위 초대의 만료는 발급자 access link 만료를 넘지 않는다.
 - `scope_proposal`은 source/result 불변 범위 version, 업체 제안자, 원화 견적 snapshot, 포함·제외 작업과 `CUSTOMER_REVIEW|REVISION_REQUESTED|CONFIRMED|SUPERSEDED` 상태를 저장한다. `scope_revision_request`는 고객 요청과 다음 제안에 의한 해결 연결을 보존하며 기존 범위·견적 이력을 덮어쓰지 않는다.
 - `field_issue`와 `field_issue_evidence`는 잠긴 기준 범위에 대한 현장기사 보고와 검증된 증거 연결을 보존한다. `change_proposal_detail`은 기존 `change_request`에 이슈·제목·원화 견적 snapshot을 1:1로 연결하며 기존 범위·금액 이력을 덮어쓰지 않는다.
+- `dispatch_setup`은 작업별 현재 범위·일정·요구사항·checklist와 차량·인력 후보의 불변 snapshot을 저장한다. `dispatch_plan`은 그 snapshot에서 확정한 차량·인력 ID와 command hash를 작업별 한 건으로 고정하고, `field_check_in`은 배정된 대표 현장기사의 checklist 확인과 당일 도착 시각을 한 번 기록한다.
 - SQLAlchemy engine은 `pool_pre_ping`과 parameter hiding을 활성화한다.
 - application command는 `transactional_session`을 경계로 한 번 commit되며 예외 시 전체 rollback된다.
 - 각 ORM model은 `app.platform.db.Base`를 사용해 Alembic constraint 이름을 결정적으로 유지한다.
@@ -26,7 +27,7 @@ uv run alembic downgrade -1
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
 
-현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
+배차·체크인 또는 `dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

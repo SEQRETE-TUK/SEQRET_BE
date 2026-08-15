@@ -151,8 +151,9 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/dispatch` | 요구 자원, 차량·작업자 후보, 충돌과 현재 선택 조회 | 업체 | 미구현 |
-| `PUT` | `/api/v1/move-jobs/{job_id}/dispatch` | 배정을 원자적으로 확정하고 대상자에게 알림 | 업체 | 미구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/dispatch/setup` | 신뢰된 업체 연동이 작업별 요구사항·후보 snapshot 등록 | 업체 | 구현·연동 지원 경계 |
+| `GET` | `/api/v1/move-jobs/{job_id}/dispatch` | 요구 자원, 차량·작업자 후보, 충돌과 현재 선택 조회 | 업체 | 구현 |
+| `PUT` | `/api/v1/move-jobs/{job_id}/dispatch` | 배정을 원자적으로 확정하고 대상자에게 알림 | 업체 | 구현 |
 
 ### 3.5 업체 완료·문서
 
@@ -166,8 +167,8 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/field-brief` | 승인 범위, 일정, 마스킹 경로, 담당자, 현장 조건과 배정 자원 조회 | 현장기사 | 미구현 |
-| `POST` | `/api/v1/move-jobs/{job_id}/check-ins` | `현장 도착 체크인` 기록 | 현장기사 | 미구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/field-brief` | 승인 범위, 일정, 마스킹 경로, 담당자, 현장 조건과 배정 자원 조회 | 현장기사 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/check-ins` | checklist 전체 확인과 `현장 도착 체크인` 기록 | 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
 | `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 업체에 보고 | 현장기사 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 업체, 현장기사 | 구현 |
@@ -269,14 +270,18 @@ Response `ChangeProposalView`:
 Response `DispatchView`:
 
 - `job: JobHeader`
-- `requirements`: 시작 시각, 예상 시간, 차량 수·톤수, 작업자 수, 필수 기술
+- `setup_id`, `dispatch_id`, `source_scope_version_id`, `source_scope_version_label`
+- `requirements`: 시작 시각, 예상 시간, 차량 수·용량, 작업자 수, 필수 기술·자격
 - `vehicle_options[]`: 차량 ID, 표시 번호, 규격, 설비, 용량, 가용 상태
-- `worker_options[]`: 작업자 ID, 이름, 역할, 기술, 자격, 일정 상태
+- `worker_options[]`: 작업자 ID, 이름, 역할, 기술, 자격, 일정 상태와 선택적 대표 participant ID
 - `selected_vehicle_id`, `selected_worker_ids`, `lead_worker_id`
-- `checks`: 차량 일정, 작업자 일정, 자격·교육, 예상 근무시간
-- `worker_note`, `status`, `confirmed_at`
+- `checks`: 차량 일정·용량, 작업자 일정·인원, 필수 기술, 필수 자격
+- `worker_note`, `status: setup_required|ready|stale|confirmed`, `confirmed_at`, `notification_created`
 
-차량·작업자 master CRUD는 이 와이어프레임 범위가 아니다. 후보 data는 업체 내부 seed 또는 연동 data를 읽기만 한다.
+차량·작업자 master CRUD는 이 와이어프레임 범위가 아니다. `POST /dispatch/setup`은 업체 내부
+resource provider가 만든 작업별 후보와 요구사항을 immutable snapshot으로 넘기는 연동 경계다.
+작업 일정은 server의 `move_job.scheduled_at`을 사용하며 같은 `client_reference`와 정확히 같은 payload
+재전송만 기존 setup을 반환한다. 현재 잠긴 leaf 범위가 바뀌면 조회 상태는 `stale`이고 확정은 거부된다.
 
 ### 4.6 `GET /completion-summary`
 
@@ -305,6 +310,7 @@ Response `CompletionSummaryView`:
 Response `FieldBriefView`:
 
 - `job: JobHeader`
+- `dispatch_id`, `scope_version_id`, `scope_version_label`
 - `start_at`, `masked_origin`, `masked_destination`
 - `lead_worker_name`, `lead_worker_call_uri`, `company_chat_uri`
 - `origin_conditions[]`, `field_check_required_count`
@@ -312,7 +318,8 @@ Response `FieldBriefView`:
 - `safety_notice`, `navigation_uri`
 - `checked_in_at`
 
-전화, 채팅과 navigation URI는 접근 권한을 확인한 현장기사에게만 반환하며 로그에서 제거한다.
+현재 저장소에는 신뢰된 전화, 채팅과 navigation source가 없으므로 세 URI는 모두 `null`이다. 이후
+provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 반환하며 로그에는 남기지 않는다.
 
 ## 5. command 계약
 
@@ -456,10 +463,63 @@ Response `FieldBriefView`:
 
 ### 5.6 배정 확정
 
+업체 연동은 배정 화면을 열기 전에 `POST /dispatch/setup`으로 다음 snapshot을 한 번 등록한다.
+
+```json
+{
+  "client_reference": "uuid",
+  "source_scope_version_id": "uuid",
+  "expected_duration_minutes": 180,
+  "required_vehicle_capacity_m2": 25,
+  "required_worker_count": 2,
+  "required_skills": ["대형가구", "포장"],
+  "required_certifications": ["화물운송"],
+  "check_in_items": [{"key": "safety", "label": "안전 장비 확인"}],
+  "origin_conditions": ["엘리베이터 사용 가능"],
+  "safety_notice": "고객 확인 전 운반을 시작하지 않습니다.",
+  "vehicles": [{
+    "external_reference": "vehicle-12ga3456",
+    "display_name": "1톤 윙바디 12가3456",
+    "specification": "적재 30m2",
+    "equipment": ["리프트"],
+    "capacity_m2": 30,
+    "available": true,
+    "conflict_reason": null
+  }],
+  "workers": [
+    {
+      "external_reference": "worker-lead",
+      "display_name": "현장 리더",
+      "role_label": "팀장",
+      "skills": ["대형가구"],
+      "certifications": ["화물운송"],
+      "available": true,
+      "conflict_reason": null,
+      "participant_id": "uuid"
+    },
+    {
+      "external_reference": "worker-helper",
+      "display_name": "포장 보조",
+      "role_label": "보조",
+      "skills": ["포장"],
+      "certifications": [],
+      "available": true,
+      "conflict_reason": null,
+      "participant_id": null
+    }
+  ]
+}
+```
+
+- `vehicles`와 `workers`는 각각 하나 이상이며 외부 reference가 중복될 수 없다. 비가용 후보는 `conflict_reason`이 필수다.
+- 인증하는 현장기사 participant는 작업자 후보 정확히 하나에 연결한다. 요구 인원은 후보 수를 넘을 수 없다.
+- 성공: `201 DispatchView`; 다른 snapshot으로 재등록하면 `409`다.
+
 `PUT /dispatch`
 
 ```json
 {
+  "setup_id": "uuid",
   "vehicle_id": "uuid",
   "lead_worker_id": "uuid",
   "worker_ids": ["uuid", "uuid", "uuid", "uuid"],
@@ -467,9 +527,9 @@ Response `FieldBriefView`:
 }
 ```
 
-- server가 요구 인원, 중복 작업자, 차량·작업자 일정, 필수 자격과 근무시간을 다시 검증한다.
-- 검증과 저장이 모두 성공한 뒤 한 번만 알림을 생성한다.
-- 성공: `200`, `{status: "confirmed", confirmed_at, notification_created: true}`
+- server가 현재 잠긴 leaf 범위, 요구 인원, 중복 작업자, 차량 일정·용량, 작업자 일정, 필수 기술·자격과 대표 현장기사 포함 여부를 다시 검증한다.
+- 검증과 저장이 모두 성공한 뒤 `dispatch_confirmed.v1`과 현장기사 알림 intent를 한 번만 생성한다.
+- 성공: `200 DispatchView`; 정확히 같은 command 재전송은 같은 확정을 반환하고 다른 선택은 `409`다.
 
 ### 5.7 완료 확인 요청
 
@@ -483,9 +543,16 @@ Response `FieldBriefView`:
 
 `POST /check-ins`
 
-- body 없음. 서버 시각을 사용한다.
-- 배정된 시작일 당일이며 배정이 확정된 현장기사만 호출할 수 있다.
-- 성공: `201`, `{check_in_id, checked_in_at}`
+```json
+{
+  "dispatch_id": "uuid",
+  "confirmed_check_keys": ["identity", "safety"]
+}
+```
+
+- 서버 시각을 사용하며 setup에 등록된 checklist key 전체를 중복 없이 보내야 한다.
+- 배정된 시작일 당일이며 확정 배차에 포함된 대표 현장기사만 호출할 수 있다.
+- 성공: `201`, `{check_in_id, dispatch_id, participant_id, confirmed_check_keys, checked_in_at}`. 같은 key 집합의 재전송은 최초 시각을 반환한다.
 
 ### 5.9 증빙 upload URL
 
@@ -608,7 +675,7 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | 업체 작업범위 검토·확정 | `GET /scope-review` | `수정안 고객에게 보내기` → `POST /scope-proposals` |
 | 업체 배차·인력 배정 | `GET /dispatch` | `배정 확정 및 알림 발송` → `PUT /dispatch` |
 | 업체 완료·변경 내역 | `GET /completion-summary` | `완료 확인 요청 보내기` → `POST /completion-requests`; `PDF 일괄 내려받기` → `GET /documents/archive` |
-| 현장기사 상세·체크인 | `GET /field-brief` | `현장 도착 체크인` → `POST /check-ins`; 전화·채팅·길 안내는 URI |
+| 현장기사 상세·체크인 | `GET /field-brief` | `현장 도착 체크인` → `POST /check-ins`; 전화·채팅·길 안내는 신뢰 source가 없어 현재 비활성 |
 | 현장기사 변경·이슈 보고 | `GET /field-brief`의 공통 context | `＋ 추가`는 기존 capture upload·complete 계약 사용; `업체에 이슈 보고` → `POST /field-issues`; `팀장에게 먼저 알리기`는 전화 URI |
 
 ## 8. frontend contract에서 제외한 항목
@@ -622,18 +689,19 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | background job·재처리·정합성·삭제 API | 내부 운영 기능. frontend에 노출하지 않음 |
 | 차량·작업자 master CRUD | 업체 seed 또는 별도 연동 범위 |
 | 결제·현금영수증 발행 | MVP 제외. 이미 생성된 문서만 표시·다운로드 |
-| 자체 전화·채팅·지도 API | `tel:`, 업체 chat deep link와 navigation URI 사용 |
+| 자체 전화·채팅·지도 API | 신뢰 provider 계약 전에는 관련 URI를 `null`로 유지 |
 | AI 실행 상태 polling·provider 세부 정보 | 화면에는 review-ready 결과만 제공 |
 | 미디어 asset별 read URL API | 화면 view에 만료 preview URL 포함 |
 | AI 수정 중간 저장 API | client local state 후 완료 시 한 번 제출 |
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 42개 path와 49개 operation이 있다. `/api/v1` 업무 operation 46개와
+현재 OpenAPI에는 46개 path와 54개 operation이 있다. `/api/v1` 업무 operation 51개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
-`scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개와 현장 이슈 보고가 실행
-계약으로 등록됐다. 업체 이슈 목록·변경 제안·설명 3개와 소비자 onboarding·역할 초대 8개
-operation도 별도 실행 계약으로 등록됐다. 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
+`scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
+배차 조회·확정 2개와 field brief·체크인이 실행 계약으로 등록됐다. 배차 setup, 업체 이슈
+목록·변경 제안·설명 3개와 소비자 onboarding·역할 초대 8개 operation도 별도 실행 계약으로
+등록됐다. 나머지 제안 경로와 FE PRD 부록의 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
@@ -644,6 +712,7 @@ operation도 별도 실행 계약으로 등록됐다. 나머지 제안 경로와
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
 | scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1만 노출한다. |
+| dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
 | change request 생성·목록·증거 read URL·설명·결정 | 호환 경로로 유지한다. 일반 FE는 역할을 분리하고 증거 preview를 묶은 `field-issues`와 `change-proposals` 실행 계약을 사용한다. |
 | completion 확인 목록·audit 목록·notification 목록 | `completion-summary`와 header count로 통합 |
@@ -653,8 +722,7 @@ operation도 별도 실행 계약으로 등록됐다. 나머지 제안 경로와
 현재 upload 계약은 opaque `upload_url`·`upload_headers`를 그대로 사용한 뒤 별도 complete command가
 generation-pinned 비동기 검증을 시작한다. 이를 `media-uploads` 한 경로로 축소하려면 현재
 `UPLOADED → PROCESSING → READY|FAILED` 계약과 재시도 의미를 보존하는 별도 설계가 필요하다.
-또한 현재 API CORS는 `GET`, `POST`만 허용하므로 제안된 `PUT /dispatch`를 구현할 때 공용 설정
-변경을 함께 검토한다.
+현재 API CORS는 `GET`, `POST`, `PUT`만 허용하며 배차 확정의 browser preflight를 회귀 테스트한다.
 
 domain의 불변 version, content hash, access control, Outbox, audit와 provider Port는 삭제하지
 않는다. 이 문서만 병합해 현재 route를 deprecate하지 않으며, 승인된 교체 계약과 전환 계획이

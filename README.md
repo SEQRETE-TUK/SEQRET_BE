@@ -68,6 +68,10 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST /move-jobs/{job_id}/scope-proposals`: 업체 범위·원화 견적 제안
 - `POST /move-jobs/{job_id}/scope-review/revision-request`: 고객 범위 수정 요청
 - `POST /move-jobs/{job_id}/scope-review/confirm`: 고객 현재 제안 확인과 범위 잠금
+- `POST /move-jobs/{job_id}/dispatch/setup`: 업체 연동의 작업별 요구사항·차량·인력 snapshot 등록
+- `GET·PUT /move-jobs/{job_id}/dispatch`: 배차 후보·충돌 조회와 원자적 배차 확정
+- `GET /move-jobs/{job_id}/field-brief`: 배정 현장기사의 확정 범위·일정·현장 조건 조회
+- `POST /move-jobs/{job_id}/check-ins`: 배정 현장기사의 당일 checklist 확인과 체크인
 - `POST·GET /move-jobs/{job_id}/field-issues`: 현장기사 이슈 보고와 업체·현장기사 처리 상태 조회
 - `POST /move-jobs/{job_id}/change-proposals`: 업체 변경 범위·원화 견적 제안
 - `GET /move-jobs/{job_id}/change-proposals/{proposal_id}`: 고객·업체용 변경 사유·증거·견적 화면 조회
@@ -102,9 +106,11 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 일반 frontend의 현장 변경 흐름은 역할을 분리합니다. 현장 작업자는 잠긴 현재 범위와 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 기준으로 무가격 이슈를 보고합니다. 회사 관리자는 모든 증거의 validation이 `READY`가 된 이슈 하나를 현재 확정 금액 기준의 변경 범위·견적 제안으로 전환하고, 고객은 generation-pinned 증거 preview를 확인한 뒤 승인·거절·설명 요청 중 하나를 선택합니다. 설명 요청에는 업체가 한 번 설명을 제출할 수 있습니다. 승인된 제안은 기존 변경요청과 범위 승인 로직을 재사용해 결과 범위를 만들고 양측 확인과 잠금을 같은 command 안에서 완료합니다. 같은 client reference 또는 동일 command 재전송은 같은 결과를 반환하고 stale 범위나 상충 payload는 거부합니다. 기존 `change-requests` route는 신뢰 bootstrap·내부 호환 계약으로 남습니다.
 
+배차는 회사 관리자가 현재 잠긴 leaf 범위와 작업 일정에 묶인 차량·작업자 가용성 snapshot을 먼저 한 번 등록한 뒤 확정합니다. 서버는 차량 용량, 요구 인원, 일정, 필수 기술·자격과 대표 현장기사 배정을 다시 검증하고 `dispatch_confirmed.v1`을 같은 transaction에 기록합니다. 현장기사는 확정된 배차와 최신 범위에 대해서만 마스킹 위치·현장 조건·안전 checklist를 조회하고 작업 예정일 당일 모든 항목을 확인해 체크인할 수 있습니다. 연락처·채팅·지도 원본이 없으므로 관련 URI는 임의 생성하지 않고 `null`로 반환합니다.
+
 현장 작업자가 업로드한 `completion` 증거와 현재 잠긴 범위를 고객과 회사 관리자가 각각 확인하면 작업 상태가 `completed`로 전이됩니다. 두 확인은 같은 범위 버전과 같은 증거 집합을 대상으로 해야 하며, 대기 중인 변경요청이나 잠기지 않은 범위가 있으면 완료할 수 없습니다. 완료 증거는 첫 확인부터 검증된 객체 generation과 보존정책이 필요하며, 최종 확인은 같은 transaction에서 객체 snapshot과 보존기간 뒤의 삭제 작업을 기록합니다. 매분 relay가 due 작업을 Cloud Tasks에 넣고 OIDC private worker가 generation-pinned validation·삭제를 수행합니다. 주요 권한·범위·변경·완료 사실은 비밀값과 자유서술 원문을 제외한 append-only 감사 이력으로 조회할 수 있습니다.
 
-촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
+촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 배차 확정, 완료 미디어 등록은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
 
 같은 scheduled relay Job이 Pub/Sub `DomainEvent`를 `consume_notification_event` application command에 전달하고 DB commit 뒤 ack합니다. 최초 31일 replay와 DLQ 운영 절차는 [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](docs/NOTIFICATION_CONSUMER_RUNBOOK.md)를 따릅니다. 실제 연락처 해석과 이메일·메시지 provider 호출은 destination 계약이 없어 이 런타임에 포함하지 않으며 현재는 `PENDING` in-app intent까지만 생성합니다.
 

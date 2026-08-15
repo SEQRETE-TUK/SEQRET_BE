@@ -77,6 +77,16 @@
 - B-05 handler는 A command로 attempt를 시작하고, StoragePort로 같은 generation의 metadata와 스트리밍 SHA-256을 확인한 뒤 정제된 result만 A command에 반환한다. object identity·MIME type·크기 불일치는 `INVALID_INPUT`, provider 오류는 해당 `ProviderErrorKind`로 실패 처리한다.
 - 파생 파일 형식·저장 정책은 아직 결정되지 않았다. media validation은 Cloud Tasks OIDC private worker가 version 1 task를 받아 이 handler를 실행한다.
 
+## 배차와 현장 체크인
+
+- 회사 관리자만 `POST /move-jobs/{job_id}/dispatch/setup`으로 한 작업의 현재 잠긴 leaf 범위, 작업 예정 시각, 요구 차량 용량·인원·기술·자격, checklist와 차량·인력 후보 snapshot을 한 번 등록한다. 이 route는 업체 resource provider를 대체하는 master CRUD가 아니라 신뢰된 연동 경계다.
+- snapshot에는 로그인하는 대표 현장기사 participant가 정확히 한 후보에 연결돼야 한다. 나머지 작업자는 작업 범위 안의 불변 배정 record이며 별도 access capability를 뜻하지 않는다.
+- 회사 관리자의 `PUT /dispatch`는 setup ID, 차량 한 대, 중복 없는 정확한 인원과 lead worker를 받는다. 차량 가용성·용량, 작업자 가용성, 필수 기술·자격과 대표 현장기사 포함 여부를 다시 검증하고 한 번만 확정한다. 정확히 같은 command 재전송만 기존 결과를 반환한다.
+- 확정은 `dispatch_plan`과 `dispatch_confirmed.v1` Outbox event를 같은 transaction에 기록한다. notification consumer는 event actor인 업체 관리자를 제외하고 해당 작업의 현장기사에게 `PENDING` in-app intent 하나를 만든다.
+- 현장기사는 자신이 선택된 확정 배차와 현재 잠긴 leaf 범위에 대해서만 `GET /field-brief`를 조회한다. 신뢰할 연락처·채팅·지도 source가 없으므로 URI는 현재 `null`이며 server가 추정하지 않는다.
+- `POST /check-ins`는 dispatch ID와 setup의 checklist key 전체를 중복 없이 받는다. 배정된 대표 현장기사와 작업 예정일 당일만 최초 기록하며 같은 key 집합의 재전송은 기존 체크인 시각을 반환한다.
+- `dispatch_setup`, `dispatch_plan`, `field_check_in` 또는 `dispatch_confirmed.v1` 전달 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+
 ## Event envelope
 
 `DomainEvent`는 `event_id`, version이 포함된 `event_type`, `schema_version`, `aggregate_id`, `occurred_at`, 선택적 `actor_id`, `trace_id`, JSON `payload`로 구성한다. consumer는 `event_id`를 기준으로 중복 처리를 막는다.
@@ -88,6 +98,7 @@
 - `analysis_failed.v1`
 - `scope_locked.v1`
 - `change_requested.v1`
+- `dispatch_confirmed.v1`
 - `completion_media_submitted.v1`
 - `media_deleted.v1`
 
@@ -98,6 +109,7 @@
 - `analysis_completed.v1`: 문자열 `capture_session_id`, 문자열 `analysis_run_id`, 문자열 `scope_version_id`
 - `analysis_failed.v1`: 문자열 `capture_session_id`, 문자열 `analysis_run_id`, provider-neutral `error_kind`, boolean `retryable`
 - `change_requested.v1`: 문자열 `change_request_id`, 문자열 `base_scope_version_id`, 문자열 배열 `evidence_media_asset_ids`
+- `dispatch_confirmed.v1`: 문자열 `dispatch_id`, 문자열 `scope_version_id`, 문자열 `field_worker_participant_id`
 - `completion_media_submitted.v1`: 문자열 `capture_session_id`, 문자열 `media_asset_id`, 문자열 `room_zone_id`
 - `media_deleted.v1`: 문자열 `background_job_id`, 문자열 `media_asset_id`
 
