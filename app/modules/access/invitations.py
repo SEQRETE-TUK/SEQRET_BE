@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.contracts.actor import ActorContext, ParticipantRole
 from app.contracts.primitives import utc_now
@@ -254,8 +254,8 @@ async def _load_invitation_for_invitee(
             ParticipantInvitation.invitee_participant_id == cast(UUID, actor.participant_id),
         )
         .options(
-            joinedload(ParticipantInvitation.invitee),
-            joinedload(ParticipantInvitation.access_link).joinedload(
+            selectinload(ParticipantInvitation.invitee),
+            selectinload(ParticipantInvitation.access_link).selectinload(
                 ParticipantAccessToken.participant
             ),
         )
@@ -282,8 +282,8 @@ async def _load_invitation_for_issuer(
             ParticipantInvitation.issuer_participant_id == cast(UUID, actor.participant_id),
         )
         .options(
-            joinedload(ParticipantInvitation.invitee),
-            joinedload(ParticipantInvitation.access_link).joinedload(
+            selectinload(ParticipantInvitation.invitee),
+            selectinload(ParticipantInvitation.access_link).selectinload(
                 ParticipantAccessToken.participant
             ),
         )
@@ -313,8 +313,8 @@ async def _revoke_invitations_issued_by(
                     ParticipantInvitation.issuer_participant_id == issuer_participant_id,
                 )
                 .options(
-                    joinedload(ParticipantInvitation.invitee),
-                    joinedload(ParticipantInvitation.access_link).joinedload(
+                    selectinload(ParticipantInvitation.invitee),
+                    selectinload(ParticipantInvitation.access_link).selectinload(
                         ParticipantAccessToken.participant
                     ),
                 )
@@ -367,8 +367,8 @@ async def revoke_access_link_tree(
         select(ParticipantInvitation)
         .where(ParticipantInvitation.access_link_id == access_link.id)
         .options(
-            joinedload(ParticipantInvitation.invitee),
-            joinedload(ParticipantInvitation.access_link).joinedload(
+            selectinload(ParticipantInvitation.invitee),
+            selectinload(ParticipantInvitation.access_link).selectinload(
                 ParticipantAccessToken.participant
             ),
         )
