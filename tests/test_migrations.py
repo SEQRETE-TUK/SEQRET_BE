@@ -493,6 +493,11 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
                     "required_skills": [],
                     "required_certifications": [],
                     "check_in_items": [{"key": "safety", "label": "safety"}],
+                    "completion_check_items": [
+                        {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
+                        {"key": "site_restored", "label": "출발지와 도착지 정리"},
+                        {"key": "changes_recorded", "label": "변경·이슈 기록 확인"},
+                    ],
                     "origin_conditions": [],
                     "safety_notice": "safety",
                     "vehicle_options": [],

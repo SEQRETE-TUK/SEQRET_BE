@@ -65,6 +65,22 @@ def upgrade() -> None:
             server_default=sa.text(f"'{_DEFAULT_COMPLETION_CHECK_ITEMS}'"),
         ),
     )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("dispatch_setup") as batch:
+            batch.alter_column(
+                "completion_check_items",
+                existing_type=sa.JSON(),
+                existing_nullable=False,
+                server_default=None,
+            )
+    else:
+        op.alter_column(
+            "dispatch_setup",
+            "completion_check_items",
+            existing_type=sa.JSON(),
+            existing_nullable=False,
+            server_default=None,
+        )
     op.create_table(
         "completion_submission",
         sa.Column("id", sa.Uuid(), nullable=False),

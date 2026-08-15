@@ -15,7 +15,6 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
-    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -60,11 +59,6 @@ class DispatchSetup(Base):
     completion_check_items: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
-        server_default=text(
-            '\'[{"key":"tools_removed","label":"작업 도구와 자재 회수"},'
-            '{"key":"site_restored","label":"출발지와 도착지 정리"},'
-            '{"key":"changes_recorded","label":"변경·이슈 기록 확인"}]\''
-        ),
         default=lambda: [
             {"key": "tools_removed", "label": "작업 도구와 자재 회수"},
             {"key": "site_restored", "label": "출발지와 도착지 정리"},
