@@ -20,12 +20,20 @@ from app.modules.analysis.models import AnalysisRunStatus
 from app.modules.analysis.service import (
     complete_analysis_run,
     fail_analysis_run,
+    get_analysis_run_failure,
     get_analysis_run_status,
     start_analysis_run,
 )
 from app.platform.db import transactional_session
 
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 120.0
+
+# Provider failure kinds whose stored classification should keep being retried.
+# Mirrors the Vertex adapter so a redelivered FAILED run recovers its
+# retryability from the persisted failure_code across a crash window.
+_RETRYABLE_ERROR_KINDS = frozenset(
+    {ProviderErrorKind.UNAVAILABLE, ProviderErrorKind.DEADLINE_EXCEEDED}
+)
 
 
 class AnalysisTaskStatus(StrEnum):
@@ -69,7 +77,18 @@ async def handle_analysis_task(
     if status is AnalysisRunStatus.COMPLETED:
         return AnalysisTaskOutcome(AnalysisTaskStatus.SUCCEEDED)
     if status is AnalysisRunStatus.FAILED:
-        return AnalysisTaskOutcome(AnalysisTaskStatus.FAILED, retryable=False)
+        # A redelivery after the run was already committed FAILED (e.g. a crash
+        # between fail and reopen) must restore the original kind/retryability
+        # from the persisted failure_code so a retryable failure still recovers.
+        async with transactional_session(factory) as session:
+            failure_kind = await get_analysis_run_failure(
+                session, analysis_run_id=request.analysis_run_id
+            )
+        return AnalysisTaskOutcome(
+            AnalysisTaskStatus.FAILED,
+            error_kind=failure_kind,
+            retryable=failure_kind in _RETRYABLE_ERROR_KINDS,
+        )
 
     idempotency_key = IdempotencyKey(f"analysis:{request.analysis_run_id}")
     try:

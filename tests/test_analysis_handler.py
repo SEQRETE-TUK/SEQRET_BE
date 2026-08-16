@@ -32,6 +32,7 @@ from app.modules.analysis.service import (
     AnalysisRunNotFoundError,
     fail_analysis_run,
     get_analysis_run_attempt_count,
+    get_analysis_run_failure,
     get_analysis_run_status,
     reopen_analysis_run,
     start_analysis_run,
@@ -192,6 +193,68 @@ async def test_duplicate_delivery_after_failure_stays_terminal(
     assert outcome.status is AnalysisTaskStatus.FAILED
     assert outcome.retryable is False
     assert retry_provider.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("kind", "retryable"),
+    [
+        (ProviderErrorKind.UNAVAILABLE, True),
+        (ProviderErrorKind.DEADLINE_EXCEEDED, True),
+        (ProviderErrorKind.PERMISSION_DENIED, False),
+    ],
+)
+@pytest.mark.anyio
+async def test_redelivery_of_stored_failure_restores_retryability(
+    factory: async_sessionmaker[AsyncSession],
+    kind: ProviderErrorKind,
+    retryable: bool,
+) -> None:
+    # Simulate a crash between the FAILED commit and the reopen/503 decision:
+    # the run is already FAILED when the same task is redelivered.
+    request = _request()
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+        await fail_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            error_kind=kind,
+            now=NOW,
+        )
+
+    provider = CountingProvider()
+    outcome = await handle_analysis_task(factory, provider, request, trace_id=TRACE_ID, now=NOW)
+
+    assert outcome.status is AnalysisTaskStatus.FAILED
+    assert outcome.error_kind is kind
+    assert outcome.retryable is retryable
+    assert provider.calls == 0
+
+
+@pytest.mark.anyio
+async def test_failure_getter_returns_none_for_absent_and_running_runs(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+
+    async with transactional_session(factory) as session:
+        absent = await get_analysis_run_failure(session, analysis_run_id=AnalysisRunId(uuid4()))
+        running = await get_analysis_run_failure(session, analysis_run_id=request.analysis_run_id)
+    assert absent is None
+    assert running is None
 
 
 @pytest.mark.anyio

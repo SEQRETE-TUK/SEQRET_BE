@@ -232,6 +232,19 @@ async def get_analysis_run_attempt_count(
     return None if run is None else run.attempt_count
 
 
+async def get_analysis_run_failure(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+) -> ProviderErrorKind | None:
+    """Return the persisted provider failure kind, or ``None`` when unset."""
+
+    run = await _load_run(session, analysis_run_id)
+    if run is None or run.failure_code is None:
+        return None
+    return ProviderErrorKind(run.failure_code)
+
+
 async def reopen_analysis_run(
     session: AsyncSession,
     *,
