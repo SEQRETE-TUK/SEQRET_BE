@@ -42,6 +42,7 @@ from app.platform.db.dependencies import Session
 router = APIRouter(prefix="/move-jobs", tags=["field-change"])
 PROPOSAL_VIEW_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER})
 ISSUE_VIEW_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
+ISSUE_REPORT_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
 
 
 def _not_found(error: Exception) -> HTTPException:
@@ -67,7 +68,7 @@ def _conflict(error: Exception) -> HTTPException:
         status.HTTP_404_NOT_FOUND,
         status.HTTP_409_CONFLICT,
     ),
-    summary="현장기사 이슈와 증거 보고",
+    summary="업체 또는 현장기사 이슈와 증거 보고",
 )
 async def create_field_issue_endpoint(
     job_id: UUID,
@@ -75,7 +76,7 @@ async def create_field_issue_endpoint(
     actor: CurrentActor,
     session: Session,
 ) -> FieldIssueResponse:
-    authorize_job_actor(actor, job_id, frozenset({ParticipantRole.FIELD_WORKER}))
+    authorize_job_actor(actor, job_id, ISSUE_REPORT_ROLES)
     try:
         return await create_field_issue(
             session,

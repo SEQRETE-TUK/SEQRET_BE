@@ -58,6 +58,7 @@ class FieldIssueResponse(ContractModel):
     description: str
     evidence_media_asset_ids: tuple[UUID, ...]
     reported_by_participant_id: UUID
+    reported_by_role: ParticipantRole
     reported_at: datetime
     status: FieldIssueStatus
     change_proposal_id: UUID | None
