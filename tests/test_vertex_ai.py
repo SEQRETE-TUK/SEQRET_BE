@@ -277,7 +277,7 @@ async def test_provider_call_failure_records_stage_and_status() -> None:
     assert fields["analysis_stage"] == "provider_call"
     assert fields["provider_status"] == 503
     assert fields["error_kind"] == "unavailable"
-    assert fields["retryable"] == "true"
+    assert fields["retryable"] is True
 
 
 @pytest.mark.anyio
@@ -299,6 +299,6 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
         )
 
     assert malformed_records[0].__dict__["analysis_stage"] == "parse"
-    assert malformed_records[0].__dict__["retryable"] == "false"
+    assert malformed_records[0].__dict__["retryable"] is False
     assert index_records[0].__dict__["analysis_stage"] == "source_map"
     assert index_records[0].__dict__["provider_status"] == 0

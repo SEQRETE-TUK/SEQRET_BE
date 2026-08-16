@@ -32,9 +32,7 @@ from app.modules.analysis.service import (
     AnalysisRunConflictError,
     AnalysisRunNotFoundError,
     fail_analysis_run,
-    get_analysis_run_attempt_count,
-    get_analysis_run_failure,
-    get_analysis_run_status,
+    get_analysis_run_snapshot,
     prepare_analysis_retry,
     reopen_analysis_run,
     start_analysis_run,
@@ -239,7 +237,7 @@ async def test_redelivery_of_stored_failure_restores_retryability(
 
 
 @pytest.mark.anyio
-async def test_failure_getter_returns_none_for_absent_and_running_runs(
+async def test_snapshot_reflects_running_run_without_failure(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     request = _request()
@@ -253,10 +251,9 @@ async def test_failure_getter_returns_none_for_absent_and_running_runs(
         )
 
     async with transactional_session(factory) as session:
-        absent = await get_analysis_run_failure(session, analysis_run_id=AnalysisRunId(uuid4()))
-        running = await get_analysis_run_failure(session, analysis_run_id=request.analysis_run_id)
-    assert absent is None
-    assert running is None
+        snapshot = await get_analysis_run_snapshot(session, analysis_run_id=request.analysis_run_id)
+    assert snapshot.status is AnalysisRunStatus.RUNNING
+    assert snapshot.failure_kind is None
 
 
 @pytest.mark.anyio
@@ -281,37 +278,25 @@ async def test_redelivery_of_running_run_completes(
 
 
 @pytest.mark.anyio
-async def test_status_getter_returns_none_for_missing_run(
+async def test_snapshot_raises_for_missing_run(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with transactional_session(factory) as session:
-        status = await get_analysis_run_status(session, analysis_run_id=AnalysisRunId(uuid4()))
-    assert status is None
+        with pytest.raises(AnalysisRunNotFoundError):
+            await get_analysis_run_snapshot(session, analysis_run_id=AnalysisRunId(uuid4()))
 
 
 @pytest.mark.anyio
-async def test_attempt_count_getter_reports_present_and_missing_runs(
+async def test_snapshot_reflects_failed_run_failure_kind(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     request = _request()
-    async with transactional_session(factory) as session:
-        await start_analysis_run(
-            session,
-            analysis_run_id=request.analysis_run_id,
-            capture_session_id=request.capture_session_id,
-            trace_id=TRACE_ID,
-            now=NOW,
-        )
+    await _fail_fresh_run(factory, request)
 
     async with transactional_session(factory) as session:
-        present = await get_analysis_run_attempt_count(
-            session, analysis_run_id=request.analysis_run_id
-        )
-        missing = await get_analysis_run_attempt_count(
-            session, analysis_run_id=AnalysisRunId(uuid4())
-        )
-    assert present == 1
-    assert missing is None
+        snapshot = await get_analysis_run_snapshot(session, analysis_run_id=request.analysis_run_id)
+    assert snapshot.status is AnalysisRunStatus.FAILED
+    assert snapshot.failure_kind is ProviderErrorKind.UNAVAILABLE
 
 
 async def _fail_fresh_run(

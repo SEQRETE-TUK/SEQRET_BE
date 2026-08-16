@@ -134,7 +134,7 @@ class VertexAIProvider:
                 "analysis_stage": stage.value,
                 "provider_status": status_code,
                 "error_kind": kind.value,
-                "retryable": "true" if retryable else "false",
+                "retryable": retryable,
             },
         )
 

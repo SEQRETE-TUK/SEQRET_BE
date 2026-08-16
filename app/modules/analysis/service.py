@@ -7,6 +7,7 @@ build a ``scope_version``; track A's ``ImportAnalysisDraft`` command turns an
 caller-managed session so a worker owns the transaction and retry policy.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import cast
@@ -32,6 +33,19 @@ class AnalysisRetryDecision(StrEnum):
 
     RETRY = "retry"
     TERMINAL = "terminal"
+
+
+@dataclass(frozen=True)
+class AnalysisRunSnapshot:
+    """A single-read view of a run's status and persisted failure kind.
+
+    Reading both from one row (one ``SELECT``) makes the pair atomic, so a
+    concurrent reopen cannot land between a status read and a failure read and
+    misreport a still-retryable failure as ``None``/non-retryable.
+    """
+
+    status: AnalysisRunStatus
+    failure_kind: ProviderErrorKind | None
 
 
 class AnalysisRunNotFoundError(RuntimeError):
@@ -218,39 +232,23 @@ async def load_analysis_result(
     )
 
 
-async def get_analysis_run_status(
+async def get_analysis_run_snapshot(
     session: AsyncSession,
     *,
     analysis_run_id: AnalysisRunId,
-) -> AnalysisRunStatus | None:
-    """Return the current run status, or ``None`` when the run is absent."""
+) -> AnalysisRunSnapshot:
+    """Return the run's status and failure kind from a single row read.
+
+    Both fields come from one ``SELECT`` so a concurrent reopen cannot slip
+    between a status read and a failure read. The run is expected to exist (a
+    caller leases or creates it first); an absent run is an invariant violation.
+    """
 
     run = await _load_run(session, analysis_run_id)
-    return None if run is None else run.status
-
-
-async def get_analysis_run_attempt_count(
-    session: AsyncSession,
-    *,
-    analysis_run_id: AnalysisRunId,
-) -> int | None:
-    """Return the current attempt count, or ``None`` when the run is absent."""
-
-    run = await _load_run(session, analysis_run_id)
-    return None if run is None else run.attempt_count
-
-
-async def get_analysis_run_failure(
-    session: AsyncSession,
-    *,
-    analysis_run_id: AnalysisRunId,
-) -> ProviderErrorKind | None:
-    """Return the persisted provider failure kind, or ``None`` when unset."""
-
-    run = await _load_run(session, analysis_run_id)
-    if run is None or run.failure_code is None:
-        return None
-    return ProviderErrorKind(run.failure_code)
+    if run is None:
+        raise AnalysisRunNotFoundError(str(analysis_run_id))
+    failure_kind = None if run.failure_code is None else ProviderErrorKind(run.failure_code)
+    return AnalysisRunSnapshot(status=run.status, failure_kind=failure_kind)
 
 
 async def reopen_analysis_run(

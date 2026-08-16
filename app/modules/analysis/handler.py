@@ -20,8 +20,7 @@ from app.modules.analysis.models import AnalysisRunStatus
 from app.modules.analysis.service import (
     complete_analysis_run,
     fail_analysis_run,
-    get_analysis_run_failure,
-    get_analysis_run_status,
+    get_analysis_run_snapshot,
     start_analysis_run,
 )
 from app.platform.db import transactional_session
@@ -73,21 +72,19 @@ async def handle_analysis_task(
         )
 
     async with transactional_session(factory) as session:
-        status = await get_analysis_run_status(session, analysis_run_id=request.analysis_run_id)
-    if status is AnalysisRunStatus.COMPLETED:
+        snapshot = await get_analysis_run_snapshot(session, analysis_run_id=request.analysis_run_id)
+    if snapshot.status is AnalysisRunStatus.COMPLETED:
         return AnalysisTaskOutcome(AnalysisTaskStatus.SUCCEEDED)
-    if status is AnalysisRunStatus.FAILED:
+    if snapshot.status is AnalysisRunStatus.FAILED:
         # A redelivery after the run was already committed FAILED (e.g. a crash
-        # between fail and reopen) must restore the original kind/retryability
-        # from the persisted failure_code so a retryable failure still recovers.
-        async with transactional_session(factory) as session:
-            failure_kind = await get_analysis_run_failure(
-                session, analysis_run_id=request.analysis_run_id
-            )
+        # between fail and reopen) must restore the original kind/retryability.
+        # Reading status and failure_kind from one snapshot keeps them consistent
+        # so a concurrent reopen cannot blank the code between the two reads and
+        # misreport a still-retryable failure as non-retryable.
         return AnalysisTaskOutcome(
             AnalysisTaskStatus.FAILED,
-            error_kind=failure_kind,
-            retryable=failure_kind in _RETRYABLE_ERROR_KINDS,
+            error_kind=snapshot.failure_kind,
+            retryable=snapshot.failure_kind in _RETRYABLE_ERROR_KINDS,
         )
 
     idempotency_key = IdempotencyKey(f"analysis:{request.analysis_run_id}")
