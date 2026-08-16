@@ -152,14 +152,47 @@ variable "artifact_repository_id" {
   }
 }
 
-variable "database_url_secret_id" {
-  description = "Existing Secret Manager secret ID containing the SQLAlchemy database URL."
+variable "migration_database_url_secret_id" {
+  description = "Existing Secret Manager secret ID containing the migration-owner SQLAlchemy database URL."
   type        = string
-  default     = "seqret-database-url"
+  default     = "seqret-migration-database-url"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.database_url_secret_id))
-    error_message = "database_url_secret_id must be a Secret Manager secret ID."
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.migration_database_url_secret_id))
+    error_message = "migration_database_url_secret_id must be a Secret Manager secret ID."
+  }
+}
+
+variable "api_database_url_secret_id" {
+  description = "Existing Secret Manager secret ID containing the API runtime SQLAlchemy database URL."
+  type        = string
+  default     = "seqret-api-database-url"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.api_database_url_secret_id))
+    error_message = "api_database_url_secret_id must be a Secret Manager secret ID."
+  }
+}
+
+variable "worker_database_url_secret_id" {
+  description = "Existing Secret Manager secret ID containing the private worker SQLAlchemy database URL."
+  type        = string
+  default     = "seqret-worker-database-url"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.worker_database_url_secret_id))
+    error_message = "worker_database_url_secret_id must be a Secret Manager secret ID."
+  }
+}
+
+variable "outbox_relay_database_url_secret_id" {
+  description = "Existing Secret Manager secret ID containing the Outbox relay SQLAlchemy database URL."
+  type        = string
+  default     = "seqret-relay-database-url"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.outbox_relay_database_url_secret_id))
+    error_message = "outbox_relay_database_url_secret_id must be a Secret Manager secret ID."
   }
 }
 

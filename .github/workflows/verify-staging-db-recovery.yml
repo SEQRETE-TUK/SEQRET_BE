@@ -29,7 +29,11 @@ env:
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
   GCP_DB_RECOVERY_SERVICE_ACCOUNT: ${{ vars.GCP_DB_RECOVERY_SERVICE_ACCOUNT }}
-  DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
+  MIGRATION_DATABASE_URL_SECRET_ID: ${{ vars.MIGRATION_DATABASE_URL_SECRET_ID }}
+  API_DATABASE_URL_SECRET_ID: ${{ vars.API_DATABASE_URL_SECRET_ID }}
+  WORKER_DATABASE_URL_SECRET_ID: ${{ vars.WORKER_DATABASE_URL_SECRET_ID }}
+  OUTBOX_RELAY_DATABASE_URL_SECRET_ID: ${{ vars.OUTBOX_RELAY_DATABASE_URL_SECRET_ID }}
+  RECOVERY_DATABASE_URL_SECRET_ID: ${{ vars.RECOVERY_DATABASE_URL_SECRET_ID }}
   CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   DB_RECOVERY_CONNECTION_MODE: ${{ vars.DB_RECOVERY_CONNECTION_MODE }}
   DB_RECOVERY_RUNNER: ${{ vars.DB_RECOVERY_RUNNER }}
@@ -72,7 +76,11 @@ jobs:
             GCP_PROJECT_ID
             GCP_WORKLOAD_IDENTITY_PROVIDER
             GCP_DB_RECOVERY_SERVICE_ACCOUNT
-            DATABASE_URL_SECRET_ID
+            MIGRATION_DATABASE_URL_SECRET_ID
+            API_DATABASE_URL_SECRET_ID
+            WORKER_DATABASE_URL_SECRET_ID
+            OUTBOX_RELAY_DATABASE_URL_SECRET_ID
+            RECOVERY_DATABASE_URL_SECRET_ID
             CLOUD_SQL_SOURCE_INSTANCE
             DB_RECOVERY_CONNECTION_MODE
           )
@@ -112,10 +120,29 @@ jobs:
             echo "The generated recovery destination is unsafe." >&2
             exit 1
           fi
-          if [[ ! "${DATABASE_URL_SECRET_ID}" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
-            echo "DATABASE_URL_SECRET_ID is invalid." >&2
-            exit 1
-          fi
+          database_secret_variables=(
+            MIGRATION_DATABASE_URL_SECRET_ID
+            API_DATABASE_URL_SECRET_ID
+            WORKER_DATABASE_URL_SECRET_ID
+            OUTBOX_RELAY_DATABASE_URL_SECRET_ID
+            RECOVERY_DATABASE_URL_SECRET_ID
+          )
+          # Seed with an invalid Secret ID so nounset-safe Bash versions can iterate.
+          database_secret_ids=("/")
+          for variable_name in "${database_secret_variables[@]}"; do
+            secret_id="${!variable_name}"
+            if [[ ! "${secret_id}" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
+              echo "${variable_name} is invalid." >&2
+              exit 1
+            fi
+            for configured_secret_id in "${database_secret_ids[@]}"; do
+              if [[ "${secret_id}" == "${configured_secret_id}" ]]; then
+                echo "Database Secret IDs must be distinct; ${variable_name} is duplicated." >&2
+                exit 1
+              fi
+            done
+            database_secret_ids+=("${secret_id}")
+          done
           if [[ ! "${DB_RECOVERY_CONNECTION_MODE}" =~ ^(public|private)$ ]]; then
             echo "DB_RECOVERY_CONNECTION_MODE must be public or private." >&2
             exit 1
@@ -314,7 +341,7 @@ jobs:
           trap cleanup_local EXIT
 
           source_database_url="$(gcloud secrets versions access latest \
-            --secret "${DATABASE_URL_SECRET_ID}" \
+            --secret "${RECOVERY_DATABASE_URL_SECRET_ID}" \
             --project "${GCP_PROJECT_ID}")"
           if [[ -z "${source_database_url}" ]] \
             || [[ "${source_database_url}" == *$'\n'* ]] \

@@ -25,7 +25,11 @@ env:
   API_DOMAIN: ${{ vars.API_DOMAIN }}
   FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
   MEDIA_BUCKET_NAME: ${{ vars.MEDIA_BUCKET_NAME }}
-  DATABASE_URL_SECRET_ID: ${{ vars.DATABASE_URL_SECRET_ID }}
+  MIGRATION_DATABASE_URL_SECRET_ID: ${{ vars.MIGRATION_DATABASE_URL_SECRET_ID }}
+  API_DATABASE_URL_SECRET_ID: ${{ vars.API_DATABASE_URL_SECRET_ID }}
+  WORKER_DATABASE_URL_SECRET_ID: ${{ vars.WORKER_DATABASE_URL_SECRET_ID }}
+  OUTBOX_RELAY_DATABASE_URL_SECRET_ID: ${{ vars.OUTBOX_RELAY_DATABASE_URL_SECRET_ID }}
+  RECOVERY_DATABASE_URL_SECRET_ID: ${{ vars.RECOVERY_DATABASE_URL_SECRET_ID }}
   CLOUD_SQL_SOURCE_INSTANCE: ${{ vars.CLOUD_SQL_SOURCE_INSTANCE }}
   MEDIA_RETENTION_DAYS: ${{ vars.MEDIA_RETENTION_DAYS }}
   REDIS_URL_SECRET_ID: ${{ vars.REDIS_URL_SECRET_ID }}
@@ -75,7 +79,11 @@ jobs:
             API_DOMAIN
             FRONTEND_ORIGIN
             MEDIA_BUCKET_NAME
-            DATABASE_URL_SECRET_ID
+            MIGRATION_DATABASE_URL_SECRET_ID
+            API_DATABASE_URL_SECRET_ID
+            WORKER_DATABASE_URL_SECRET_ID
+            OUTBOX_RELAY_DATABASE_URL_SECRET_ID
+            RECOVERY_DATABASE_URL_SECRET_ID
             CLOUD_SQL_SOURCE_INSTANCE
             MEDIA_RETENTION_DAYS
             MONITORING_NOTIFICATION_CHANNELS
@@ -102,6 +110,29 @@ jobs:
             echo "MEDIA_BUCKET_NAME must be a 3 to 63 character lowercase Cloud Storage bucket name." >&2
             exit 1
           fi
+          database_secret_variables=(
+            MIGRATION_DATABASE_URL_SECRET_ID
+            API_DATABASE_URL_SECRET_ID
+            WORKER_DATABASE_URL_SECRET_ID
+            OUTBOX_RELAY_DATABASE_URL_SECRET_ID
+            RECOVERY_DATABASE_URL_SECRET_ID
+          )
+          # Seed with an invalid Secret ID so nounset-safe Bash versions can iterate.
+          database_secret_ids=("/")
+          for variable_name in "${database_secret_variables[@]}"; do
+            secret_id="${!variable_name}"
+            if [[ ! "${secret_id}" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
+              echo "${variable_name} is invalid." >&2
+              exit 1
+            fi
+            for configured_secret_id in "${database_secret_ids[@]}"; do
+              if [[ "${secret_id}" == "${configured_secret_id}" ]]; then
+                echo "Database Secret IDs must be distinct; ${variable_name} is duplicated." >&2
+                exit 1
+              fi
+            done
+            database_secret_ids+=("${secret_id}")
+          done
           if [[ ! "${CLOUD_SQL_SOURCE_INSTANCE}" =~ ^[a-z]([a-z0-9-]{0,96}[a-z0-9])?$ ]]; then
             echo "CLOUD_SQL_SOURCE_INSTANCE is invalid." >&2
             exit 1
@@ -305,7 +336,10 @@ jobs:
             -var="media_bucket_name=${MEDIA_BUCKET_NAME}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
-            -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="migration_database_url_secret_id=${MIGRATION_DATABASE_URL_SECRET_ID}"
+            -var="api_database_url_secret_id=${API_DATABASE_URL_SECRET_ID}"
+            -var="worker_database_url_secret_id=${WORKER_DATABASE_URL_SECRET_ID}"
+            -var="outbox_relay_database_url_secret_id=${OUTBOX_RELAY_DATABASE_URL_SECRET_ID}"
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
             -var="api_max_instances=2"
             -var="database_connection_alert_threshold=18"
@@ -350,7 +384,10 @@ jobs:
             -var="media_bucket_name=${MEDIA_BUCKET_NAME}"
             -var="artifact_repository_id=${ARTIFACT_REPOSITORY}"
             -var="container_image=${CONTAINER_IMAGE}"
-            -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
+            -var="migration_database_url_secret_id=${MIGRATION_DATABASE_URL_SECRET_ID}"
+            -var="api_database_url_secret_id=${API_DATABASE_URL_SECRET_ID}"
+            -var="worker_database_url_secret_id=${WORKER_DATABASE_URL_SECRET_ID}"
+            -var="outbox_relay_database_url_secret_id=${OUTBOX_RELAY_DATABASE_URL_SECRET_ID}"
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
             -var="api_max_instances=2"
             -var="database_connection_alert_threshold=18"

@@ -121,7 +121,7 @@ resource "google_project_iam_member" "outbox_relay_telemetry_consumer" {
 
 resource "google_secret_manager_secret_iam_member" "outbox_relay_database" {
   project   = var.project_id
-  secret_id = var.database_url_secret_id
+  secret_id = var.outbox_relay_database_url_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.outbox_relay.email}"
 }
@@ -164,7 +164,7 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
           name = "SEQRET_DATABASE_URL"
           value_source {
             secret_key_ref {
-              secret  = var.database_url_secret_id
+              secret  = var.outbox_relay_database_url_secret_id
               version = "latest"
             }
           }
