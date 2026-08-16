@@ -16,15 +16,20 @@ from app.modules.analysis_workflow.service import (
     submit_capture_analysis,
 )
 from app.modules.capture.schemas import (
+    MEDIA_CONSENT_POLICY_VERSION,
+    MEDIA_PROCESSING_PURPOSES,
+    CaptureSessionCreate,
     CaptureSessionDetailResponse,
     CaptureSessionResponse,
     MediaAssetResponse,
+    MediaConsentPolicyResponse,
     MediaUploadCreate,
     MediaUploadResponse,
 )
 from app.modules.capture.service import (
     CaptureResourceNotFoundError,
     CaptureWorkflowConflictError,
+    MediaConsentConflictError,
     MediaMetadataMismatchError,
     MediaPurposeNotAllowedError,
     MediaUploadStateConflictError,
@@ -36,6 +41,16 @@ from app.modules.capture.service import (
 from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["capture"])
+
+
+def _retention_days(request: Request) -> int:
+    retention_days = request.app.state.runtime_context.settings.media_retention_days
+    if retention_days is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="media retention policy is unavailable",
+        )
+    return cast(int, retention_days)
 
 
 def get_storage_port(request: Request, job_id: UUID, actor: CurrentActor) -> StoragePort:
@@ -65,6 +80,34 @@ def storage_error(error: ProviderError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="storage is unavailable",
+    )
+
+
+@router.get(
+    "/{job_id}/media-consent-policy",
+    response_model=MediaConsentPolicyResponse,
+    responses=protected_error_responses(
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
+    summary="현재 미디어 처리 동의문 조회",
+)
+async def get_media_consent_policy_endpoint(
+    job_id: UUID,
+    request: Request,
+    actor: CurrentActor,
+) -> MediaConsentPolicyResponse:
+    authorize_job_actor(actor, job_id)
+    retention_days = _retention_days(request)
+    return MediaConsentPolicyResponse(
+        policy_version=MEDIA_CONSENT_POLICY_VERSION,
+        processing_purposes=MEDIA_PROCESSING_PURPOSES,
+        retention_days_after_job_completion=retention_days,
+        notice=(
+            "촬영 미디어는 짐·작업조건 AI 초안, 공동확인, 현장 변경 및 완료 증빙에 "
+            f"사용되며 작업 완료 후 {retention_days}일 보관 뒤 삭제됩니다. "
+            "AI 결과는 초안이며 범위와 책임을 자동 확정하지 않습니다."
+        ),
     )
 
 
@@ -163,12 +206,20 @@ async def get_capture_analysis_endpoint(
 )
 async def create_capture_session_endpoint(
     job_id: UUID,
+    command: CaptureSessionCreate,
+    request: Request,
     actor: CurrentActor,
     session: Session,
 ) -> CaptureSessionResponse:
     authorize_job_actor(actor, job_id)
     try:
-        return await create_capture_session(session, job_id, cast(UUID, actor.participant_id))
+        return await create_capture_session(
+            session,
+            job_id,
+            cast(UUID, actor.participant_id),
+            command,
+            retention_days=_retention_days(request),
+        )
     except CaptureResourceNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -178,6 +229,11 @@ async def create_capture_session_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="capture workflow is closed",
+        ) from error
+    except MediaConsentConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="media consent policy is stale",
         ) from error
 
 
@@ -226,6 +282,11 @@ async def create_media_upload_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="capture workflow is closed",
+        ) from error
+    except MediaConsentConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="media processing consent is required",
         ) from error
     except ProviderError as error:
         raise storage_error(error) from error
@@ -278,6 +339,11 @@ async def complete_media_upload_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="capture workflow is closed",
+        ) from error
+    except MediaConsentConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="media processing consent is required",
         ) from error
     except ProviderError as error:
         raise storage_error(error) from error

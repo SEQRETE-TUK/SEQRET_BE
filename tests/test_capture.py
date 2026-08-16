@@ -31,11 +31,14 @@ from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
     MAX_IMAGE_BYTES,
     MAX_VIDEO_BYTES,
+    MEDIA_CONSENT_POLICY_VERSION,
+    CaptureSessionCreate,
     MediaUploadCreate,
     MediaUploadResponse,
 )
 from app.modules.capture.service import (
     CaptureResourceNotFoundError,
+    MediaConsentConflictError,
     MediaPurposeNotAllowedError,
     MediaUploadStateConflictError,
     complete_media_upload,
@@ -51,6 +54,10 @@ CaptureApi = tuple[
     FakeObjectStorage,
     FastAPI,
 ]
+MEDIA_CONSENT_PAYLOAD = {
+    "consent_policy_version": MEDIA_CONSENT_POLICY_VERSION,
+    "privacy_notice_acknowledged": True,
+}
 
 
 def _upload_target(
@@ -78,7 +85,9 @@ async def capture_api(tmp_path: Path) -> AsyncIterator[CaptureApi]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(Settings(environment=AppEnvironment.TEST))
+    application = create_app(
+        Settings(environment=AppEnvironment.TEST, media_retention_days=30)
+    )
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     transport = ASGITransport(app=application)
@@ -127,9 +136,81 @@ async def _create_capture(
     response = await client.post(
         f"/api/v1/move-jobs/{created['job']['id']}/capture-sessions",
         headers=_headers(secret),
+        json=MEDIA_CONSENT_PAYLOAD,
     )
     assert response.status_code == 201
+    assert response.json()["media_processing_consent"] == {
+        "policy_version": MEDIA_CONSENT_POLICY_VERSION,
+        "processing_purposes": [
+            "inventory_analysis",
+            "condition_record",
+            "field_change_evidence",
+            "completion_record",
+        ],
+        "privacy_notice_acknowledged": True,
+        "retention_days_after_job_completion": 30,
+        "consented_at": response.json()["media_processing_consent"]["consented_at"],
+    }
     return cast(dict[str, Any], response.json())
+
+
+@pytest.mark.anyio
+async def test_media_consent_policy_and_explicit_acknowledgement(
+    capture_api: CaptureApi,
+) -> None:
+    client, factory, storage, _ = capture_api
+    created = await _create_job(client)
+    secret = _secret(created, "customer")
+    job_id = created["job"]["id"]
+    policy_url = f"/api/v1/move-jobs/{job_id}/media-consent-policy"
+    capture_url = f"/api/v1/move-jobs/{job_id}/capture-sessions"
+
+    policy = await client.get(policy_url, headers=_headers(secret))
+    assert policy.status_code == 200
+    assert policy.json()["policy_version"] == MEDIA_CONSENT_POLICY_VERSION
+    assert policy.json()["retention_days_after_job_completion"] == 30
+    assert "AI 결과는 초안" in policy.json()["notice"]
+    assert (await client.get(policy_url)).status_code == 401
+
+    assert (
+        await client.post(capture_url, headers=_headers(secret), json={})
+    ).status_code == 422
+    assert (
+        await client.post(
+            capture_url,
+            headers=_headers(secret),
+            json={
+                **MEDIA_CONSENT_PAYLOAD,
+                "privacy_notice_acknowledged": False,
+            },
+        )
+    ).status_code == 422
+    stale = await client.post(
+        capture_url,
+        headers=_headers(secret),
+        json={**MEDIA_CONSENT_PAYLOAD, "consent_policy_version": "stale.v1"},
+    )
+    assert stale.status_code == 409
+
+    no_retention_app = create_app(
+        Settings(environment=AppEnvironment.TEST, media_retention_days=None)
+    )
+    no_retention_app.state.database_session_factory = factory
+    no_retention_app.state.storage_port = storage
+    async with AsyncClient(
+        transport=ASGITransport(app=no_retention_app),
+        base_url="http://testserver",
+    ) as no_retention_client:
+        assert (
+            await no_retention_client.get(policy_url, headers=_headers(secret))
+        ).status_code == 503
+        assert (
+            await no_retention_client.post(
+                capture_url,
+                headers=_headers(secret),
+                json=MEDIA_CONSENT_PAYLOAD,
+            )
+        ).status_code == 503
 
 
 @pytest.mark.anyio
@@ -189,13 +270,14 @@ async def test_capture_session_list_recovers_owned_media_and_analysis_state(
         item["id"]: item for item in cast(list[dict[str, Any]], customer_response.json())
     }
     assert set(customer_sessions) == {submitted_capture["id"], draft_capture["id"]}
-    assert worker_response.json() == [
-        {
-            **worker_capture,
-            "media_assets": [],
-            "analysis": None,
-        }
-    ]
+    worker_sessions = cast(list[dict[str, Any]], worker_response.json())
+    assert len(worker_sessions) == 1
+    assert worker_sessions[0]["id"] == worker_capture["id"]
+    assert worker_sessions[0]["media_processing_consent"]["policy_version"] == (
+        MEDIA_CONSENT_POLICY_VERSION
+    )
+    assert worker_sessions[0]["media_assets"] == []
+    assert worker_sessions[0]["analysis"] is None
 
     submitted_view = customer_sessions[submitted_capture["id"]]
     assert submitted_view["analysis"]["analysis_run_id"] == submitted.json()["analysis_run_id"]
@@ -350,6 +432,7 @@ async def test_capture_upload_verifies_metadata_and_is_idempotent(
     new_capture = await client.post(
         f"/api/v1/move-jobs/{job['id']}/capture-sessions",
         headers=_headers(customer_secret),
+        json=MEDIA_CONSENT_PAYLOAD,
     )
     new_upload = await client.post(
         upload_path,
@@ -386,11 +469,15 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
     customer_secret = _secret(first, "customer")
     worker_secret = _secret(first, "field_worker")
 
-    unauthenticated = await client.post(f"/api/v1/move-jobs/{job['id']}/capture-sessions")
+    unauthenticated = await client.post(
+        f"/api/v1/move-jobs/{job['id']}/capture-sessions",
+        json=MEDIA_CONSENT_PAYLOAD,
+    )
     assert unauthenticated.status_code == 401
     cross_job = await client.post(
         f"/api/v1/move-jobs/{second['job']['id']}/capture-sessions",
         headers=_headers(customer_secret),
+        json=MEDIA_CONSENT_PAYLOAD,
     )
     assert cross_job.status_code == 404
 
@@ -459,17 +546,30 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
 
     async with factory() as session:
         with pytest.raises(CaptureResourceNotFoundError):
-            await create_capture_session(session, uuid4(), uuid4())
+            await create_capture_session(
+                session,
+                uuid4(),
+                uuid4(),
+                CaptureSessionCreate(**MEDIA_CONSENT_PAYLOAD),
+                retention_days=30,
+            )
         with pytest.raises(CaptureResourceNotFoundError):
-            await create_capture_session(session, UUID(job["id"]), uuid4())
+            await create_capture_session(
+                session,
+                UUID(job["id"]),
+                uuid4(),
+                CaptureSessionCreate(**MEDIA_CONSENT_PAYLOAD),
+                retention_days=30,
+            )
 
-    async def raise_missing(*_args: object) -> None:
+    async def raise_missing(*_args: object, **_kwargs: object) -> None:
         raise CaptureResourceNotFoundError(job["id"])
 
     monkeypatch.setattr("app.modules.capture.router.create_capture_session", raise_missing)
     service_missing = await client.post(
         f"/api/v1/move-jobs/{job['id']}/capture-sessions",
         headers=_headers(customer_secret),
+        json=MEDIA_CONSENT_PAYLOAD,
     )
     assert service_missing.status_code == 404
 
@@ -506,6 +606,61 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
         json=valid_payload,
     )
     assert purpose_error.status_code == 422
+
+    customer_participant_id = UUID(
+        next(
+            participant["id"]
+            for participant in job["participants"]
+            if participant["role"] == "customer"
+        )
+    )
+    async with factory.begin() as session:
+        legacy_capture = CaptureSession(
+            job_id=UUID(job["id"]),
+            created_by_participant_id=customer_participant_id,
+        )
+        session.add(legacy_capture)
+        await session.flush()
+        legacy_capture_id = legacy_capture.id
+    async with factory() as session:
+        with pytest.raises(MediaConsentConflictError):
+            await create_media_upload(
+                session,
+                storage,
+                UUID(job["id"]),
+                legacy_capture_id,
+                customer_participant_id,
+                MediaUploadCreate.model_validate(valid_payload),
+            )
+        with pytest.raises(MediaConsentConflictError):
+            await complete_media_upload(
+                session,
+                storage,
+                UUID(job["id"]),
+                legacy_capture_id,
+                uuid4(),
+                customer_participant_id,
+            )
+
+    async def reject_consent(*_args: object, **_kwargs: object) -> None:
+        raise MediaConsentConflictError(legacy_capture_id)
+
+    monkeypatch.setattr("app.modules.capture.router.create_media_upload", reject_consent)
+    assert (
+        await client.post(
+            upload_url,
+            headers=_headers(customer_secret),
+            json=valid_payload,
+        )
+    ).status_code == 409
+    monkeypatch.setattr("app.modules.capture.router.complete_media_upload", reject_consent)
+    assert (
+        await client.post(
+            f"/api/v1/move-jobs/{job['id']}/capture-sessions/{capture['id']}"
+            f"/media-assets/{uuid4()}/complete",
+            headers=_headers(customer_secret),
+        )
+    ).status_code == 409
 
 
 @pytest.mark.anyio
@@ -663,6 +818,10 @@ async def test_complete_rechecks_state_after_metadata() -> None:
         id=capture_id,
         job_id=job_id,
         created_by_participant_id=participant_id,
+        media_consent_policy_version=MEDIA_CONSENT_POLICY_VERSION,
+        privacy_notice_acknowledged=True,
+        media_retention_days=30,
+        media_consented_at=datetime.now(UTC),
     )
     pending = MediaAsset(
         id=asset_id,
@@ -826,6 +985,10 @@ async def test_upload_creation_rechecks_capture_after_signing() -> None:
         id=capture_id,
         job_id=job_id,
         created_by_participant_id=participant_id,
+        media_consent_policy_version=MEDIA_CONSENT_POLICY_VERSION,
+        privacy_notice_acknowledged=True,
+        media_retention_days=30,
+        media_consented_at=datetime.now(UTC),
     )
     selected = MagicMock()
     selected.one_or_none.return_value = capture
@@ -867,6 +1030,10 @@ async def test_complete_accepts_concurrent_uploaded_replay(
         id=capture_id,
         job_id=job_id,
         created_by_participant_id=participant_id,
+        media_consent_policy_version=MEDIA_CONSENT_POLICY_VERSION,
+        privacy_notice_acknowledged=True,
+        media_retention_days=30,
+        media_consented_at=datetime.now(UTC),
     )
     pending = MediaAsset(
         id=asset_id,

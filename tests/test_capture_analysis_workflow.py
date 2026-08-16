@@ -157,6 +157,10 @@ async def _seed_capture(
                     id=capture_id,
                     job_id=job_id,
                     created_by_participant_id=participant_id,
+                    media_consent_policy_version="2026-08-17.v1",
+                    privacy_notice_acknowledged=True,
+                    media_retention_days=30,
+                    media_consented_at=NOW,
                 ),
                 *assets,
             ]
@@ -296,6 +300,30 @@ async def test_submit_requires_nonempty_all_ready_inventory(
     statuses: tuple[MediaAssetStatus, ...],
 ) -> None:
     seed = await _seed_capture(factory, *statuses)
+    async with factory.begin() as session:
+        with pytest.raises(CaptureAnalysisConflictError):
+            await submit_capture_analysis(
+                session,
+                seed.job_id,
+                seed.capture_id,
+                seed.participant_id,
+                trace_id=TRACE_ID,
+                now=NOW,
+            )
+
+
+@pytest.mark.anyio
+async def test_submit_requires_recorded_media_consent(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_capture(factory, MediaAssetStatus.READY)
+    async with factory.begin() as session:
+        capture = await session.get(CaptureSession, seed.capture_id)
+        assert capture is not None
+        capture.media_consent_policy_version = None
+        capture.privacy_notice_acknowledged = False
+        capture.media_retention_days = None
+        capture.media_consented_at = None
     async with factory.begin() as session:
         with pytest.raises(CaptureAnalysisConflictError):
             await submit_capture_analysis(

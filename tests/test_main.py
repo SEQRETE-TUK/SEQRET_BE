@@ -53,6 +53,7 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("post", f"{job_path}/access-links/{{access_link_id}}/revoke"): {403},
         ("post", f"{job_path}/capture-sessions"): {409},
         ("get", f"{job_path}/capture-sessions"): set(),
+        ("get", f"{job_path}/media-consent-policy"): {503},
         (
             "post",
             f"{job_path}/capture-sessions/{{capture_session_id}}/submit",

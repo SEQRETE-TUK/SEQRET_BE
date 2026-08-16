@@ -4,10 +4,12 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
     Uuid,
@@ -23,6 +25,21 @@ class CaptureSession(Base):
     """One participant-owned collection of media for a move job."""
 
     __tablename__ = "capture_session"
+    __table_args__ = (
+        CheckConstraint(
+            "(privacy_notice_acknowledged = false "
+            "AND media_consent_policy_version IS NULL "
+            "AND media_retention_days IS NULL "
+            "AND media_consented_at IS NULL) OR "
+            "(privacy_notice_acknowledged = true "
+            "AND media_consent_policy_version IS NOT NULL "
+            "AND length(trim(media_consent_policy_version)) > 0 "
+            "AND media_retention_days IS NOT NULL "
+            "AND media_retention_days > 0 "
+            "AND media_consented_at IS NOT NULL)",
+            name="capture_media_consent_snapshot",
+        ),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     job_id: Mapped[UUID] = mapped_column(
         ForeignKey("move_job.id", ondelete="CASCADE"),
@@ -33,6 +50,14 @@ class CaptureSession(Base):
         ForeignKey("job_participant.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    media_consent_policy_version: Mapped[str | None] = mapped_column(String(50))
+    privacy_notice_acknowledged: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    media_retention_days: Mapped[int | None] = mapped_column(Integer)
+    media_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

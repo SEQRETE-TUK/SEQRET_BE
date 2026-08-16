@@ -17,9 +17,13 @@ from app.modules.analysis_workflow.schemas import capture_analysis_response
 from app.modules.background_job.service import create_media_validation_background_job
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.schemas import (
+    MEDIA_CONSENT_POLICY_VERSION,
+    MEDIA_PROCESSING_PURPOSES,
+    CaptureSessionCreate,
     CaptureSessionDetailResponse,
     CaptureSessionResponse,
     MediaAssetResponse,
+    MediaProcessingConsentSnapshot,
     MediaUploadCreate,
     MediaUploadResponse,
 )
@@ -54,6 +58,10 @@ class CaptureWorkflowConflictError(ValueError):
     """Raised when a terminal move job no longer accepts capture mutations."""
 
 
+class MediaConsentConflictError(ValueError):
+    """Raised when media work has no current explicit consent snapshot."""
+
+
 class MediaPurposeNotAllowedError(ValueError):
     """Raised when a later workflow purpose is used in initial capture."""
 
@@ -79,6 +87,28 @@ def _asset_response(asset: MediaAsset) -> MediaAssetResponse:
         sha256_hex=asset.sha256_hex,
         created_at=asset.created_at,
         uploaded_at=asset.uploaded_at,
+    )
+
+
+def _consent_snapshot(capture: CaptureSession) -> MediaProcessingConsentSnapshot:
+    return MediaProcessingConsentSnapshot(
+        policy_version=capture.media_consent_policy_version,
+        processing_purposes=(
+            MEDIA_PROCESSING_PURPOSES if capture.privacy_notice_acknowledged else ()
+        ),
+        privacy_notice_acknowledged=capture.privacy_notice_acknowledged,
+        retention_days_after_job_completion=capture.media_retention_days,
+        consented_at=capture.media_consented_at,
+    )
+
+
+def _capture_response(capture: CaptureSession) -> CaptureSessionResponse:
+    return CaptureSessionResponse(
+        id=capture.id,
+        job_id=capture.job_id,
+        created_by_participant_id=capture.created_by_participant_id,
+        media_processing_consent=_consent_snapshot(capture),
+        created_at=capture.created_at,
     )
 
 
@@ -109,7 +139,12 @@ async def create_capture_session(
     session: AsyncSession,
     job_id: UUID,
     participant_id: UUID,
+    command: CaptureSessionCreate,
+    *,
+    retention_days: int,
 ) -> CaptureSessionResponse:
+    if command.consent_policy_version != MEDIA_CONSENT_POLICY_VERSION:
+        raise MediaConsentConflictError(command.consent_policy_version)
     await _lock_mutable_job(session, job_id)
     participant = await session.scalar(
         select(JobParticipant.id).where(
@@ -122,15 +157,14 @@ async def create_capture_session(
     capture_session = CaptureSession(
         job_id=job_id,
         created_by_participant_id=participant_id,
+        media_consent_policy_version=MEDIA_CONSENT_POLICY_VERSION,
+        privacy_notice_acknowledged=True,
+        media_retention_days=retention_days,
+        media_consented_at=utc_now(),
     )
     session.add(capture_session)
     await session.flush()
-    return CaptureSessionResponse(
-        id=capture_session.id,
-        job_id=capture_session.job_id,
-        created_by_participant_id=capture_session.created_by_participant_id,
-        created_at=capture_session.created_at,
-    )
+    return _capture_response(capture_session)
 
 
 async def list_capture_sessions(
@@ -181,6 +215,7 @@ async def list_capture_sessions(
             id=capture.id,
             job_id=capture.job_id,
             created_by_participant_id=capture.created_by_participant_id,
+            media_processing_consent=_consent_snapshot(capture),
             created_at=capture.created_at,
             media_assets=tuple(assets_by_capture[capture.id]),
             analysis=(
@@ -246,7 +281,14 @@ async def create_media_upload(
     participant_id: UUID,
     command: MediaUploadCreate,
 ) -> MediaUploadResponse:
-    await _load_owned_capture_session(session, job_id, capture_session_id, participant_id)
+    capture = await _load_owned_capture_session(
+        session,
+        job_id,
+        capture_session_id,
+        participant_id,
+    )
+    if capture.media_consented_at is None:
+        raise MediaConsentConflictError(capture_session_id)
     job_status = await session.scalar(select(MoveJob.status).where(MoveJob.id == job_id))
     if job_status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
         raise CaptureWorkflowConflictError(job_id)
@@ -303,7 +345,14 @@ async def complete_media_upload(
     *,
     trace_id: str | None = None,
 ) -> MediaAssetResponse:
-    await _load_owned_capture_session(session, job_id, capture_session_id, participant_id)
+    capture = await _load_owned_capture_session(
+        session,
+        job_id,
+        capture_session_id,
+        participant_id,
+    )
+    if capture.media_consented_at is None:
+        raise MediaConsentConflictError(capture_session_id)
     statement = select(MediaAsset).where(
         MediaAsset.id == media_asset_id,
         MediaAsset.capture_session_id == capture_session_id,

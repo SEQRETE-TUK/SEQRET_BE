@@ -96,6 +96,8 @@ async def submit_capture_analysis(
     )
     if capture is None:
         raise CaptureAnalysisNotFoundError(capture_session_id)
+    if capture.media_consented_at is None:
+        raise CaptureAnalysisConflictError(capture_session_id)
 
     existing = await session.scalar(
         select(CaptureAnalysisDispatch).where(

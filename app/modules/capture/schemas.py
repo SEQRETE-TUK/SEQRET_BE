@@ -1,6 +1,7 @@
 """Capture and media upload HTTP schemas."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -12,6 +13,45 @@ from app.modules.analysis_workflow.schemas import CaptureAnalysisResponse
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_VIDEO_BYTES = 200 * 1024 * 1024
+MEDIA_CONSENT_POLICY_VERSION = "2026-08-17.v1"
+
+
+class MediaProcessingPurpose(StrEnum):
+    INVENTORY_ANALYSIS = "inventory_analysis"
+    CONDITION_RECORD = "condition_record"
+    FIELD_CHANGE_EVIDENCE = "field_change_evidence"
+    COMPLETION_RECORD = "completion_record"
+
+
+MEDIA_PROCESSING_PURPOSES = tuple(MediaProcessingPurpose)
+
+
+class CaptureSessionCreate(ContractModel):
+    model_config = ConfigDict(strict=False)
+
+    consent_policy_version: Annotated[str, Field(min_length=1, max_length=50)]
+    privacy_notice_acknowledged: bool
+
+    @model_validator(mode="after")
+    def require_explicit_acknowledgement(self) -> "CaptureSessionCreate":
+        if self.privacy_notice_acknowledged is not True:
+            raise ValueError("privacy notice acknowledgement is required")
+        return self
+
+
+class MediaConsentPolicyResponse(ContractModel):
+    policy_version: str
+    processing_purposes: tuple[MediaProcessingPurpose, ...]
+    retention_days_after_job_completion: int
+    notice: str
+
+
+class MediaProcessingConsentSnapshot(ContractModel):
+    policy_version: str | None
+    processing_purposes: tuple[MediaProcessingPurpose, ...]
+    privacy_notice_acknowledged: bool
+    retention_days_after_job_completion: int | None
+    consented_at: datetime | None
 
 
 class MediaUploadCreate(ContractModel):
@@ -33,6 +73,7 @@ class CaptureSessionResponse(ContractModel):
     id: UUID
     job_id: UUID
     created_by_participant_id: UUID
+    media_processing_consent: MediaProcessingConsentSnapshot
     created_at: datetime
 
 

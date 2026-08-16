@@ -158,6 +158,10 @@ async def _upload_media(
     capture = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions",
         headers=headers,
+        json={
+            "consent_policy_version": "2026-08-17.v1",
+            "privacy_notice_acknowledged": True,
+        },
     )
     assert capture.status_code == 201
     capture_id = capture.json()["id"]

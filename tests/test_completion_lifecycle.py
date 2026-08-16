@@ -313,6 +313,10 @@ async def _ready_completion_media(
     capture = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions",
         headers=headers,
+        json={
+            "consent_policy_version": "2026-08-17.v1",
+            "privacy_notice_acknowledged": True,
+        },
     )
     assert capture.status_code == 201
     upload = await client.post(
@@ -875,6 +879,10 @@ async def test_completion_authorization_validation_and_not_ready_states(
     capture = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions",
         headers=_headers(created, "field_worker"),
+        json={
+            "consent_policy_version": "2026-08-17.v1",
+            "privacy_notice_acknowledged": True,
+        },
     )
     upload = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions/{capture.json()['id']}/media-assets/upload",
@@ -1657,7 +1665,9 @@ async def test_completion_router_maps_service_and_provider_failures(
         )
     ).status_code == 404
 
-    no_retention_app = create_app(Settings(environment=AppEnvironment.TEST))
+    no_retention_app = create_app(
+        Settings(environment=AppEnvironment.TEST, media_retention_days=None)
+    )
     no_retention_app.state.database_session_factory = factory
     no_retention_app.state.storage_port = storage
     async with AsyncClient(
