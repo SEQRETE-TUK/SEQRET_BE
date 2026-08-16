@@ -186,9 +186,28 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
     assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
 
 
+@pytest.mark.anyio
+async def test_analyze_maps_empty_source_indices_to_only_input() -> None:
+    output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+        ' "source_indices": []'
+        "}]}"
+    )
+    provider = _provider(StubModels(text=output))
+    request = _request(source_count=1)
+
+    result = await provider.analyze(
+        request=request,
+        idempotency_key=KEY,
+        timeout_seconds=30,
+    )
+
+    assert result.draft_items[0].source_media_asset_ids == request.source_media_asset_ids
+
+
 @pytest.mark.parametrize("source_indices", [[], [0, 0]])
 @pytest.mark.anyio
-async def test_analyze_rejects_empty_or_duplicate_source_indices(
+async def test_analyze_rejects_ambiguous_or_duplicate_source_indices(
     source_indices: list[int],
 ) -> None:
     output = (
@@ -200,7 +219,7 @@ async def test_analyze_rejects_empty_or_duplicate_source_indices(
 
     with pytest.raises(ProviderError, match="invalid media references") as error_info:
         await provider.analyze(
-            request=_request(source_count=1),
+            request=_request(source_count=2),
             idempotency_key=KEY,
             timeout_seconds=30,
         )
@@ -354,7 +373,7 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
     )
     with pytest.raises(ProviderError, match="invalid media references"):
         await empty_index_provider.analyze(
-            request=_request(source_count=1), idempotency_key=KEY, timeout_seconds=30
+            request=_request(source_count=2), idempotency_key=KEY, timeout_seconds=30
         )
 
     assert empty_index_records[0].__dict__["analysis_stage"] == "source_map"
