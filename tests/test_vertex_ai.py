@@ -178,7 +178,7 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
 
     with pytest.raises(ProviderError, match="unknown media") as error_info:
         await provider.analyze(
-            request=_request(source_count=1),
+            request=_request(source_count=2),
             idempotency_key=KEY,
             timeout_seconds=30,
         )
@@ -186,11 +186,14 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
     assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
 
 
+@pytest.mark.parametrize("source_indices", [[], [1], [0, 0], [99]])
 @pytest.mark.anyio
-async def test_analyze_maps_empty_source_indices_to_only_input() -> None:
+async def test_analyze_maps_any_source_indices_to_only_input(
+    source_indices: list[int],
+) -> None:
     output = (
         '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
-        ' "source_indices": []'
+        f' "source_indices": {source_indices}'
         "}]}"
     )
     provider = _provider(StubModels(text=output))
@@ -356,7 +359,7 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
     index_provider, index_records = _logging_provider(StubModels(text=index_output))
     with pytest.raises(ProviderError, match="unknown media"):
         await index_provider.analyze(
-            request=_request(source_count=1), idempotency_key=KEY, timeout_seconds=30
+            request=_request(source_count=2), idempotency_key=KEY, timeout_seconds=30
         )
 
     assert malformed_records[0].__dict__["analysis_stage"] == "parse"
