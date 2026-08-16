@@ -1,11 +1,11 @@
 # SEQRET MVP API 구현 현황
 
-> 기준일: 2026-08-15
+> 기준일: 2026-08-16
 >
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `16b4a98b812e798ad62942f0d82d5d6d7e715068`
+> `58ccfd0fa27353de7676f2251a96d0701f5a5aea`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -17,7 +17,7 @@
 | --- | ---: | --- |
 | 현재 FastAPI 등록 operation | 60개 | 52개 path의 업무 operation 57개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
-| FE 화면의 실제 backend API 호출 | 8개 | `/consumer/capture`가 작업·세션 조회, 세션 생성, upload 발급·완료, 분석 제출, AI 검토 조회·완료를 호출; 별도 signed PUT 1개 |
+| FE 실제 API 연동 범위 | capture + 3역할 | 촬영·분석과 고객·업체·현장기사의 초대, 범위·변경, 배차·체크인, 완료 흐름을 query·mutation으로 호출; 별도 signed PUT 포함 |
 | 기존 8화면 기준 backend 목표 API | 17개 | 16개 구현; 화면용 `media-uploads` adapter만 조건부 잔여 |
 | 승인된 P0 화면 포함 backend 목표 API | 19개 | 18개 구현; 완료 제출과 고객 결정 포함 |
 | 남은 목표 API | 1개 | 기존 capture 상태 전이를 보존할 upload adapter만 조건부 잔여 |
@@ -43,11 +43,11 @@
 | 항목 | 확인 결과 | backend 판단 |
 | --- | --- | --- |
 | runtime | Vite 7, React 19, TypeScript | `TECH_STACK.md`의 Vite 선택과 일치 |
-| 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | `/consumer/capture`만 촬영부터 AI 초안 검토까지 실제 API E2E이고 나머지는 시각 demo |
-| 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | 시각·상호작용 검증 자료로 사용; API 완료로 보지 않음 |
-| server state | TanStack Query 기반 촬영·AI 검토 query·mutation·polling과 나머지 demo의 `useState`, `setTimeout`이 공존 | 촬영·분석 terminal, AI 검토 완료와 `409` 최신 상태 복구는 구현; 다른 화면은 아직 server 정합성 증거 없음 |
-| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 승인된 capture와 `analysis-review` OpenAPI slice를 화면 query·mutation에 연결함 |
-| CI·배포 | FE #5·#6·#7 `Frontend quality` 성공; deployment와 environment 0개 | code quality gate는 존재하지만 canonical HTTPS origin·실배포는 없음 |
+| 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 역할별 업무 경로와 capture가 실제 API client를 사용하고 design system만 독립 시각 경로 |
+| 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | PRD 수치는 시각 범위이며 현재 역할별 runtime workflow 수와 동일하지 않음 |
+| server state | TanStack Query 기반 역할별 query·mutation·polling, command replay와 `409` refetch | 초대 pending 동안 보호 API를 호출하지 않으며 수락 뒤 역할 업무 query를 활성화함 |
+| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | capture·초대·scope·change·dispatch·completion 실행 계약을 화면에 연결함 |
+| CI·배포 | FE #8·#9 포함 필수 CI 성공, Playwright 6개 통과; deployment와 environment 0개 | 자동 계약 검증은 있으나 canonical HTTPS origin·영구 배포는 없음 |
 
 ### 3.2 계약 불일치
 
@@ -203,9 +203,9 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 ### frontend 연동
 
-- scope·변경·배차·완료 화면은 아직 FE local state/timer를 실제 API query·mutation으로 교체해야 함
-- 완료 제출의 capture upload·READY polling, 고객 요청 deep link 전달과 `409` 최신 상태 복구를 브라우저 E2E로 검증
-- canonical HTTPS origin 구매·배포 뒤 API와 GCS CORS를 임시 origin에서 교체
+- scope·변경·배차·완료 화면의 실제 API query·mutation 연동과 역할별 mock browser 회귀 6개는 완료됨
+- 임시 HTTPS FE에서 고객 onboarding → 업체·기사 초대 → 견적·범위 확정 → 배차·체크인 → 완료 제출·요청·확정의 staging 실브라우저 E2E가 완료됨
+- canonical HTTPS origin 구매·배포 뒤 API와 GCS CORS를 실제 origin으로 교체하고 signed PUT·READY polling을 브라우저에서 재검증
 
 ### migration
 
@@ -219,5 +219,5 @@ INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `
 - FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
-- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. `scope-review` 4개, 현장 이슈·변경 제안 6개, 배차·브리프·체크인 5개와 완료 6개 operation도 실행 계약과 권한·멱등·충돌 test가 준비돼 FE가 연동할 수 있다.
-- FE canonical HTTPS origin이 생기기 전에는 staging 임시 origin과 GCS bucket CORS를 교체하지 않는다.
+- 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. FE #8은 역할별 실행 계약 Playwright 검증을 CI에 추가했고 FE #9는 pending 초대의 보호 API 선호출을 차단했다.
+- 2026-08-16의 임시 HTTPS canary가 끝난 뒤 API와 GCS CORS는 `https://34-160-87-130.sslip.io`로 원복했다. canonical FE origin이 생길 때 둘을 함께 교체한다.
