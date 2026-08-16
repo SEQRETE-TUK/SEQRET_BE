@@ -31,6 +31,7 @@ from app.modules.analysis.service import (
     AnalysisRunConflictError,
     AnalysisRunNotFoundError,
     fail_analysis_run,
+    get_analysis_run_attempt_count,
     get_analysis_run_status,
     reopen_analysis_run,
     start_analysis_run,
@@ -221,6 +222,31 @@ async def test_status_getter_returns_none_for_missing_run(
     async with transactional_session(factory) as session:
         status = await get_analysis_run_status(session, analysis_run_id=AnalysisRunId(uuid4()))
     assert status is None
+
+
+@pytest.mark.anyio
+async def test_attempt_count_getter_reports_present_and_missing_runs(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            capture_session_id=request.capture_session_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+
+    async with transactional_session(factory) as session:
+        present = await get_analysis_run_attempt_count(
+            session, analysis_run_id=request.analysis_run_id
+        )
+        missing = await get_analysis_run_attempt_count(
+            session, analysis_run_id=AnalysisRunId(uuid4())
+        )
+    assert present == 1
+    assert missing is None
 
 
 async def _fail_fresh_run(
