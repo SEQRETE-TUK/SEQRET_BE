@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_04_0001"
+ALEMBIC_HEAD = "a_16_0001"
+ALEMBIC_LOCATION_PREVIOUS = "int_04_0001"
 ALEMBIC_COMPLETION_PREVIOUS = "a_13_0001"
 ALEMBIC_DISPATCH_PREVIOUS = "int_03_0002"
 ALEMBIC_FIELD_CHANGE_PREVIOUS = "int_02_0001"
@@ -87,6 +88,81 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_location_conditions_migration_backfills_and_defaults_existing_clients(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'location-conditions.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+
+    try:
+        command.upgrade(configuration, ALEMBIC_LOCATION_PREVIOUS)
+        metadata = MetaData()
+        metadata.reflect(engine, only=("move_job", "location"))
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        origin_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "location conditions backfill",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["location"].insert(),
+                {
+                    "id": origin_id,
+                    "job_id": job_id,
+                    "kind": "ORIGIN",
+                    "label": "출발지",
+                    "created_at": now,
+                },
+            )
+
+        command.upgrade(configuration, "head")
+        migrated = MetaData()
+        migrated.reflect(engine, only=("location",))
+        with engine.begin() as connection:
+            backfilled = connection.scalar(
+                select(migrated.tables["location"].c.conditions).where(
+                    migrated.tables["location"].c.id == origin_id
+                )
+            )
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                migrated.tables["location"].insert(),
+                {
+                    "id": uuid4().hex,
+                    "job_id": job_id,
+                    "kind": "DESTINATION",
+                    "label": "도착지",
+                    "created_at": now,
+                },
+            )
+        expected = {
+            "residence_type": "unknown",
+            "floor": {"status": "unknown", "value": None},
+            "elevator": "unknown",
+            "stairs": "unknown",
+            "parking_access": "unknown",
+            "carry_distance": {"status": "unknown", "value_m": None},
+            "access_note": None,
+        }
+        assert backfilled == expected
+
+        command.downgrade(configuration, ALEMBIC_LOCATION_PREVIOUS)
+        assert "conditions" not in {
+            column["name"] for column in inspect(engine).get_columns("location")
+        }
+    finally:
+        engine.dispose()
 
 
 def test_invitation_history_blocks_schema_downgrade(tmp_path: Path) -> None:
@@ -557,7 +633,7 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
 
         with pytest.raises(RuntimeError, match="INT-04 completion"):
             command.downgrade(configuration, ALEMBIC_COMPLETION_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_LOCATION_PREVIOUS
         with engine.begin() as connection:
             connection.execute(
                 metadata.tables["outbox_event"]
@@ -573,7 +649,7 @@ def test_dispatch_history_blocks_schema_downgrade(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="dispatch checklist history"):
             command.downgrade(configuration, ALEMBIC_COMPLETION_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_LOCATION_PREVIOUS
         with engine.begin() as connection:
             connection.execute(
                 metadata.tables["dispatch_setup"]
@@ -891,6 +967,15 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "job_id": job_id,
                     "kind": "ORIGIN",
                     "label": "migration probe",
+                    "conditions": {
+                        "residence_type": "unknown",
+                        "floor": {"status": "unknown", "value": None},
+                        "elevator": "unknown",
+                        "stairs": "unknown",
+                        "parking_access": "unknown",
+                        "carry_distance": {"status": "unknown", "value_m": None},
+                        "access_note": None,
+                    },
                     "created_at": created_at,
                 },
             )

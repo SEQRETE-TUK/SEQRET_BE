@@ -24,6 +24,7 @@ from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
 from app.modules.completion.models import AuditEventType, CompletionConfirmation
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant, Location, MoveJob, MoveJobStatus, RoomZone
+from app.modules.move_job.schemas import LocationConditions
 from app.modules.scope.models import (
     ChangeRequest,
     ChangeRequestEvidence,
@@ -40,6 +41,7 @@ from app.modules.scope.schemas import (
     ScopeApprovalResult,
     ScopeContent,
     ScopeItem,
+    ScopeLocationConditions,
     ScopeVersionCreate,
     ScopeVersionResponse,
 )
@@ -98,6 +100,50 @@ def _normalize_scope_content(content: ScopeContent) -> ScopeContent:
     return ScopeContent(
         schema_version=content.schema_version,
         items=tuple(sorted(content.items, key=lambda item: item.item_key)),
+        location_conditions=tuple(
+            sorted(
+                content.location_conditions,
+                key=lambda item: (item.kind.value, str(item.location_id)),
+            )
+        ),
+    )
+
+
+async def _with_location_condition_snapshot(
+    session: AsyncSession,
+    job_id: UUID,
+    content: ScopeContent,
+) -> ScopeContent:
+    if content.schema_version == 1:
+        return content
+    locations = (
+        await session.scalars(
+            select(Location).where(Location.job_id == job_id).order_by(Location.kind, Location.id)
+        )
+    ).all()
+    if not locations:
+        raise ScopeResourceNotFoundError(job_id)
+    locations_by_id = {location.id: location for location in locations}
+    if content.location_conditions:
+        if {item.location_id for item in content.location_conditions} != set(locations_by_id):
+            raise ScopeResourceNotFoundError(job_id)
+        if any(
+            locations_by_id[item.location_id].kind is not item.kind
+            for item in content.location_conditions
+        ):
+            raise ScopeResourceNotFoundError(job_id)
+        return content
+    return ScopeContent(
+        schema_version=content.schema_version,
+        items=content.items,
+        location_conditions=tuple(
+            ScopeLocationConditions(
+                location_id=location.id,
+                kind=location.kind,
+                conditions=LocationConditions.model_validate(location.conditions, strict=False),
+            )
+            for location in locations
+        ),
     )
 
 
@@ -173,7 +219,12 @@ async def create_scope_version(
         if participant is None:
             raise ScopeResourceNotFoundError(job_id)
 
-    await _validate_scope_zones(session, job_id, command.content)
+    content_with_conditions = await _with_location_condition_snapshot(
+        session,
+        job_id,
+        command.content,
+    )
+    await _validate_scope_zones(session, job_id, content_with_conditions)
 
     if command.parent_version_id is None:
         existing_root = await session.scalar(
@@ -213,7 +264,7 @@ async def create_scope_version(
             raise ScopeVersionConflictError(parent.id)
         sequence_number = parent.sequence_number + 1
 
-    normalized_content = _normalize_scope_content(command.content)
+    normalized_content = _normalize_scope_content(content_with_conditions)
     content_document: dict[str, Any] = normalized_content.model_dump(mode="json")
     canonical_json = json.dumps(
         content_document,

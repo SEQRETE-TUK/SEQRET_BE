@@ -2,7 +2,7 @@
 
 > 상태: 목표 계약 문서. 구현으로 표시한 경로만 현재 실행 계약
 >
-> 기준일: 2026-08-16
+> 기준일: 2026-08-17
 >
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
@@ -115,8 +115,9 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 기존 link·하위 초대 철회 후 재발급 | 발급자 | 구현 |
 
 요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
-`locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`과
-1~100개의 고유한 `room_zones`를 가진다. 응답은 `job`과 `customer_access_link`만 반환하며
+`locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`,
+구조화된 `conditions`와 1~100개의 고유한 `room_zones`를 가진다. 조건을 생략한 기존 요청은
+각 값을 명시적인 `unknown`으로 저장한다. 응답은 `job`과 `customer_access_link`만 반환하며
 업체·현장기사 참여자나 secret을 미리 만들지 않는다. secret 응답은 `Cache-Control: no-store`다.
 초대 순서는 소비자→업체, 수락 업체→현장기사로 고정한다. 상태는
 `pending|accepted|declined|expired|revoked`이며 pending token은 `/me`와 자기 수락·거절 외 업무
@@ -129,7 +130,7 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 구현·범위 v1 |
+| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 출·도착지 조건, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 구현·범위 v1·v2 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·사유를 고객에게 전송 | 업체 | 구현·범위 v1 |
@@ -679,8 +680,25 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 불변 scope version은 `schema_version: 2`, `items[]`와 canonical content hash를 저장한다. 포함·제외
 작업과 `QuoteSnapshot`은 기존 proposal snapshot에 유지해 같은 의미를 품목 line에 중복 저장하지 않는다.
+새 v2 version은 해당 작업의 모든 출·도착지 `location_conditions[]`를 자동으로 포함한다. client가
+조건 snapshot을 명시할 때는 location ID와 kind가 작업의 현재 topology와 정확히 일치해야 한다.
 
-### 6.2 `QuoteSnapshot`
+### 6.2 `LocationConditions`
+
+| Field | Type | 값 |
+| --- | --- | --- |
+| `residence_type` | enum | `apartment`, `villa`, `officetel`, `house`, `studio`, `other`, `unknown` |
+| `floor` | object | `{status: known, value: -10..200}` 또는 `{status: unknown, value: null}` |
+| `elevator` | enum | `available`, `unavailable`, `unknown` |
+| `stairs` | enum | `required`, `not_required`, `unknown` |
+| `parking_access` | enum | `available`, `restricted`, `unavailable`, `unknown` |
+| `carry_distance` | object | `{status: known, value_m: 0..100000}` 또는 `{status: unknown, value_m: null}` |
+| `access_note` | string/null | 주차·진입 등 추가 조건, 1..1000자 |
+
+원문 주소는 저장하지 않는다. 작업 생성 응답과 `GET /move-jobs/{job_id}`는 현재 조건을 반환하고,
+범위 v2와 `scope-review`는 합의 당시 조건 snapshot을 반환한다.
+
+### 6.3 `QuoteSnapshot`
 
 | Field | Type | 제약 |
 | --- | --- | --- |
@@ -690,7 +708,7 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 이 명세는 금액 합의 기록만 다룬다. 결제 승인, 카드 결제와 현금영수증 발행 API는 만들지 않는다.
 
-### 6.3 `MediaPreview`
+### 6.4 `MediaPreview`
 
 - `media_asset_id`
 - `room_zone_label`
@@ -702,7 +720,7 @@ v1은 검증된 원본 객체의 저장된 generation을 고정한 짧은 read U
 반환한다. thumbnail·poster·transcode 파생 객체는 생성하지 않는다. 실제 화면이 파생물을
 소비하게 되면 원본과 별도의 versioned media 계약을 먼저 추가한다.
 
-### 6.4 `AnalysisDraftItemV2`
+### 6.5 `AnalysisDraftItemV2`
 
 현재 AI `DraftItem v1`은 화면의 수량과 작업 정보를 표현하지 못하므로 다음 필드가 필요하다.
 
@@ -713,7 +731,7 @@ v1은 검증된 원본 객체의 저장된 generation을 고정한 짧은 read U
 
 AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거치기 전에는 확정 scope나 금액을 변경하지 않는다.
 
-### 6.5 현재 `AnalysisReview` v1 실행 계약
+### 6.6 현재 `AnalysisReview` v1 실행 계약
 
 `GET /api/v1/move-jobs/{job_id}/analysis-review`는 호출 고객이 제출한 가장 최신 분석이
 `completed`일 때만 성공한다. 더 최신 분석이 진행·실패 상태면 이전 결과로 자동 후퇴하지 않고

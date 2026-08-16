@@ -469,6 +469,10 @@ async def test_scope_review_exposes_structured_v2_items(
     assert item["work_note"] == "문 분리 확인"
     assert item["review_status"] == "confirmed"
     assert item["source"] == "customer"
+    assert (
+        response.json()["scope"]["location_conditions"]
+        == created_scope.json()["content"]["location_conditions"]
+    )
 
 
 @pytest.mark.anyio

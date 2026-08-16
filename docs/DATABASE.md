@@ -28,7 +28,7 @@ uv run alembic downgrade -1
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
 
-현재 단일 head는 `int_04_0001`이다. 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 기본 checklist만 자동 보강된 기존 A-13 setup은 INT-04 history로 간주하지 않아 더 오래된 migration의 자체 guard까지 정상 진행한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
+현재 단일 head는 `a_16_0001`이다. `location.conditions`는 출·도착지 조건을 값 또는 `unknown`으로 보존한다. 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 기본 checklist만 자동 보강된 기존 A-13 setup은 INT-04 history로 간주하지 않아 더 오래된 migration의 자체 guard까지 정상 진행한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

@@ -79,6 +79,12 @@ def _normalized_content(content: ScopeContent) -> ScopeContent:
     return ScopeContent(
         schema_version=content.schema_version,
         items=tuple(sorted(content.items, key=lambda item: item.item_key)),
+        location_conditions=tuple(
+            sorted(
+                content.location_conditions,
+                key=lambda item: (item.kind.value, str(item.location_id)),
+            )
+        ),
     )
 
 
@@ -193,7 +199,14 @@ def _proposal_matches_replay(
     stored_content = ScopeContent.model_validate(result.content, strict=False)
     return (
         proposal.proposed_by_participant_id == participant_id
-        and stored_content == _normalized_content(command.content)
+        and (
+            stored_content == _normalized_content(command.content)
+            or (
+                command.content.schema_version == 2
+                and not command.content.location_conditions
+                and stored_content.items == _normalized_content(command.content).items
+            )
+        )
         and _quote_from_proposal(proposal) == command.quote
         and tuple(proposal.included_works) == command.included_works
         and tuple(proposal.exclusions) == command.exclusions
@@ -629,6 +642,7 @@ async def get_scope_review(
                 item.review_required for group in room_groups for item in group.items
             ),
             room_groups=room_groups,
+            location_conditions=content.location_conditions,
             included_works=included_works,
             exclusions=exclusions,
         ),

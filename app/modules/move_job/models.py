@@ -5,6 +5,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
@@ -149,6 +150,19 @@ class Location(Base):
         nullable=False,
     )
     label: Mapped[str] = mapped_column(String(100), nullable=False)
+    conditions: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: {
+            "residence_type": "unknown",
+            "floor": {"status": "unknown", "value": None},
+            "elevator": "unknown",
+            "stairs": "unknown",
+            "parking_access": "unknown",
+            "carry_distance": {"status": "unknown", "value_m": None},
+            "access_note": None,
+        },
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
