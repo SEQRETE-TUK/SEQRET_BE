@@ -191,6 +191,11 @@ async def test_scope_api_rejects_stale_parent_cross_job_zone_and_role(
         json=child_payload,
     )
     assert child.status_code == 201
+    worker_history = await scope_client.get(
+        url,
+        headers=_headers(_secret(first_job, "field_worker")),
+    )
+    assert worker_history.status_code == 403
     stale = await scope_client.post(
         url,
         headers=_headers(customer_secret),

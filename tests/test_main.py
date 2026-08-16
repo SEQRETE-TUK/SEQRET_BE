@@ -73,7 +73,7 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
             "{media_asset_id}/complete",
         ): {409, 503},
         ("post", f"{job_path}/scope-versions"): {403, 409},
-        ("get", f"{job_path}/scope-versions"): set(),
+        ("get", f"{job_path}/scope-versions"): {403},
         ("post", f"{job_path}/scope-versions/{{scope_version_id}}/approvals"): {403, 409},
         ("get", f"{job_path}/scope-review"): {403, 409, 503},
         ("post", f"{job_path}/scope-proposals"): {403, 409},

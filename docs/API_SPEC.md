@@ -315,10 +315,16 @@ Response `CompletionSummaryView`:
 Response `FieldBriefView`:
 
 - `job: JobHeader`
-- `dispatch_id`, `scope_version_id`, `scope_version_label`
+- `dispatch_id`
 - `start_at`, `masked_origin`, `masked_destination`
 - `lead_worker_name`, `lead_worker_call_uri`, `company_chat_uri`
+- 잠긴 `scope_version_id`, `scope_version_label`, `scope_content_hash`, `scope_locked_at`
+- 승인본 `scope_content`, 확정 `quote`, `included_works[]`, `exclusions[]`
 - `origin_conditions[]`, `field_check_required_count`
+
+현장기사에게는 이 단일 view만 공개한다. 전체 `GET /scope-versions` 이력은 소비자와 업체만
+조회할 수 있으며 기사에게 미확정 초안이나 AI provenance를 반환하지 않는다. 과거 저수준 승인
+흐름처럼 quote가 없는 잠긴 범위는 `quote: null`로 명시한다.
 - `completion_check_items[]`, `completion_required_count`, `completion_submission_id`
 - `assigned_vehicle`, `assigned_workers[]`, `assigned_worker_count`, `required_skills[]`
 - `safety_notice`, `navigation_uri`

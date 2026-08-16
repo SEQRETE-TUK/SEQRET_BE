@@ -105,7 +105,10 @@ async def create_scope_version_endpoint(
 @router.get(
     "/{job_id}/scope-versions",
     response_model=tuple[ScopeVersionResponse, ...],
-    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ),
     summary="작업범위 버전 이력 조회",
 )
 async def list_scope_versions_endpoint(
@@ -113,7 +116,7 @@ async def list_scope_versions_endpoint(
     actor: CurrentActor,
     session: Session,
 ) -> tuple[ScopeVersionResponse, ...]:
-    authorize_job_actor(actor, job_id)
+    authorize_job_actor(actor, job_id, APPROVER_ROLES)
     return await list_scope_versions(session, job_id)
 
 

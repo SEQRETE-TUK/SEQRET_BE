@@ -39,7 +39,9 @@ from app.modules.move_job.models import (
     MoveJobStatus,
 )
 from app.modules.scope.models import ScopeVersion
-from app.modules.scope_review.schemas import ScopeReviewJobHeader
+from app.modules.scope.schemas import ScopeContent
+from app.modules.scope_review.models import ScopeProposal, ScopeProposalStatus
+from app.modules.scope_review.schemas import QuoteAdjustment, QuoteSnapshot, ScopeReviewJobHeader
 from app.platform.event_bus import enqueue_domain_event
 
 
@@ -67,6 +69,20 @@ def _command_hash(value: ContractModel) -> str:
         sort_keys=True,
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _confirmed_quote(proposal: ScopeProposal | None) -> QuoteSnapshot | None:
+    if proposal is None:
+        return None
+    if proposal.status is not ScopeProposalStatus.CONFIRMED:
+        raise DispatchConflictError(proposal.id)
+    return QuoteSnapshot(
+        base_amount_krw=proposal.base_amount_krw,
+        adjustments=tuple(
+            QuoteAdjustment.model_validate(value, strict=False) for value in proposal.adjustments
+        ),
+        total_amount_krw=proposal.total_amount_krw,
+    )
 
 
 async def _require_participant(
@@ -633,6 +649,15 @@ async def get_field_brief(
     if setup is None or plan is None:
         raise DispatchConflictError(job_id)
     version = await _current_locked_scope(session, job_id, setup.source_scope_version_id)
+    proposal = await session.scalar(
+        select(ScopeProposal).where(
+            ScopeProposal.job_id == job_id,
+            ScopeProposal.result_scope_version_id == version.id,
+        )
+    )
+    scope_content = ScopeContent.model_validate(version.content, strict=False)
+    quote = _confirmed_quote(proposal)
+    assert version.locked_at is not None
     _assigned_worker(setup, plan, participant_id)
     workers = {option.id: option for option in _worker_options(setup)}
     vehicles = {option.id: option for option in _vehicle_options(setup)}
@@ -691,6 +716,12 @@ async def get_field_brief(
         dispatch_id=plan.id,
         scope_version_id=version.id,
         scope_version_label=f"v{version.sequence_number}",
+        scope_content_hash=version.content_hash,
+        scope_locked_at=_aware(version.locked_at),
+        scope_content=scope_content,
+        quote=quote,
+        included_works=tuple(proposal.included_works) if proposal is not None else (),
+        exclusions=tuple(proposal.exclusions) if proposal is not None else (),
         start_at=_aware(setup.start_at),
         masked_origin=locations.get(LocationKind.ORIGIN),
         masked_destination=locations.get(LocationKind.DESTINATION),
