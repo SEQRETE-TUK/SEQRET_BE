@@ -5,6 +5,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
@@ -18,6 +19,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.contracts.actor import ParticipantRole
 from app.platform.db.base import Base
+
+UNKNOWN_LOCATION_CONDITIONS_JSON = (
+    '{"residence_type":"unknown",'
+    '"floor":{"status":"unknown","value":null},'
+    '"elevator":"unknown","stairs":"unknown",'
+    '"parking_access":"unknown",'
+    '"carry_distance":{"status":"unknown","value_m":null},'
+    '"access_note":null}'
+)
 
 
 class MoveJobStatus(StrEnum):
@@ -149,6 +159,20 @@ class Location(Base):
         nullable=False,
     )
     label: Mapped[str] = mapped_column(String(100), nullable=False)
+    conditions: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        nullable=False,
+        server_default=UNKNOWN_LOCATION_CONDITIONS_JSON,
+        default=lambda: {
+            "residence_type": "unknown",
+            "floor": {"status": "unknown", "value": None},
+            "elevator": "unknown",
+            "stairs": "unknown",
+            "parking_access": "unknown",
+            "carry_distance": {"status": "unknown", "value_m": None},
+            "access_note": None,
+        },
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

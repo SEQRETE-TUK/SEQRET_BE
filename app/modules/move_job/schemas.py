@@ -1,7 +1,8 @@
 """Request and response schemas for move job commands."""
 
 from datetime import datetime
-from typing import Annotated
+from enum import StrEnum
+from typing import Annotated, Self
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, model_validator
@@ -32,11 +33,84 @@ class RoomZoneCreate(RequestModel):
     sort_order: Annotated[int, Field(ge=0)]
 
 
+class KnowledgeStatus(StrEnum):
+    """Whether a numeric work condition is known by the user."""
+
+    KNOWN = "known"
+    UNKNOWN = "unknown"
+
+
+class ResidenceType(StrEnum):
+    APARTMENT = "apartment"
+    VILLA = "villa"
+    OFFICETEL = "officetel"
+    HOUSE = "house"
+    STUDIO = "studio"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
+class ElevatorAvailability(StrEnum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class StairUsage(StrEnum):
+    REQUIRED = "required"
+    NOT_REQUIRED = "not_required"
+    UNKNOWN = "unknown"
+
+
+class ParkingAccess(StrEnum):
+    AVAILABLE = "available"
+    RESTRICTED = "restricted"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class FloorCondition(RequestModel):
+    status: KnowledgeStatus = KnowledgeStatus.UNKNOWN
+    value: Annotated[int, Field(ge=-10, le=200)] | None = None
+
+    @model_validator(mode="after")
+    def require_value_to_match_status(self) -> Self:
+        if (self.status is KnowledgeStatus.KNOWN) != (self.value is not None):
+            raise ValueError("known floor requires a value and unknown floor forbids one")
+        return self
+
+
+class CarryDistanceCondition(RequestModel):
+    status: KnowledgeStatus = KnowledgeStatus.UNKNOWN
+    value_m: Annotated[int, Field(ge=0, le=100_000)] | None = None
+
+    @model_validator(mode="after")
+    def require_value_to_match_status(self) -> Self:
+        if (self.status is KnowledgeStatus.KNOWN) != (self.value_m is not None):
+            raise ValueError(
+                "known carry distance requires a value and unknown distance forbids one"
+            )
+        return self
+
+
+class LocationConditions(RequestModel):
+    """Structured quote-impacting conditions without a raw address."""
+
+    residence_type: ResidenceType = ResidenceType.UNKNOWN
+    floor: FloorCondition = Field(default_factory=FloorCondition)
+    elevator: ElevatorAvailability = ElevatorAvailability.UNKNOWN
+    stairs: StairUsage = StairUsage.UNKNOWN
+    parking_access: ParkingAccess = ParkingAccess.UNKNOWN
+    carry_distance: CarryDistanceCondition = Field(default_factory=CarryDistanceCondition)
+    access_note: Annotated[str, Field(min_length=1, max_length=1000)] | None = None
+
+
 class LocationCreate(RequestModel):
     """Origin or destination without a raw address."""
 
     kind: LocationKind
     label: Annotated[str, Field(min_length=1, max_length=100)]
+    conditions: LocationConditions = Field(default_factory=LocationConditions)
     room_zones: Annotated[
         tuple[RoomZoneCreate, ...],
         Field(min_length=1, max_length=100),
@@ -111,6 +185,7 @@ class LocationResponse(ContractModel):
     id: UUID
     kind: LocationKind
     label: str
+    conditions: LocationConditions
     room_zones: tuple[RoomZoneResponse, ...]
 
 

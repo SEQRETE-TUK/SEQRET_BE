@@ -14,6 +14,7 @@ from app.modules.move_job.models import JobParticipant, Location, MoveJob, RoomZ
 from app.modules.move_job.schemas import (
     CustomerMoveJobCreate,
     CustomerMoveJobCreatedResponse,
+    LocationConditions,
     LocationCreate,
     LocationResponse,
     MoveJobCreate,
@@ -35,6 +36,7 @@ def _locations_from_command(locations: tuple[LocationCreate, ...]) -> list[Locat
         Location(
             kind=item.kind,
             label=item.label,
+            conditions=item.conditions.model_dump(mode="json"),
             room_zones=[
                 RoomZone(name=zone.name, sort_order=zone.sort_order) for zone in item.room_zones
             ],
@@ -88,6 +90,7 @@ def _to_response(job: MoveJob) -> MoveJobResponse:
                 id=location.id,
                 kind=location.kind,
                 label=location.label,
+                conditions=LocationConditions.model_validate(location.conditions, strict=False),
                 room_zones=tuple(
                     RoomZoneResponse(
                         id=zone.id,

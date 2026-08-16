@@ -209,7 +209,7 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 ### migration
 
-INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. 단일 head는 `int_04_0001`이며 기존 범위 version, 승인, 변경요청, media, audit, notification table을 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`를 추가했다. 단일 head는 `a_16_0001`이며 기존 범위 version, 승인, 변경요청, media, audit, notification table을 재사용한다.
 
 ## 8. frontend 연동 기준
 

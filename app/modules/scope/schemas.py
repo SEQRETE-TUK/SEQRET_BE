@@ -10,6 +10,8 @@ from pydantic import ConfigDict, Field, model_validator
 from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult
 from app.contracts.model import ContractModel
+from app.modules.move_job.models import LocationKind
+from app.modules.move_job.schemas import LocationConditions
 from app.modules.scope.models import ChangeRequestStatus
 
 
@@ -56,12 +58,21 @@ class ScopeItemV2(ScopeRequestModel):
         return self
 
 
+class ScopeLocationConditions(ScopeRequestModel):
+    """Quote-impacting endpoint conditions frozen into a scope version."""
+
+    location_id: UUID
+    kind: LocationKind
+    conditions: LocationConditions
+
+
 class ScopeContent(ScopeRequestModel):
     schema_version: Literal[1, 2] = 1
     items: Annotated[
         tuple[ScopeItem | ScopeItemV2, ...],
         Field(min_length=1, max_length=500),
     ]
+    location_conditions: tuple[ScopeLocationConditions, ...] = ()
 
     @model_validator(mode="after")
     def require_version_shape_and_unique_item_keys(self) -> "ScopeContent":
@@ -71,6 +82,14 @@ class ScopeContent(ScopeRequestModel):
         item_keys = [item.item_key for item in self.items]
         if len(item_keys) != len(set(item_keys)):
             raise ValueError("scope item keys must be unique")
+        location_ids = [item.location_id for item in self.location_conditions]
+        location_kinds = [item.kind for item in self.location_conditions]
+        if len(location_ids) != len(set(location_ids)):
+            raise ValueError("scope location IDs must be unique")
+        if len(location_kinds) != len(set(location_kinds)):
+            raise ValueError("scope location kinds must be unique")
+        if self.schema_version == 1 and self.location_conditions:
+            raise ValueError("scope v1 cannot contain location conditions")
         return self
 
 

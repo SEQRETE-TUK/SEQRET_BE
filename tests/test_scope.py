@@ -26,12 +26,14 @@ from app.modules.scope.schemas import (
     ScopeItemReviewStatus,
     ScopeItemSource,
     ScopeItemV2,
+    ScopeLocationConditions,
     ScopeVersionCreate,
 )
 from app.modules.scope.service import (
     ScopeApprovalConflictError,
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
+    _with_location_condition_snapshot,
     approve_scope_version,
     create_scope_version,
     list_scope_versions,
@@ -284,6 +286,35 @@ def test_scope_content_rejects_duplicate_keys_and_invalid_shape() -> None:
     )
     assert pending.quantity is None
 
+    location_snapshot = ScopeLocationConditions.model_validate(
+        {
+            "location_id": str(uuid4()),
+            "kind": "origin",
+            "conditions": {},
+        }
+    )
+    with pytest.raises(ValidationError, match="v1 cannot contain location conditions"):
+        ScopeContent(items=(item,), location_conditions=(location_snapshot,))
+    with pytest.raises(ValidationError, match="scope location IDs must be unique"):
+        ScopeContent(
+            schema_version=2,
+            items=(structured,),
+            location_conditions=(location_snapshot, location_snapshot),
+        )
+    duplicate_kind = ScopeLocationConditions.model_validate(
+        {
+            "location_id": str(uuid4()),
+            "kind": "origin",
+            "conditions": {},
+        }
+    )
+    with pytest.raises(ValidationError, match="scope location kinds must be unique"):
+        ScopeContent(
+            schema_version=2,
+            items=(structured,),
+            location_conditions=(location_snapshot, duplicate_kind),
+        )
+
 
 @pytest.mark.anyio
 async def test_scope_api_preserves_structured_v2_snapshot(scope_client: AsyncClient) -> None:
@@ -316,6 +347,95 @@ async def test_scope_api_preserves_structured_v2_snapshot(scope_client: AsyncCli
     assert body["content"]["items"][0]["quantity"] == 1
     assert body["content"]["items"][0]["unit"] == "대"
     assert body["content"]["items"][0]["work_note"] == "문 분리 여부 확인"
+    assert body["content"]["location_conditions"] == [
+        {
+            "location_id": created["job"]["locations"][0]["id"],
+            "kind": "origin",
+            "conditions": created["job"]["locations"][0]["conditions"],
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_scope_api_validates_and_preserves_supplied_location_conditions(
+    scope_client: AsyncClient,
+) -> None:
+    created = await _create_job(scope_client)
+    location = created["job"]["locations"][0]
+    zone_id = location["room_zones"][0]["id"]
+    item = {
+        "item_key": "box",
+        "room_zone_id": zone_id,
+        "name": "박스",
+        "quantity": 3,
+        "unit": "개",
+        "review_status": "confirmed",
+        "source": "customer",
+    }
+    conditions = {
+        "residence_type": "villa",
+        "floor": {"status": "known", "value": 3},
+        "elevator": "unavailable",
+        "stairs": "required",
+        "parking_access": "restricted",
+        "carry_distance": {"status": "known", "value_m": 80},
+        "access_note": "골목 진입 확인",
+    }
+    response = await scope_client.post(
+        f"/api/v1/move-jobs/{created['job']['id']}/scope-versions",
+        headers=_headers(_secret(created, "customer")),
+        json={
+            "content": {
+                "schema_version": 2,
+                "items": [item],
+                "location_conditions": [
+                    {"location_id": location["id"], "kind": "origin", "conditions": conditions}
+                ],
+            }
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["content"]["location_conditions"][0]["conditions"] == conditions
+
+    wrong_id_job = await _create_job(scope_client)
+    wrong_id_location = wrong_id_job["job"]["locations"][0]
+    wrong_id_item = item | {"room_zone_id": wrong_id_location["room_zones"][0]["id"]}
+    wrong_id = await scope_client.post(
+        f"/api/v1/move-jobs/{wrong_id_job['job']['id']}/scope-versions",
+        headers=_headers(_secret(wrong_id_job, "customer")),
+        json={
+            "content": {
+                "schema_version": 2,
+                "items": [wrong_id_item],
+                "location_conditions": [
+                    {"location_id": location["id"], "kind": "origin", "conditions": conditions}
+                ],
+            }
+        },
+    )
+    assert wrong_id.status_code == 404
+
+    wrong_kind_job = await _create_job(scope_client)
+    wrong_kind_location = wrong_kind_job["job"]["locations"][0]
+    wrong_kind_item = item | {"room_zone_id": wrong_kind_location["room_zones"][0]["id"]}
+    wrong_kind = await scope_client.post(
+        f"/api/v1/move-jobs/{wrong_kind_job['job']['id']}/scope-versions",
+        headers=_headers(_secret(wrong_kind_job, "customer")),
+        json={
+            "content": {
+                "schema_version": 2,
+                "items": [wrong_kind_item],
+                "location_conditions": [
+                    {
+                        "location_id": wrong_kind_location["id"],
+                        "kind": "destination",
+                        "conditions": conditions,
+                    }
+                ],
+            }
+        },
+    )
+    assert wrong_kind.status_code == 404
 
 
 @pytest.mark.anyio
@@ -359,6 +479,37 @@ async def test_scope_service_maps_missing_actor_and_database_race(
     monkeypatch.setattr(session, "flush", fail_flush)
     with pytest.raises(ScopeVersionConflictError):
         await create_scope_version(session, job_id, participant_id, command)
+    await session.close()
+
+
+@pytest.mark.anyio
+async def test_scope_v2_snapshot_rejects_job_without_locations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncSession()
+
+    class EmptyLocations:
+        def all(self) -> tuple[object, ...]:
+            return ()
+
+    async def empty_locations(_statement: object) -> EmptyLocations:
+        return EmptyLocations()
+
+    monkeypatch.setattr(session, "scalars", empty_locations)
+    content = ScopeContent(
+        schema_version=2,
+        items=(
+            ScopeItemV2(
+                item_key="box",
+                room_zone_id=uuid4(),
+                name="박스",
+                review_status=ScopeItemReviewStatus.REVIEW_REQUIRED,
+                source=ScopeItemSource.CUSTOMER,
+            ),
+        ),
+    )
+    with pytest.raises(ScopeResourceNotFoundError):
+        await _with_location_condition_snapshot(session, uuid4(), content)
     await session.close()
 
 

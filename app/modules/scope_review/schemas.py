@@ -13,6 +13,7 @@ from app.modules.scope.schemas import (
     ScopeContent,
     ScopeItemReviewStatus,
     ScopeItemSource,
+    ScopeLocationConditions,
 )
 from app.modules.scope_review.models import ScopeProposalKind, ScopeProposalStatus
 
@@ -173,6 +174,7 @@ class ScopeReviewScope(ContractModel):
     exclusion_count: int
     review_required_count: int
     room_groups: tuple[RoomScopeGroup, ...]
+    location_conditions: tuple[ScopeLocationConditions, ...]
     included_works: tuple[str, ...]
     exclusions: tuple[str, ...]
 

@@ -19,7 +19,11 @@ from app.main import create_app
 from app.modules.move_job.models import LocationKind
 from app.modules.move_job.router import get_move_job_endpoint
 from app.modules.move_job.schemas import (
+    CarryDistanceCondition,
     CustomerMoveJobCreate,
+    FloorCondition,
+    KnowledgeStatus,
+    LocationConditions,
     LocationCreate,
     MoveJobCreate,
     ParticipantCreate,
@@ -57,6 +61,15 @@ def _move_job_payload() -> dict[str, object]:
             {
                 "kind": "origin",
                 "label": "출발지",
+                "conditions": {
+                    "residence_type": "apartment",
+                    "floor": {"status": "known", "value": 12},
+                    "elevator": "available",
+                    "stairs": "not_required",
+                    "parking_access": "restricted",
+                    "carry_distance": {"status": "known", "value_m": 35},
+                    "access_note": "지하 주차장 높이 확인 필요",
+                },
                 "room_zones": [
                     {"name": "안방", "sort_order": 1},
                     {"name": "거실", "sort_order": 0},
@@ -92,6 +105,23 @@ async def test_move_job_api_creates_initial_participants_and_reads_job(
         0,
         1,
     ]
+    assert job["locations"][0]["conditions"] == {
+        "residence_type": "unknown",
+        "floor": {"status": "unknown", "value": None},
+        "elevator": "unknown",
+        "stairs": "unknown",
+        "parking_access": "unknown",
+        "carry_distance": {"status": "unknown", "value_m": None},
+        "access_note": None,
+    }
+    assert job["locations"][1]["conditions"]["floor"] == {
+        "status": "known",
+        "value": 12,
+    }
+    assert job["locations"][1]["conditions"]["carry_distance"] == {
+        "status": "known",
+        "value_m": 35,
+    }
 
     job_id = job["id"]
     loaded = await move_job_client.get(f"/api/v1/move-jobs/{job_id}", headers=headers)
@@ -309,6 +339,20 @@ def test_location_limits_room_zone_expansion() -> None:
             label="출발지",
             room_zones=(*accepted, RoomZoneCreate(name="초과 구역", sort_order=100)),
         )
+
+
+def test_location_conditions_require_explicit_numeric_knowledge_state() -> None:
+    assert LocationConditions().floor.status is KnowledgeStatus.UNKNOWN
+    assert FloorCondition(status=KnowledgeStatus.KNOWN, value=0).value == 0
+    assert CarryDistanceCondition(status=KnowledgeStatus.KNOWN, value_m=0).value_m == 0
+    with pytest.raises(ValidationError, match="known floor requires a value"):
+        FloorCondition(status=KnowledgeStatus.KNOWN)
+    with pytest.raises(ValidationError, match="unknown floor forbids one"):
+        FloorCondition(value=1)
+    with pytest.raises(ValidationError, match="known carry distance requires a value"):
+        CarryDistanceCondition(status=KnowledgeStatus.KNOWN)
+    with pytest.raises(ValidationError, match="unknown distance forbids one"):
+        CarryDistanceCondition(value_m=1)
 
 
 @pytest.mark.anyio
