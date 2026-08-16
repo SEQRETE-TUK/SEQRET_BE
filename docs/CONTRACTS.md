@@ -72,10 +72,11 @@
 - `MediaValidationResultV1`은 성공 시 관측 MIME type·크기와 64자 소문자 SHA-256을 모두 포함하고 오류를 포함하지 않는다. 실패 시 관측 metadata·hash 없이 정제된 `ProviderErrorKind` 하나만 포함한다. B는 A 소유 `MediaAssetStatus`를 결과로 결정하지 않는다.
 - 후속 A command는 result의 generation과 관측 MIME type·크기를 work snapshot과 비교해야 한다. 성공 시 result의 source generation과 SHA-256을 asset에 저장하고 `READY`로 전이하며, 실패 시 `FAILED`로 전이하는 처리를 같은 transaction에서 수행해야 한다.
 - result 멱등성 key는 `(background_job_id, attempt_count)`다. source generation이 다르거나 같은 attempt의 terminal 결과가 상충하면 후속 A command가 거부해야 한다.
-- 이 계약은 파생 파일 형식·저장 모델을 추정하지 않는다. 해당 제품 정책이 확정되면 별도 versioned 계약으로 추가한다.
+- v1 제품은 검증을 통과한 원본 객체만 사용한다. 화면 preview는 저장된 generation을 고정한 짧은 `read_url`이며 thumbnail·poster·transcode 객체를 만들거나 DB에 파생 관계를 저장하지 않는다.
+- 파생 파일은 v1 완료 조건이 아니다. 실제 소비 화면이 해상도·poster frame·codec 변환을 요구할 때 source asset·generation, derivative kind, 출력 MIME type, 크기·시간 정보, 상태, 보존·삭제 결합을 포함한 별도 versioned 계약으로 추가한다.
 - 업로드 완료는 generation·MIME type·크기를 고정한 `PENDING` validation intent를 같은 transaction에 만든다. `start_media_validation`과 `complete_media_validation`은 기존 background-job lease·attempt를 재사용해 `UPLOADED|FAILED → PROCESSING → READY|FAILED`를 전이한다.
 - B-05 handler는 A command로 attempt를 시작하고, StoragePort로 같은 generation의 metadata와 스트리밍 SHA-256을 확인한 뒤 정제된 result만 A command에 반환한다. object identity·MIME type·크기 불일치는 `INVALID_INPUT`, provider 오류는 해당 `ProviderErrorKind`로 실패 처리한다.
-- 파생 파일 형식·저장 정책은 아직 결정되지 않았다. media validation은 Cloud Tasks OIDC private worker가 version 1 task를 받아 이 handler를 실행한다.
+- media validation은 Cloud Tasks OIDC private worker가 version 1 task를 받아 이 handler를 실행한다. v1 handler는 원본 검증까지만 수행하며 미사용 파생 파일을 추정해 생성하지 않는다.
 
 ## 배차와 현장 체크인
 

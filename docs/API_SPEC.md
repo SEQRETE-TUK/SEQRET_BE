@@ -686,11 +686,13 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 - `media_asset_id`
 - `room_zone_label`
-- `thumbnail_url`
+- `read_url`
 - `expires_at`
 - `content_type`
 
-각 화면 조회가 필요한 preview를 묶어서 반환하므로 asset별 read URL endpoint는 만들지 않는다.
+v1은 검증된 원본 객체의 저장된 generation을 고정한 짧은 read URL을 화면 조회에 묶어
+반환한다. thumbnail·poster·transcode 파생 객체는 생성하지 않는다. 실제 화면이 파생물을
+소비하게 되면 원본과 별도의 versioned media 계약을 먼저 추가한다.
 
 ### 6.4 `AnalysisDraftItemV2`
 
