@@ -21,9 +21,9 @@ from app.modules.analysis.orchestration import (
     build_analysis_request,
 )
 from app.modules.analysis.service import (
-    get_analysis_run_attempt_count,
+    AnalysisRetryDecision,
     load_analysis_result,
-    reopen_analysis_run,
+    prepare_analysis_retry,
 )
 from app.modules.analysis_workflow.service import (
     CaptureAnalysisNotFoundError,
@@ -212,20 +212,20 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         # Provider failure. Recover a retryable failure with bounded Cloud Tasks
-        # redelivery: reopen the analysis run and leave the A-owned dispatch row
-        # RUNNING (never finalized here) so a 503 triggers one more attempt.
+        # redelivery. One row-locked command snapshots the run and prepares the
+        # retry atomically, so concurrent redeliveries of the same attempt cannot
+        # both reopen and finalize: whoever wins reopens the run and leaves the
+        # A-owned dispatch row RUNNING (never finalized here), and the loser sees
+        # RUNNING and also defers to a 503 instead of terminal-failing.
         if outcome.retryable:
-            should_retry = False
             async with transactional_session(factory) as session:
-                attempt_count = await get_analysis_run_attempt_count(
-                    session, analysis_run_id=task.analysis_run_id
+                decision = await prepare_analysis_retry(
+                    session,
+                    analysis_run_id=task.analysis_run_id,
+                    max_attempts=MAX_ANALYSIS_ATTEMPTS,
+                    now=utc_now(),
                 )
-                if attempt_count is not None and attempt_count < MAX_ANALYSIS_ATTEMPTS:
-                    await reopen_analysis_run(
-                        session, analysis_run_id=task.analysis_run_id, now=utc_now()
-                    )
-                    should_retry = True
-            if should_retry:
+            if decision is AnalysisRetryDecision.RETRY:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="analysis retry scheduled",

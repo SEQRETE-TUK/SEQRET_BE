@@ -32,7 +32,7 @@ from app.contracts.maintenance import (
     MediaDeletionTaskV1,
 )
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import StorageObjectMetadata
+from app.contracts.ports import ProviderErrorKind, StorageObjectMetadata
 from app.contracts.primitives import (
     AggregateId,
     AnalysisRunId,
@@ -62,8 +62,11 @@ from app.modules.access.service import (
 )
 from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
 from app.modules.analysis.service import (
+    AnalysisRetryDecision,
     complete_analysis_run,
+    fail_analysis_run,
     load_analysis_result,
+    prepare_analysis_retry,
     start_analysis_run,
 )
 from app.modules.analysis_review.schemas import (
@@ -1494,6 +1497,98 @@ async def test_analysis_run_replays_serialize_on_postgresql() -> None:
             assert stored_run.attempt_count == 1
             assert stored_result == result
             assert len(detections) == 1
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_concurrent_retry_preparation_reopens_once_on_postgresql() -> None:
+    # Two redeliveries of the same failed attempt race on prepare_analysis_retry.
+    # The row lock must serialize them so exactly one reopens a new attempt and
+    # the other, seeing the run already RUNNING, still returns RETRY (defers to
+    # a 503) rather than TERMINAL — the attempt count advances by exactly one.
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        operation_time = datetime.now(UTC)
+        run_id = AnalysisRunId(uuid4())
+        trace_id = TraceId("0123456789abcdef0123456789abcdef")
+        job_command = MoveJobCreate(
+            title="Analysis retry race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, job_command)
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    created.job.participants[0].id,
+                )
+            capture_id = CaptureSessionId(capture.id)
+
+            async with transactional_session(factory) as session:
+                await start_analysis_run(
+                    session,
+                    analysis_run_id=run_id,
+                    capture_session_id=capture_id,
+                    trace_id=trace_id,
+                    now=operation_time,
+                )
+                await fail_analysis_run(
+                    session,
+                    analysis_run_id=run_id,
+                    error_kind=ProviderErrorKind.UNAVAILABLE,
+                    now=operation_time + timedelta(seconds=1),
+                )
+
+            retry_barrier = Barrier(2)
+            decisions: list[AnalysisRetryDecision] = []
+
+            async def prepare() -> None:
+                async with transactional_session(factory) as session:
+                    await wait_for(retry_barrier.wait(), timeout=5)
+                    decision = await prepare_analysis_retry(
+                        session,
+                        analysis_run_id=run_id,
+                        max_attempts=5,
+                        now=operation_time + timedelta(seconds=2),
+                    )
+                    decisions.append(decision)
+
+            await wait_for(gather(prepare(), prepare()), timeout=10)
+
+            async with transactional_session(factory) as session:
+                stored_run = await session.get(AiAnalysisRun, run_id)
+
+            assert decisions == [AnalysisRetryDecision.RETRY, AnalysisRetryDecision.RETRY]
+            assert stored_run is not None
+            assert stored_run.status is AnalysisRunStatus.RUNNING
+            assert stored_run.attempt_count == 2
+            assert stored_run.failure_code is None
         finally:
             await engine.dispose()
 
