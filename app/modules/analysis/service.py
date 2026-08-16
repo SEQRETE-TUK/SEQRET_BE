@@ -221,6 +221,17 @@ async def get_analysis_run_status(
     return None if run is None else run.status
 
 
+async def get_analysis_run_attempt_count(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+) -> int | None:
+    """Return the current attempt count, or ``None`` when the run is absent."""
+
+    run = await _load_run(session, analysis_run_id)
+    return None if run is None else run.attempt_count
+
+
 async def reopen_analysis_run(
     session: AsyncSession,
     *,

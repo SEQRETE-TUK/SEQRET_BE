@@ -100,6 +100,10 @@ class JsonFormatter(logging.Formatter):
             "background_claimed",
             "background_queued",
             "background_failed",
+            "analysis_stage",
+            "provider_status",
+            "error_kind",
+            "retryable",
         ):
             value = getattr(record, key, None)
             if isinstance(value, str | int | float):

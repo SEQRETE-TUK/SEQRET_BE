@@ -174,8 +174,13 @@ def test_analysis_route_acks_missing_or_terminal_dispatch(
     build.assert_not_awaited()
 
 
-def test_analysis_route_records_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    fail = AsyncMock()
+def _retryable_failure_app(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    attempt_count: int,
+    reopen: AsyncMock,
+    fail: AsyncMock,
+) -> FastAPI:
     monkeypatch.setattr(worker, "start_capture_analysis", AsyncMock(return_value=True))
     monkeypatch.setattr(worker, "build_analysis_request", AsyncMock(return_value=_request()))
     monkeypatch.setattr(
@@ -189,13 +194,39 @@ def test_analysis_route_records_provider_failure(monkeypatch: pytest.MonkeyPatch
             )
         ),
     )
+    monkeypatch.setattr(
+        worker, "get_analysis_run_attempt_count", AsyncMock(return_value=attempt_count)
+    )
+    monkeypatch.setattr(worker, "reopen_analysis_run", reopen)
     monkeypatch.setattr(worker, "fail_capture_analysis", fail)
-    application = _worker_with_state(ai_provider=object())
+    return _worker_with_state(ai_provider=object())
+
+
+def test_analysis_route_retries_retryable_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    reopen = AsyncMock()
+    fail = AsyncMock()
+    application = _retryable_failure_app(monkeypatch, attempt_count=1, reopen=reopen, fail=fail)
+
+    with TestClient(application) as client:
+        response = client.post("/tasks/analysis", json=_task().model_dump(mode="json"))
+
+    assert response.status_code == 503
+    reopen.assert_awaited_once()
+    fail.assert_not_awaited()
+
+
+def test_analysis_route_terminates_when_retries_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    reopen = AsyncMock()
+    fail = AsyncMock()
+    application = _retryable_failure_app(
+        monkeypatch, attempt_count=worker.MAX_ANALYSIS_ATTEMPTS, reopen=reopen, fail=fail
+    )
 
     with TestClient(application) as client:
         response = client.post("/tasks/analysis", json=_task().model_dump(mode="json"))
 
     assert response.status_code == 204
+    reopen.assert_not_awaited()
     fail_call = fail.await_args
     assert fail_call is not None
     assert fail_call.kwargs["error_kind"] is ProviderErrorKind.UNAVAILABLE

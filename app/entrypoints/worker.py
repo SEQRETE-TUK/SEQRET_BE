@@ -20,7 +20,11 @@ from app.modules.analysis.orchestration import (
     AnalysisInputsUnavailableError,
     build_analysis_request,
 )
-from app.modules.analysis.service import load_analysis_result
+from app.modules.analysis.service import (
+    get_analysis_run_attempt_count,
+    load_analysis_result,
+    reopen_analysis_run,
+)
 from app.modules.analysis_workflow.service import (
     CaptureAnalysisNotFoundError,
     complete_capture_analysis,
@@ -52,6 +56,7 @@ MEDIA_TASK_ADAPTER: TypeAdapter[MediaTask] = TypeAdapter(MediaTask)
 ANALYSIS_MODEL_NAME = "gemini-2.5-flash"
 ANALYSIS_MODEL_VERSION = "2025-08"
 ANALYSIS_PROMPT_VERSION = "inventory-1"
+MAX_ANALYSIS_ATTEMPTS = 5
 ANALYSIS_PROMPT_LIBRARY = {
     ANALYSIS_PROMPT_VERSION: (
         "촬영 영상에서 이동 대상 이삿짐을 방·구역별로 찾아 나열하고 각 항목의 수량과 "
@@ -84,6 +89,7 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                     location=settings.analysis_location,
                     bucket_name=bucket_name,
                     prompt_library=ANALYSIS_PROMPT_LIBRARY,
+                    logger=observability.logger,
                 )
             yield
 
@@ -182,8 +188,8 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
             trace_id=task.trace_id,
             now=utc_now(),
         )
-        async with transactional_session(factory) as session:
-            if outcome.status is AnalysisTaskStatus.SUCCEEDED:
+        if outcome.status is AnalysisTaskStatus.SUCCEEDED:
+            async with transactional_session(factory) as session:
                 result = await load_analysis_result(
                     session,
                     analysis_run_id=task.analysis_run_id,
@@ -203,14 +209,36 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                         result,
                         completed_at=utc_now(),
                     )
-            else:
-                await fail_capture_analysis(
-                    session,
-                    task,
-                    error_kind=outcome.error_kind or ProviderErrorKind.CONFLICT,
-                    retryable=outcome.retryable,
-                    completed_at=utc_now(),
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        # Provider failure. Recover a retryable failure with bounded Cloud Tasks
+        # redelivery: reopen the analysis run and leave the A-owned dispatch row
+        # RUNNING (never finalized here) so a 503 triggers one more attempt.
+        if outcome.retryable:
+            should_retry = False
+            async with transactional_session(factory) as session:
+                attempt_count = await get_analysis_run_attempt_count(
+                    session, analysis_run_id=task.analysis_run_id
                 )
+                if attempt_count is not None and attempt_count < MAX_ANALYSIS_ATTEMPTS:
+                    await reopen_analysis_run(
+                        session, analysis_run_id=task.analysis_run_id, now=utc_now()
+                    )
+                    should_retry = True
+            if should_retry:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="analysis retry scheduled",
+                )
+
+        async with transactional_session(factory) as session:
+            await fail_capture_analysis(
+                session,
+                task,
+                error_kind=outcome.error_kind or ProviderErrorKind.CONFLICT,
+                retryable=outcome.retryable,
+                completed_at=utc_now(),
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     application.add_middleware(HttpObservabilityMiddleware, observability=observability)
