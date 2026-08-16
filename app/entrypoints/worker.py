@@ -55,12 +55,18 @@ MEDIA_TASK_ADAPTER: TypeAdapter[MediaTask] = TypeAdapter(MediaTask)
 
 ANALYSIS_MODEL_NAME = "gemini-2.5-flash"
 ANALYSIS_MODEL_VERSION = "2025-08"
-ANALYSIS_PROMPT_VERSION = "inventory-1"
+ANALYSIS_PROMPT_VERSION = "inventory-2"
 MAX_ANALYSIS_ATTEMPTS = 5
 ANALYSIS_PROMPT_LIBRARY = {
-    ANALYSIS_PROMPT_VERSION: (
+    "inventory-1": (
         "촬영 영상에서 이동 대상 이삿짐을 방·구역별로 찾아 나열하고 각 항목의 수량과 "
         "확인이 필요한 항목 여부를 표시하라. 가격·차량·인원·파손·책임은 판단하지 마라."
+    ),
+    ANALYSIS_PROMPT_VERSION: (
+        "촬영 영상에서 이동 대상 이삿짐을 방·구역별로 찾아 나열하고 각 항목의 수량과 "
+        "확인이 필요한 항목 여부를 표시하라. 가격·차량·인원·파손·책임은 판단하지 마라. "
+        "각 항목의 source_indices에는 입력 미디어 순서를 0부터 센 인덱스를 하나 이상 "
+        "중복 없이 기록하라."
     ),
 }
 

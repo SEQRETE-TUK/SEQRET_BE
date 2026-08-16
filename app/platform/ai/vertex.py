@@ -40,14 +40,14 @@ class _RawDraftItem(BaseModel):
     item_key: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2000)
     confidence: float = Field(ge=0.0, le=1.0)
-    source_indices: tuple[int, ...] = ()
+    source_indices: tuple[int, ...]
     review_required: bool = False
 
 
 class _RawAnalysisOutput(BaseModel):
     """Strict envelope validated fail-closed before mapping to the contract."""
 
-    items: tuple[_RawDraftItem, ...] = ()
+    items: tuple[_RawDraftItem, ...] = Field(min_length=1)
 
 
 class GenerateContentResponse(Protocol):
@@ -226,7 +226,24 @@ class VertexAIProvider:
         source_count = len(request.source_media_asset_ids)
         draft_items: list[DraftItem] = []
         review_required_items: list[DraftItem] = []
+        item_keys = [item.item_key for item in raw.items]
+        if len(item_keys) != len(set(item_keys)):
+            self._log_failure(AnalysisFailureStage.PARSE, ProviderErrorKind.INVALID_INPUT, False)
+            raise ProviderError(
+                ProviderErrorKind.INVALID_INPUT,
+                "analysis provider returned duplicate item keys",
+                retryable=False,
+            )
         for item in raw.items:
+            if not item.source_indices or len(item.source_indices) != len(set(item.source_indices)):
+                self._log_failure(
+                    AnalysisFailureStage.SOURCE_MAP, ProviderErrorKind.INVALID_INPUT, False
+                )
+                raise ProviderError(
+                    ProviderErrorKind.INVALID_INPUT,
+                    "analysis output contained invalid media references",
+                    retryable=False,
+                )
             sources = []
             for index in item.source_indices:
                 if index < 0 or index >= source_count:
