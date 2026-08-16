@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -19,15 +20,23 @@ from app.contracts.ports import (
     StoragePort,
 )
 from app.contracts.primitives import utc_now
+from app.modules.access.models import InvitationStatus, ParticipantInvitation
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
+from app.modules.field_change.models import ChangeProposalDetail
 from app.modules.move_job.models import (
     JobParticipant,
     Location,
     LocationKind,
     MoveJob,
 )
-from app.modules.scope.models import ScopeApproval, ScopeVersion
+from app.modules.scope.models import (
+    ChangeRequest,
+    ChangeRequestEvidence,
+    ChangeRequestStatus,
+    ScopeApproval,
+    ScopeVersion,
+)
 from app.modules.scope.schemas import (
     ScopeContent,
     ScopeItem,
@@ -44,8 +53,11 @@ from app.modules.scope_review.models import (
     ScopeRevisionRequest,
 )
 from app.modules.scope_review.schemas import (
+    ApprovedChangeSummary,
+    CompanyParticipationStatus,
     QuoteSnapshot,
     RoomScopeGroup,
+    ScopeCollaborationStatus,
     ScopeConfirmResponse,
     ScopeMediaPreview,
     ScopeProposalCreate,
@@ -61,6 +73,7 @@ from app.modules.scope_review.schemas import (
 
 READ_URL_TTL_SECONDS = 5 * 60
 MAX_MEDIA_PREVIEWS = 24
+AGREEMENT_NOTICE = "전자계약이 아닌 소비자와 업체의 공동확인 기록입니다."
 
 
 class ScopeReviewNotFoundError(LookupError):
@@ -113,6 +126,102 @@ def _proposal_response(proposal: ScopeProposal) -> ScopeProposalResponse:
         sent_at=_aware(proposal.sent_at),
         confirmed_at=(_aware(proposal.confirmed_at) if proposal.confirmed_at is not None else None),
     )
+
+
+async def _company_participation_status(
+    session: AsyncSession,
+    job: MoveJob,
+) -> CompanyParticipationStatus:
+    invitation = await session.scalar(
+        select(ParticipantInvitation).where(
+            ParticipantInvitation.job_id == job.id,
+            ParticipantInvitation.role == ParticipantRole.COMPANY_MANAGER,
+        )
+    )
+    company_exists = any(
+        participant.role is ParticipantRole.COMPANY_MANAGER for participant in job.participants
+    )
+    if invitation is None:
+        return (
+            CompanyParticipationStatus.JOINED
+            if company_exists
+            else CompanyParticipationStatus.NOT_INVITED
+        )
+    if invitation.status is InvitationStatus.PENDING:
+        if _aware(invitation.expires_at) <= utc_now():
+            return CompanyParticipationStatus.EXPIRED
+        return CompanyParticipationStatus.INVITED
+    return {
+        InvitationStatus.ACCEPTED: CompanyParticipationStatus.JOINED,
+        InvitationStatus.DECLINED: CompanyParticipationStatus.DECLINED,
+        InvitationStatus.EXPIRED: CompanyParticipationStatus.EXPIRED,
+        InvitationStatus.REVOKED: CompanyParticipationStatus.REVOKED,
+    }[invitation.status]
+
+
+async def _approved_change_summaries(
+    session: AsyncSession,
+    job_id: UUID,
+) -> tuple[ApprovedChangeSummary, ...]:
+    rows = (
+        (
+            await session.execute(
+                select(ChangeProposalDetail, ChangeRequest)
+                .join(
+                    ChangeRequest,
+                    ChangeRequest.id == ChangeProposalDetail.change_request_id,
+                )
+                .where(
+                    ChangeRequest.job_id == job_id,
+                    ChangeRequest.status == ChangeRequestStatus.APPROVED,
+                )
+                .order_by(ChangeRequest.decided_at, ChangeRequest.id)
+            )
+        )
+        .tuples()
+        .all()
+    )
+    request_ids = tuple(request.id for _, request in rows)
+    evidence_by_request: defaultdict[UUID, list[UUID]] = defaultdict(list)
+    if request_ids:
+        evidence_rows = (
+            await session.execute(
+                select(
+                    ChangeRequestEvidence.change_request_id,
+                    ChangeRequestEvidence.media_asset_id,
+                )
+                .where(ChangeRequestEvidence.change_request_id.in_(request_ids))
+                .order_by(
+                    ChangeRequestEvidence.change_request_id,
+                    ChangeRequestEvidence.media_asset_id,
+                )
+            )
+        ).tuples()
+        for request_id, media_asset_id in evidence_rows:
+            evidence_by_request[request_id].append(media_asset_id)
+    summaries: list[ApprovedChangeSummary] = []
+    for detail, request in rows:
+        summaries.append(
+            ApprovedChangeSummary(
+                proposal_id=request.id,
+                field_issue_id=detail.field_issue_id,
+                title=detail.title,
+                reason=request.description,
+                base_scope_version_id=request.base_scope_version_id,
+                result_scope_version_id=cast(UUID, request.result_scope_version_id),
+                quote=QuoteSnapshot.model_validate(
+                    {
+                        "base_amount_krw": detail.base_amount_krw,
+                        "adjustments": detail.adjustments,
+                        "total_amount_krw": detail.total_amount_krw,
+                    },
+                    strict=False,
+                ),
+                evidence_media_asset_ids=tuple(evidence_by_request[request.id]),
+                approved_at=_aware(cast(datetime, request.decided_at)),
+            )
+        )
+    return tuple(summaries)
 
 
 def _revision_response(request: ScopeRevisionRequest) -> ScopeRevisionRequestResponse:
@@ -499,11 +608,12 @@ async def get_scope_review(
     ).all()
     by_id = {version.id: version for version in versions}
     analysis: AnalysisResult | None = None
+    lineage: list[ScopeVersion] = []
     cursor: ScopeVersion | None = current
     while cursor is not None:
-        if cursor.analysis_source is not None:
+        lineage.append(cursor)
+        if analysis is None and cursor.analysis_source is not None:
             analysis = AnalysisResult.model_validate(cursor.analysis_source, strict=False)
-            break
         cursor = by_id.get(cursor.parent_version_id) if cursor.parent_version_id else None
 
     ai_items: dict[str, DraftItem] = {}
@@ -584,26 +694,70 @@ async def get_scope_review(
         )
         for zone_id in sorted(items_by_zone, key=zone_order.__getitem__)
     )
+    proposals = (
+        await session.scalars(
+            select(ScopeProposal)
+            .where(ScopeProposal.job_id == job_id)
+            .order_by(ScopeProposal.sent_at, ScopeProposal.id)
+        )
+    ).all()
+    proposal_by_result = {stored.result_scope_version_id: stored for stored in proposals}
     proposal = await _proposal_for_result(session, job_id, current.id)
+    agreement_proposal = proposal
+    if agreement_proposal is None:
+        agreement_proposal = next(
+            (
+                stored
+                for version in lineage
+                if (stored := proposal_by_result.get(version.id)) is not None
+            ),
+            None,
+        )
+    approved_changes = await _approved_change_summaries(session, job_id)
+    current_change = next(
+        (
+            change
+            for change in reversed(approved_changes)
+            if change.result_scope_version_id == current.id
+        ),
+        None,
+    )
     revision = await _revision_for_proposal(session, proposal.id) if proposal is not None else None
-    if proposal is None:
+    if current_change is not None:
+        review_status = ScopeReviewStatus.CONFIRMED
+    elif proposal is None:
         review_status = ScopeReviewStatus.COMPANY_REVIEW
-        included_works: tuple[str, ...] = ()
-        exclusions: tuple[str, ...] = ()
     elif proposal.status is ScopeProposalStatus.CUSTOMER_REVIEW:
         review_status = ScopeReviewStatus.CUSTOMER_REVIEW
-        included_works = tuple(proposal.included_works)
-        exclusions = tuple(proposal.exclusions)
     elif proposal.status is ScopeProposalStatus.REVISION_REQUESTED:
         review_status = ScopeReviewStatus.REVISION_REQUESTED
-        included_works = tuple(proposal.included_works)
-        exclusions = tuple(proposal.exclusions)
     elif proposal.status is ScopeProposalStatus.CONFIRMED:
         review_status = ScopeReviewStatus.CONFIRMED
-        included_works = tuple(proposal.included_works)
-        exclusions = tuple(proposal.exclusions)
     else:
         raise ScopeReviewConflictError(proposal.id)
+    included_works = (
+        tuple(agreement_proposal.included_works) if agreement_proposal is not None else ()
+    )
+    exclusions = tuple(agreement_proposal.exclusions) if agreement_proposal is not None else ()
+
+    company_participation = await _company_participation_status(session, job)
+    if review_status is ScopeReviewStatus.CONFIRMED:
+        collaboration_status = ScopeCollaborationStatus.CONFIRMED
+    elif review_status is ScopeReviewStatus.REVISION_REQUESTED:
+        collaboration_status = ScopeCollaborationStatus.REVISION_REQUESTED
+    elif review_status is ScopeReviewStatus.CUSTOMER_REVIEW:
+        collaboration_status = ScopeCollaborationStatus.AWAITING_CONFIRMATION
+    elif company_participation is CompanyParticipationStatus.JOINED:
+        collaboration_status = ScopeCollaborationStatus.AWAITING_COMPANY_PROPOSAL
+    else:
+        collaboration_status = ScopeCollaborationStatus.DRAFT
+
+    if current_change is not None:
+        current_quote = current_change.quote
+    elif proposal is not None:
+        current_quote = _quote_from_proposal(proposal)
+    else:
+        current_quote = None
 
     approval_rows = (
         await session.execute(
@@ -625,7 +779,11 @@ async def get_scope_review(
             title=job.title,
             scheduled_at=job.scheduled_at,
             customer_display_name=participant_names.get(ParticipantRole.CUSTOMER),
-            company_display_name=participant_names.get(ParticipantRole.COMPANY_MANAGER),
+            company_display_name=(
+                participant_names.get(ParticipantRole.COMPANY_MANAGER)
+                if company_participation is CompanyParticipationStatus.JOINED
+                else None
+            ),
             viewer_display_name=viewer.display_name,
             viewer_role=viewer.role,
             origin_summary=location_names.get(LocationKind.ORIGIN),
@@ -634,6 +792,8 @@ async def get_scope_review(
         scope=ScopeReviewScope(
             id=current.id,
             version_label=f"v{current.sequence_number}",
+            content_hash=current.content_hash,
+            locked_at=_aware(current.locked_at) if current.locked_at is not None else None,
             status=review_status,
             item_count=len(content.items),
             work_count=len(included_works),
@@ -646,9 +806,13 @@ async def get_scope_review(
             included_works=included_works,
             exclusions=exclusions,
         ),
-        proposal_id=proposal.id if proposal is not None else None,
-        quote=_quote_from_proposal(proposal) if proposal is not None else None,
-        proposal_reason=proposal.reason if proposal is not None else None,
+        proposal_id=agreement_proposal.id if agreement_proposal is not None else None,
+        quote=current_quote,
+        proposal_reason=agreement_proposal.reason if agreement_proposal is not None else None,
+        company_participation_status=company_participation,
+        collaboration_status=collaboration_status,
+        agreement_notice=AGREEMENT_NOTICE,
+        approved_changes=approved_changes,
         media_previews=await _media_previews(
             session,
             storage,

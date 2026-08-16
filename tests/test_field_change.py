@@ -451,6 +451,33 @@ async def test_field_issue_change_proposal_clarification_and_approval(
     assert final_view.json()["status"] == "approved"
     assert final_view.json()["decided_by"]["role"] == "customer"
     assert final_view.json()["explanation"] == explanation_payload["explanation"]
+    agreement = await client.get(
+        f"/api/v1/move-jobs/{job_id}/scope-review",
+        headers=_headers(created, "customer"),
+    )
+    assert agreement.status_code == 200
+    agreement_body = agreement.json()
+    assert agreement_body["scope"]["id"] == result_id
+    assert agreement_body["scope"]["status"] == "confirmed"
+    assert agreement_body["collaboration_status"] == "confirmed"
+    assert agreement_body["quote"]["total_amount_krw"] == 1_430_000
+    assert agreement_body["scope"]["included_works"] == ["포장", "운반"]
+    assert agreement_body["scope"]["exclusions"] == ["에어컨 이전"]
+    assert agreement_body["customer_confirmed_at"] is not None
+    assert agreement_body["company_confirmed_at"] is not None
+    assert agreement_body["approved_changes"] == [
+        {
+            "proposal_id": proposal_id,
+            "field_issue_id": issue["field_issue_id"],
+            "title": proposal_command["title"],
+            "reason": proposal_command["reason"],
+            "base_scope_version_id": base_id,
+            "result_scope_version_id": result_id,
+            "quote": proposal_command["quote"],
+            "evidence_media_asset_ids": [media_id],
+            "approved_at": approved.json()["decided_at"],
+        }
+    ]
     async with factory() as session:
         result = await session.get(ScopeVersion, UUID(result_id))
         assert result is not None

@@ -119,6 +119,23 @@ class ScopeReviewStatus(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class CompanyParticipationStatus(StrEnum):
+    NOT_INVITED = "company_not_invited"
+    INVITED = "company_invited"
+    JOINED = "company_joined"
+    DECLINED = "company_declined"
+    EXPIRED = "company_invitation_expired"
+    REVOKED = "company_invitation_revoked"
+
+
+class ScopeCollaborationStatus(StrEnum):
+    DRAFT = "draft"
+    AWAITING_COMPANY_PROPOSAL = "awaiting_company_proposal"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    REVISION_REQUESTED = "revision_requested"
+    CONFIRMED = "confirmed"
+
+
 class ScopeReviewJobHeader(ContractModel):
     job_id: UUID
     job_code: str
@@ -168,6 +185,8 @@ class ScopeMediaPreview(ContractModel):
 class ScopeReviewScope(ContractModel):
     id: UUID
     version_label: str
+    content_hash: str
+    locked_at: datetime | None
     status: ScopeReviewStatus
     item_count: int
     work_count: int
@@ -179,12 +198,28 @@ class ScopeReviewScope(ContractModel):
     exclusions: tuple[str, ...]
 
 
+class ApprovedChangeSummary(ContractModel):
+    proposal_id: UUID
+    field_issue_id: UUID
+    title: str
+    reason: str
+    base_scope_version_id: UUID
+    result_scope_version_id: UUID
+    quote: QuoteSnapshot
+    evidence_media_asset_ids: tuple[UUID, ...]
+    approved_at: datetime
+
+
 class ScopeReviewView(ContractModel):
     job: ScopeReviewJobHeader
     scope: ScopeReviewScope
     proposal_id: UUID | None
     quote: QuoteSnapshot | None
     proposal_reason: str | None
+    company_participation_status: CompanyParticipationStatus
+    collaboration_status: ScopeCollaborationStatus
+    agreement_notice: str
+    approved_changes: tuple[ApprovedChangeSummary, ...]
     media_previews: tuple[ScopeMediaPreview, ...]
     company_confirmed_at: datetime | None
     customer_confirmed_at: datetime | None

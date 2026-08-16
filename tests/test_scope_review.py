@@ -1,7 +1,7 @@
 """INT-02 scope review, quote, revision, and confirmation tests."""
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -28,7 +28,9 @@ from app.contracts.primitives import (
     MediaAssetId,
 )
 from app.main import create_app
+from app.modules.access.models import InvitationStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
+from app.modules.move_job.models import JobParticipant, MoveJob
 from app.modules.scope.models import ScopeApproval, ScopeVersion
 from app.modules.scope_review import service as scope_review_service
 from app.modules.scope_review.models import (
@@ -45,6 +47,7 @@ from app.modules.scope_review.schemas import (
 from app.modules.scope_review.service import (
     ScopeReviewConflictError,
     ScopeReviewNotFoundError,
+    _company_participation_status,
     _validated_read_url,
     create_scope_proposal,
     get_scope_review,
@@ -229,6 +232,12 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
         "destination_summary": "성동 행당동",
     }
     assert draft_view.json()["scope"]["status"] == "company_review"
+    assert draft_view.json()["company_participation_status"] == "company_joined"
+    assert draft_view.json()["collaboration_status"] == "awaiting_company_proposal"
+    assert draft_view.json()["agreement_notice"].startswith("전자계약이 아닌")
+    assert draft_view.json()["scope"]["content_hash"] == source["content_hash"]
+    assert draft_view.json()["scope"]["locked_at"] is None
+    assert draft_view.json()["approved_changes"] == []
     assert draft_view.json()["scope"]["item_count"] == 2
     assert draft_view.json()["quote"] is None
     assert (await client.get(review_url, headers=_headers(worker_secret))).status_code == 403
@@ -277,6 +286,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     customer_view = await client.get(review_url, headers=_headers(customer_secret))
     assert customer_view.status_code == 200
     assert customer_view.json()["scope"]["status"] == "customer_review"
+    assert customer_view.json()["collaboration_status"] == "awaiting_confirmation"
     assert customer_view.json()["scope"]["version_label"] == "v2"
     assert customer_view.json()["scope"]["work_count"] == 3
     assert customer_view.json()["scope"]["exclusion_count"] == 1
@@ -327,6 +337,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     ).status_code == 409
     requested_view = await client.get(review_url, headers=_headers(manager_secret))
     assert requested_view.json()["scope"]["status"] == "revision_requested"
+    assert requested_view.json()["collaboration_status"] == "revision_requested"
     assert requested_view.json()["revision_request"]["status"] == "requested"
 
     revision_payload = _proposal_payload(
@@ -366,7 +377,9 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
 
     final_view = await client.get(review_url, headers=_headers(customer_secret))
     assert final_view.json()["scope"]["status"] == "confirmed"
+    assert final_view.json()["collaboration_status"] == "confirmed"
     assert final_view.json()["scope"]["version_label"] == "v3"
+    assert final_view.json()["scope"]["locked_at"] is not None
     assert final_view.json()["customer_confirmed_at"] == confirmed.json()["confirmed_at"]
     assert final_view.json()["revision_request"] is None
     assert (
@@ -421,6 +434,128 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
         "customer",
         "company_manager",
     }
+
+
+@pytest.mark.anyio
+async def test_scope_review_exposes_company_invitation_participation(
+    scope_review_api: tuple[
+        AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FakeObjectStorage,
+    ],
+) -> None:
+    client, _, _ = scope_review_api
+    onboarded = await client.post(
+        "/api/v1/move-jobs/onboarding",
+        json={
+            "title": "업체 참여 상태",
+            "customer_display_name": "고객",
+            "locations": [
+                {
+                    "kind": "origin",
+                    "label": "출발지",
+                    "room_zones": [{"name": "거실", "sort_order": 0}],
+                }
+            ],
+        },
+    )
+    assert onboarded.status_code == 201
+    created = onboarded.json()
+    job_id = created["job"]["id"]
+    customer_secret = created["customer_access_link"]["secret"]
+    root = await client.post(
+        f"/api/v1/move-jobs/{job_id}/scope-versions",
+        headers=_headers(customer_secret),
+        json={
+            "content": {
+                "items": [
+                    {
+                        "item_key": "box",
+                        "room_zone_id": created["job"]["locations"][0]["room_zones"][0]["id"],
+                        "description": "박스 운반",
+                    }
+                ]
+            }
+        },
+    )
+    assert root.status_code == 201
+    review_url = f"/api/v1/move-jobs/{job_id}/scope-review"
+    not_invited = await client.get(review_url, headers=_headers(customer_secret))
+    assert not_invited.status_code == 200
+    assert not_invited.json()["company_participation_status"] == "company_not_invited"
+    assert not_invited.json()["collaboration_status"] == "draft"
+    assert not_invited.json()["job"]["company_display_name"] is None
+
+    invited = await client.post(
+        f"/api/v1/move-jobs/{job_id}/invitations",
+        headers=_headers(customer_secret),
+        json={"role": "company_manager", "display_name": "초대 업체"},
+    )
+    assert invited.status_code == 201
+    invitation = invited.json()
+    pending = await client.get(review_url, headers=_headers(customer_secret))
+    assert pending.json()["company_participation_status"] == "company_invited"
+    assert pending.json()["job"]["company_display_name"] is None
+
+    manager_secret = invitation["access_link"]["secret"]
+    accepted = await client.post(
+        f"/api/v1/move-jobs/{job_id}/invitations/{invitation['invitation']['id']}/accept",
+        headers=_headers(manager_secret),
+    )
+    assert accepted.status_code == 200
+    joined = await client.get(review_url, headers=_headers(customer_secret))
+    assert joined.json()["company_participation_status"] == "company_joined"
+    assert joined.json()["collaboration_status"] == "awaiting_company_proposal"
+    assert joined.json()["job"]["company_display_name"] == "초대 업체"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "expires_delta", "expected"),
+    [
+        (InvitationStatus.PENDING, timedelta(hours=1), "company_invited"),
+        (InvitationStatus.PENDING, timedelta(hours=-1), "company_invitation_expired"),
+        (InvitationStatus.ACCEPTED, timedelta(hours=1), "company_joined"),
+        (InvitationStatus.DECLINED, timedelta(hours=1), "company_declined"),
+        (InvitationStatus.EXPIRED, timedelta(hours=-1), "company_invitation_expired"),
+        (InvitationStatus.REVOKED, timedelta(hours=1), "company_invitation_revoked"),
+    ],
+)
+async def test_company_participation_maps_invitation_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    status: InvitationStatus,
+    expires_delta: timedelta,
+    expected: str,
+) -> None:
+    session = AsyncSession()
+    job = MoveJob(id=uuid4(), title="참여 상태")
+    job.participants = []
+    invitation = SimpleNamespace(
+        status=status,
+        expires_at=datetime.now(UTC) + expires_delta,
+    )
+    monkeypatch.setattr(session, "scalar", AsyncMock(return_value=invitation))
+    result = await _company_participation_status(session, job)
+    assert result.value == expected
+    await session.close()
+
+
+@pytest.mark.anyio
+async def test_company_participation_treats_legacy_bootstrap_as_joined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncSession()
+    job = MoveJob(id=uuid4(), title="기존 bootstrap")
+    job.participants = [
+        JobParticipant(
+            job_id=job.id,
+            role=ParticipantRole.COMPANY_MANAGER,
+            display_name="기존 업체",
+        )
+    ]
+    monkeypatch.setattr(session, "scalar", AsyncMock(return_value=None))
+    assert (await _company_participation_status(session, job)).value == "company_joined"
+    await session.close()
 
 
 @pytest.mark.anyio
