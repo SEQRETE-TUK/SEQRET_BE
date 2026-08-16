@@ -8,7 +8,8 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.model import ContractModel
-from app.modules.scope_review.schemas import ScopeReviewJobHeader
+from app.modules.scope.schemas import ScopeContent
+from app.modules.scope_review.schemas import QuoteSnapshot, ScopeReviewJobHeader
 
 Label = Annotated[str, Field(min_length=1, max_length=200)]
 Reference = Annotated[str, Field(min_length=1, max_length=100)]
@@ -207,6 +208,12 @@ class FieldBriefView(ContractModel):
     dispatch_id: UUID
     scope_version_id: UUID
     scope_version_label: str
+    scope_content_hash: str
+    scope_locked_at: datetime
+    scope_content: ScopeContent
+    quote: QuoteSnapshot | None
+    included_works: tuple[str, ...]
+    exclusions: tuple[str, ...]
     start_at: datetime
     masked_origin: str | None
     masked_destination: str | None

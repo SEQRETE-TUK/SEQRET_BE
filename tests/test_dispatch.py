@@ -41,6 +41,7 @@ from app.modules.move_job.models import JobParticipant, MoveJob, MoveJobStatus
 from app.modules.notification.models import NotificationDelivery
 from app.modules.notification.service import consume_notification_event
 from app.modules.scope.models import ScopeVersion
+from app.modules.scope_review.models import ScopeProposal, ScopeProposalKind, ScopeProposalStatus
 from app.platform.db import Base, create_session_factory
 from app.platform.event_bus.models import OutboxEvent
 from app.platform.event_bus.service import _to_domain_event
@@ -126,22 +127,71 @@ async def _locked_scope(
     locked: bool = True,
     parent_id: UUID | None = None,
     sequence_number: int = 1,
+    with_quote: bool = False,
 ) -> UUID:
     scope_id = uuid4()
+    origin = next(
+        location for location in created["job"]["locations"] if location["kind"] == "origin"
+    )
+    content = {
+        "schema_version": 1,
+        "items": [
+            {
+                "item_key": "bed",
+                "room_zone_id": origin["room_zones"][0]["id"],
+                "description": "침대 포장과 운반",
+            }
+        ],
+    }
     async with factory.begin() as session:
+        if with_quote:
+            source_id = uuid4()
+            session.add(
+                ScopeVersion(
+                    id=source_id,
+                    job_id=UUID(created["job"]["id"]),
+                    parent_version_id=None,
+                    sequence_number=1,
+                    content=content,
+                    content_hash="1" * 64,
+                    created_by_participant_id=_participant_id(created, "customer"),
+                    created_at=datetime.now(UTC),
+                )
+            )
+            parent_id = source_id
+            sequence_number = 2
         session.add(
             ScopeVersion(
                 id=scope_id,
                 job_id=UUID(created["job"]["id"]),
                 parent_version_id=parent_id,
                 sequence_number=sequence_number,
-                content={"schema_version": 1, "items": []},
+                content=content,
                 content_hash=f"{sequence_number:x}" * 64,
                 created_by_participant_id=_participant_id(created, "company_manager"),
                 created_at=datetime.now(UTC),
                 locked_at=datetime.now(UTC) if locked else None,
             )
         )
+        if with_quote:
+            session.add(
+                ScopeProposal(
+                    job_id=UUID(created["job"]["id"]),
+                    source_scope_version_id=parent_id,
+                    result_scope_version_id=scope_id,
+                    proposed_by_participant_id=_participant_id(created, "company_manager"),
+                    kind=ScopeProposalKind.INITIAL,
+                    status=ScopeProposalStatus.CONFIRMED,
+                    base_amount_krw=500_000,
+                    adjustments=[{"label": "사다리차", "amount_krw": 100_000}],
+                    total_amount_krw=600_000,
+                    included_works=["포장", "운반"],
+                    exclusions=["에어컨 설치"],
+                    reason="확정 견적",
+                    sent_at=datetime.now(UTC),
+                    confirmed_at=datetime.now(UTC),
+                )
+            )
     return scope_id
 
 
@@ -242,6 +292,26 @@ def _selection(view: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def test_field_brief_rejects_unconfirmed_quote_snapshot() -> None:
+    proposal = ScopeProposal(
+        job_id=uuid4(),
+        source_scope_version_id=uuid4(),
+        result_scope_version_id=uuid4(),
+        proposed_by_participant_id=uuid4(),
+        kind=ScopeProposalKind.INITIAL,
+        status=ScopeProposalStatus.CUSTOMER_REVIEW,
+        base_amount_krw=100_000,
+        adjustments=[],
+        total_amount_krw=100_000,
+        included_works=[],
+        exclusions=[],
+        reason="검토 중",
+        sent_at=datetime.now(UTC),
+    )
+    with pytest.raises(DispatchConflictError):
+        dispatch_service._confirmed_quote(proposal)
+
+
 async def _setup(
     client: AsyncClient,
     factory: async_sessionmaker[AsyncSession],
@@ -283,7 +353,7 @@ async def test_dispatch_to_field_check_in_is_replay_safe_and_notifies_worker(
     assert empty.headers["cache-control"] == "no-store"
     assert empty.json()["status"] == "setup_required"
 
-    scope_id = await _locked_scope(factory, created)
+    scope_id = await _locked_scope(factory, created, with_quote=True)
     setup_payload = _setup_payload(created, scope_id)
     setup = await client.post(
         f"/api/v1/move-jobs/{job_id}/dispatch/setup",
@@ -375,6 +445,13 @@ async def test_dispatch_to_field_check_in_is_replay_safe_and_notifies_worker(
     assert brief.headers["cache-control"] == "no-store"
     brief_body = brief.json()
     assert brief_body["dispatch_id"] == confirmed_view["dispatch_id"]
+    assert brief_body["scope_version_id"] == str(scope_id)
+    assert brief_body["scope_content_hash"] == "2" * 64
+    assert brief_body["scope_locked_at"] is not None
+    assert brief_body["scope_content"]["items"][0]["item_key"] == "bed"
+    assert brief_body["quote"]["total_amount_krw"] == 600_000
+    assert brief_body["included_works"] == ["포장", "운반"]
+    assert brief_body["exclusions"] == ["에어컨 설치"]
     assert brief_body["masked_origin"] == "서울 출발지(마스킹)"
     assert brief_body["masked_destination"] == "인천 도착지(마스킹)"
     assert brief_body["lead_worker_call_uri"] is None
