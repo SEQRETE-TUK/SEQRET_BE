@@ -235,7 +235,7 @@ class VertexAIProvider:
                 retryable=False,
             )
         for item in raw.items:
-            source_indices = item.source_indices or ((0,) if source_count == 1 else ())
+            source_indices = (0,) if source_count == 1 else item.source_indices
             if not source_indices or len(source_indices) != len(set(source_indices)):
                 self._log_failure(
                     AnalysisFailureStage.SOURCE_MAP, ProviderErrorKind.INVALID_INPUT, False
