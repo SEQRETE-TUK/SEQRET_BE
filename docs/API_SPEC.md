@@ -349,6 +349,39 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 ## 5. command 계약
 
+### 5.0 미디어 처리 동의와 촬영 세션
+
+`GET /move-jobs/{job_id}/media-consent-policy`는 현재 동의문을 server source로 반환한다.
+
+```json
+{
+  "policy_version": "2026-08-17.v1",
+  "processing_purposes": [
+    "inventory_analysis",
+    "condition_record",
+    "field_change_evidence",
+    "completion_record"
+  ],
+  "retention_days_after_job_completion": 30,
+  "notice": "촬영 미디어는 ... 작업 완료 후 30일 보관 뒤 삭제됩니다."
+}
+```
+
+`POST /move-jobs/{job_id}/capture-sessions`
+
+```json
+{
+  "consent_policy_version": "2026-08-17.v1",
+  "privacy_notice_acknowledged": true
+}
+```
+
+- 안내 확인은 JSON boolean `true`만 허용한다. 현재 정책과 다른 version은 `409`이므로 policy를 다시 조회한다.
+- server는 정책 버전·처리 목적·보관기간·동의 시각을 capture session에 불변 snapshot으로 저장한다.
+- 보관기간 설정이 없으면 policy 조회와 session 생성 모두 `503`으로 fail-closed한다.
+- migration 전 세션은 동의로 간주하지 않는다. 조회에는 미기록 상태를 그대로 표시하고 새 upload·분석 제출을 `409`로 차단한다.
+- 이 기술 계약은 법률 검토를 대체하지 않는다. 실제 사용자 출시 전 안내 문구와 처리 목적에 대한 별도 법률 검토가 필요하다.
+
 ### 5.1 범위 수정 요청
 
 `POST /scope-review/revision-request`

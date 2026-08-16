@@ -48,7 +48,7 @@ async def change_api(tmp_path: Path) -> AsyncIterator[ChangeApi]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(Settings(environment=AppEnvironment.TEST))
+    application = create_app(Settings(environment=AppEnvironment.TEST, media_retention_days=30))
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     transport = ASGITransport(app=application)
@@ -165,6 +165,10 @@ async def _upload_evidence(
     capture = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions",
         headers=_headers(secret),
+        json={
+            "consent_policy_version": "2026-08-17.v1",
+            "privacy_notice_acknowledged": True,
+        },
     )
     assert capture.status_code == 201
     capture_id = capture.json()["id"]

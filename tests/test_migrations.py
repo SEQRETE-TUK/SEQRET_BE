@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_16_0001"
+ALEMBIC_HEAD = "a_19_0001"
+ALEMBIC_MEDIA_CONSENT_PREVIOUS = "a_16_0001"
 ALEMBIC_LOCATION_PREVIOUS = "int_04_0001"
 ALEMBIC_COMPLETION_PREVIOUS = "a_13_0001"
 ALEMBIC_DISPATCH_PREVIOUS = "int_03_0002"
@@ -161,6 +162,121 @@ def test_location_conditions_migration_backfills_and_defaults_existing_clients(
         assert "conditions" not in {
             column["name"] for column in inspect(engine).get_columns("location")
         }
+    finally:
+        engine.dispose()
+
+
+def test_media_consent_migration_marks_legacy_and_enforces_complete_snapshot(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'media-consent.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+
+    try:
+        command.upgrade(configuration, ALEMBIC_MEDIA_CONSENT_PREVIOUS)
+        metadata = MetaData()
+        metadata.reflect(engine, only=("move_job", "job_participant", "capture_session"))
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        participant_id = uuid4().hex
+        capture_id = uuid4().hex
+        with engine.begin() as connection:
+            connection.execute(
+                metadata.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "media consent backfill",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["job_participant"].insert(),
+                {
+                    "id": participant_id,
+                    "job_id": job_id,
+                    "role": "CUSTOMER",
+                    "display_name": "customer",
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                metadata.tables["capture_session"].insert(),
+                {
+                    "id": capture_id,
+                    "job_id": job_id,
+                    "created_by_participant_id": participant_id,
+                    "created_at": now,
+                },
+            )
+
+        command.upgrade(configuration, "head")
+        migrated = MetaData()
+        migrated.reflect(engine, only=("capture_session",))
+        table = migrated.tables["capture_session"]
+        with engine.begin() as connection:
+            legacy = (
+                connection.execute(select(table).where(table.c.id == capture_id)).mappings().one()
+            )
+        assert legacy["privacy_notice_acknowledged"] is False
+        assert legacy["media_consent_policy_version"] is None
+        assert legacy["media_retention_days"] is None
+        assert legacy["media_consented_at"] is None
+
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                table.insert(),
+                {
+                    "id": uuid4().hex,
+                    "job_id": job_id,
+                    "created_by_participant_id": participant_id,
+                    "privacy_notice_acknowledged": True,
+                    "media_consent_policy_version": "2026-08-17.v1",
+                    "media_retention_days": None,
+                    "media_consented_at": now,
+                    "created_at": now,
+                },
+            )
+        with engine.begin() as connection:
+            omitted_acknowledgement_id = uuid4().hex
+            connection.execute(
+                table.insert(),
+                {
+                    "id": omitted_acknowledgement_id,
+                    "job_id": job_id,
+                    "created_by_participant_id": participant_id,
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                table.insert(),
+                {
+                    "id": uuid4().hex,
+                    "job_id": job_id,
+                    "created_by_participant_id": participant_id,
+                    "privacy_notice_acknowledged": True,
+                    "media_consent_policy_version": "2026-08-17.v1",
+                    "media_retention_days": 30,
+                    "media_consented_at": now,
+                    "created_at": now,
+                },
+            )
+            omitted_acknowledgement = (
+                connection.execute(select(table).where(table.c.id == omitted_acknowledgement_id))
+                .mappings()
+                .one()
+            )
+        assert omitted_acknowledgement["privacy_notice_acknowledged"] is False
+        assert omitted_acknowledgement["media_consent_policy_version"] is None
+        assert omitted_acknowledgement["media_retention_days"] is None
+        assert omitted_acknowledgement["media_consented_at"] is None
+
+        command.downgrade(configuration, ALEMBIC_MEDIA_CONSENT_PREVIOUS)
+        columns = {column["name"] for column in inspect(engine).get_columns("capture_session")}
+        assert "media_consent_policy_version" not in columns
+        assert "privacy_notice_acknowledged" not in columns
     finally:
         engine.dispose()
 
@@ -995,6 +1111,7 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "id": capture_id,
                     "job_id": job_id,
                     "created_by_participant_id": participant_id,
+                    "privacy_notice_acknowledged": False,
                     "created_at": created_at,
                 },
             )

@@ -26,6 +26,7 @@
 - upload/read signed URL은 **opaque 문자열**이다. decode, 재직렬화, query 정렬, host 소문자화, 기본 port 제거를 하지 말고 받은 문자열을 그대로 사용한다. upload 응답의 `upload_headers`도 key·value를 정규화하지 않고 모두 PUT에 적용한다. GCS target에는 요청 MIME type의 `Content-Type`과 `x-goog-if-generation-match: 0`이 포함돼야 하며 어느 쪽도 빼면 안 된다.
 - secret 또는 signed URL을 담는 응답은 `Cache-Control: no-store`다. PWA cache, 브라우저 영구 저장소, 로그와 analytics에 남기지 않는다.
 - upload 완료 요청에 object generation을 보내지 않는다. FE는 발급받은 URL과 `upload_headers`로 PUT하고, BE가 storage metadata의 object key, MIME type, 크기와 generation을 검증한다.
+- 촬영 전에 `GET /move-jobs/{job_id}/media-consent-policy`로 현재 동의문 버전·처리 목적·작업 완료 후 보관기간을 표시한다. 사용자가 명시적으로 확인한 뒤 `POST /capture-sessions`에 `{consent_policy_version, privacy_notice_acknowledged: true}`를 보낸다. 응답과 목록에는 정책 버전·목적·보관기간·서버 동의 시각 snapshot이 포함된다. 과거 미기록 세션은 동의로 간주하지 않으며 신규 upload·분석 제출이 차단된다.
 - `GET /move-jobs/{job_id}/capture-sessions`는 호출자가 만든 세션만 최신순으로 반환한다. 각 세션의 `media_assets`에서 validation 상태를 복구하고 선택적 `analysis`에서 분석 상태를 이어간다. object key, generation, signed URL과 provider task ID는 이 응답에 없다.
 - 촬영 소유자는 모든 inventory 미디어가 비동기 validation을 마쳐 `READY`가 된 뒤 `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`을 한 번 호출한다. `202` 응답의 `analysis_run_id`를 보관하고 `GET .../analysis`로 상태를 조회할 수 있다. 제출 뒤 해당 촬영 세션의 새 upload·미완료 upload 확정은 `409`다.
 - 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.

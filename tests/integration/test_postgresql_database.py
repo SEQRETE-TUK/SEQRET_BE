@@ -95,7 +95,7 @@ from app.modules.background_job.service import (
     start_media_deletion,
 )
 from app.modules.capture.models import CaptureSession, MediaAsset
-from app.modules.capture.schemas import MediaUploadCreate
+from app.modules.capture.schemas import CaptureSessionCreate, MediaUploadCreate
 from app.modules.capture.service import (
     complete_media_upload,
     create_capture_session,
@@ -157,7 +157,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_16_0001"
+ALEMBIC_HEAD = "a_19_0001"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -165,6 +165,10 @@ ALEMBIC_OPERATIONAL_EVENT_PREVIOUS = "b_03_0001"
 ALEMBIC_OUTBOX_PREVIOUS = "a_08_0001"
 ALEMBIC_RATE_LIMIT_PREVIOUS = "a_09_0001"
 ALEMBIC_BACKGROUND_JOB_PREVIOUS = "a_10_0001"
+TEST_CAPTURE_CONSENT = CaptureSessionCreate(
+    consent_policy_version="2026-08-17.v1",
+    privacy_notice_acknowledged=True,
+)
 BUSINESS_TABLES = {
     "ai_analysis_run",
     "background_job",
@@ -976,6 +980,8 @@ async def test_background_job_create_and_claim_are_exclusive_on_postgresql() -> 
                     session,
                     created.job.id,
                     participant_id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 move_job = await session.get(MoveJob, created.job.id)
                 assert move_job is not None
@@ -1158,6 +1164,8 @@ async def test_capture_analysis_submit_and_claim_are_exclusive_on_postgresql() -
                     session,
                     created.job.id,
                     participant_id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 session.add(
                     MediaAsset(
@@ -1283,6 +1291,8 @@ async def test_capture_analysis_completion_is_exactly_once_on_postgresql() -> No
                     session,
                     created.job.id,
                     participant_id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 session.add(
                     MediaAsset(
@@ -1444,6 +1454,8 @@ async def test_analysis_run_replays_serialize_on_postgresql() -> None:
                     session,
                     created.job.id,
                     created.job.participants[0].id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
             capture_id = CaptureSessionId(capture.id)
             result = AnalysisResult(
@@ -1547,6 +1559,8 @@ async def test_concurrent_retry_preparation_reopens_once_on_postgresql() -> None
                     session,
                     created.job.id,
                     created.job.participants[0].id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
             capture_id = CaptureSessionId(capture.id)
 
@@ -1730,6 +1744,8 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                     session,
                     created.job.id,
                     worker.id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 upload = await create_media_upload(
                     session,
@@ -1886,6 +1902,8 @@ async def test_capture_upload_and_analysis_draft_round_trip_on_postgresql(
                     session,
                     created.job.id,
                     customer.id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 upload = await create_media_upload(
                     session,
@@ -2093,7 +2111,13 @@ async def test_analysis_review_same_payload_replays_serialize_on_postgresql() ->
                     if participant.role is ParticipantRole.CUSTOMER
                 )
                 room_zone_id = created.job.locations[0].room_zones[0].id
-                capture = await create_capture_session(session, created.job.id, customer.id)
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    customer.id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
+                )
                 media_asset_id = uuid4()
                 session.add(
                     MediaAsset(
@@ -2503,6 +2527,8 @@ async def test_change_request_concurrent_approvals_allow_one_result_on_postgresq
                     session,
                     created.job.id,
                     worker.id,
+                    TEST_CAPTURE_CONSENT,
+                    retention_days=30,
                 )
                 upload = await create_media_upload(
                     session,
