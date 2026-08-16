@@ -70,9 +70,7 @@ async def field_change_api(tmp_path: Path) -> AsyncIterator[FieldChangeApi]:
     )
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(
-        Settings(environment=AppEnvironment.TEST, media_retention_days=30)
-    )
+    application = create_app(Settings(environment=AppEnvironment.TEST, media_retention_days=30))
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     async with AsyncClient(

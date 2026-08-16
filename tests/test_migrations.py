@@ -217,9 +217,9 @@ def test_media_consent_migration_marks_legacy_and_enforces_complete_snapshot(
         migrated.reflect(engine, only=("capture_session",))
         table = migrated.tables["capture_session"]
         with engine.begin() as connection:
-            legacy = connection.execute(
-                select(table).where(table.c.id == capture_id)
-            ).mappings().one()
+            legacy = (
+                connection.execute(select(table).where(table.c.id == capture_id)).mappings().one()
+            )
         assert legacy["privacy_notice_acknowledged"] is False
         assert legacy["media_consent_policy_version"] is None
         assert legacy["media_retention_days"] is None

@@ -85,9 +85,7 @@ async def capture_api(tmp_path: Path) -> AsyncIterator[CaptureApi]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(
-        Settings(environment=AppEnvironment.TEST, media_retention_days=30)
-    )
+    application = create_app(Settings(environment=AppEnvironment.TEST, media_retention_days=30))
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     transport = ASGITransport(app=application)
@@ -172,9 +170,7 @@ async def test_media_consent_policy_and_explicit_acknowledgement(
     assert "AI 결과는 초안" in policy.json()["notice"]
     assert (await client.get(policy_url)).status_code == 401
 
-    assert (
-        await client.post(capture_url, headers=_headers(secret), json={})
-    ).status_code == 422
+    assert (await client.post(capture_url, headers=_headers(secret), json={})).status_code == 422
     assert (
         await client.post(
             capture_url,

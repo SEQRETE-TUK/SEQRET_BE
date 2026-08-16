@@ -48,9 +48,7 @@ async def change_api(tmp_path: Path) -> AsyncIterator[ChangeApi]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", poolclass=NullPool)
     factory = create_session_factory(engine)
     storage = FakeObjectStorage()
-    application = create_app(
-        Settings(environment=AppEnvironment.TEST, media_retention_days=30)
-    )
+    application = create_app(Settings(environment=AppEnvironment.TEST, media_retention_days=30))
     application.state.database_session_factory = factory
     application.state.storage_port = storage
     transport = ASGITransport(app=application)
