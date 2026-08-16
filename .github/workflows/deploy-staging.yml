@@ -247,6 +247,56 @@ jobs:
           fi
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
+      - name: Wait for Artifact Analysis and enforce vulnerability policy
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          scan_json="${RUNNER_TEMP}/artifact-vulnerability-scan.json"
+          scan_error="${RUNNER_TEMP}/artifact-vulnerability-scan-error.txt"
+          scan_status=""
+          for attempt in {1..60}; do
+            if gcloud artifacts docker images describe "${IMAGE_DIGEST}" \
+              --show-package-vulnerability \
+              --format=json > "${scan_json}.tmp" 2> "${scan_error}"; then
+              scan_status="$(jq -r '
+                [.discovery_summary.discovery[]?
+                  | select((.noteName // "") | endswith("/PACKAGE_VULNERABILITY"))
+                  | .discovery.analysisStatus]
+                | first // ""
+              ' "${scan_json}.tmp")"
+              case "${scan_status}" in
+                FINISHED_SUCCESS)
+                  mv "${scan_json}.tmp" "${scan_json}"
+                  break
+                  ;;
+                FINISHED_*)
+                  echo "Artifact Analysis ended with ${scan_status}." >&2
+                  exit 1
+                  ;;
+              esac
+            elif grep -qiE 'permission.denied|permission denied|HTTPError 403' "${scan_error}"; then
+              echo "The deployment identity cannot read Artifact Analysis occurrences." >&2
+              exit 1
+            fi
+            if (( attempt == 60 )); then
+              echo "Artifact Analysis did not finish within 15 minutes." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+
+          set +e
+          python3 scripts/check_artifact_vulnerabilities.py \
+            --scan "${scan_json}" \
+            --exceptions infrastructure/artifact_vulnerability_exceptions.json \
+            | tee "${RUNNER_TEMP}/artifact-vulnerability-policy.md"
+          policy_status="${PIPESTATUS[0]}"
+          set -e
+          cat "${RUNNER_TEMP}/artifact-vulnerability-policy.md" >> "${GITHUB_STEP_SUMMARY}"
+          exit "${policy_status}"
+
       - name: Discover the stable revision
         id: stable
         shell: bash

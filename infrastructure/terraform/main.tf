@@ -5,6 +5,7 @@ resource "google_project_service" "required" {
     "cloudscheduler.googleapis.com",
     "cloudtasks.googleapis.com",
     "compute.googleapis.com",
+    "containerscanning.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "pubsub.googleapis.com",
