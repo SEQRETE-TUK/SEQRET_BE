@@ -192,13 +192,13 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 ## 7. 남은 backend·연동 범위
 
-현재 승인된 v1 제품 계약 기준으로 A 소유의 무조건적인 backend 구현은 없다. 아래 항목은 FE 연동 결과나 B·외부 결정을 선행조건으로 둔 조건부 범위다.
+A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 시각, 누적 총액과 승인된 현장 변경을 포함하는 한 장 공동확인 계약을 제공한다. 아래 항목은 FE 연동 결과나 B·외부 결정을 선행조건으로 둔 조건부 범위다.
 
 ### 조건부 계약·조회 재구성
 
 - 완료 포함 화면 단위 view와 command는 구현됨
 - 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
-- 후속 공통 `JobHeader`; `ScopeItemV2`, `QuoteSnapshot`과 signed 범위·완료 preview는 구현됨
+- 후속 공통 `JobHeader`; `ScopeItemV2`, `LocationConditions`, `QuoteSnapshot`, 공동확인 상태와 signed 범위·완료 preview는 구현됨
 - 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
 ### frontend 연동

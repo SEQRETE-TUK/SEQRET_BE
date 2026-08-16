@@ -135,6 +135,19 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·사유를 고객에게 전송 | 업체 | 구현·범위 v1 |
 
+`scope-review`는 화면 한 번의 조회로 다음 공동확인 카드 계약을 반환한다.
+
+- `scope`: version label, `content_hash`, 잠금 시각, 품목·작업 옵션, 출·도착지 조건, 포함·제외 작업
+- `quote`: 현재 version에 효력이 있는 누적 총액. 승인된 현장 변경 뒤에는 변경 견적 총액을 반환
+- `company_participation_status`: `company_not_invited|company_invited|company_joined|company_declined|company_invitation_expired|company_invitation_revoked`
+- `collaboration_status`: `draft|awaiting_company_proposal|awaiting_confirmation|revision_requested|confirmed`
+- `company_confirmed_at`, `customer_confirmed_at`: 현재 version을 확인한 시각
+- `approved_changes[]`: 현장 이슈, 사유, 증거 ID, 증감액, 결과 version과 승인 시각
+- `agreement_notice`: 전자계약이 아니라는 공동확인 기록 안내
+
+pending·거절·만료·철회된 초대의 표시명은 `company_display_name`으로 노출하지 않는다. 기존 신뢰
+bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업은 `company_joined`로 해석한다.
+
 ### 3.2 고객 사진·AI 검토
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
