@@ -152,6 +152,9 @@ async def test_analyze_rejects_empty_response() -> None:
     [
         "not json at all",
         '{"items": [{"item_key": "bed", "description": "d", "confidence": 2.0}]}',
+        "{}",
+        '{"items": []}',
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9}]}',
     ],
 )
 @pytest.mark.anyio
@@ -181,6 +184,45 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
         )
 
     assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+
+
+@pytest.mark.parametrize("source_indices", [[], [0, 0]])
+@pytest.mark.anyio
+async def test_analyze_rejects_empty_or_duplicate_source_indices(
+    source_indices: list[int],
+) -> None:
+    output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+        f' "source_indices": {source_indices}'
+        "}]}"
+    )
+    provider = _provider(StubModels(text=output))
+
+    with pytest.raises(ProviderError, match="invalid media references") as error_info:
+        await provider.analyze(
+            request=_request(source_count=1),
+            idempotency_key=KEY,
+            timeout_seconds=30,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+    assert error_info.value.retryable is False
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_duplicate_item_keys() -> None:
+    item = '{"item_key": "bed", "description": "침대", "confidence": 0.9, "source_indices": [0]}'
+    provider = _provider(StubModels(text=f'{{"items": [{item}, {item}]}}'))
+
+    with pytest.raises(ProviderError, match="duplicate item keys") as error_info:
+        await provider.analyze(
+            request=_request(source_count=1),
+            idempotency_key=KEY,
+            timeout_seconds=30,
+        )
+
+    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+    assert error_info.value.retryable is False
 
 
 @pytest.mark.anyio
@@ -302,3 +344,18 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
     assert malformed_records[0].__dict__["retryable"] is False
     assert index_records[0].__dict__["analysis_stage"] == "source_map"
     assert index_records[0].__dict__["provider_status"] == 0
+
+    empty_index_output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+        ' "source_indices": []}]}'
+    )
+    empty_index_provider, empty_index_records = _logging_provider(
+        StubModels(text=empty_index_output)
+    )
+    with pytest.raises(ProviderError, match="invalid media references"):
+        await empty_index_provider.analyze(
+            request=_request(source_count=1), idempotency_key=KEY, timeout_seconds=30
+        )
+
+    assert empty_index_records[0].__dict__["analysis_stage"] == "source_map"
+    assert empty_index_records[0].__dict__["retryable"] is False
