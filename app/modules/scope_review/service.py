@@ -28,7 +28,14 @@ from app.modules.move_job.models import (
     MoveJob,
 )
 from app.modules.scope.models import ScopeApproval, ScopeVersion
-from app.modules.scope.schemas import ScopeContent, ScopeVersionCreate
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItem,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
+    ScopeVersionCreate,
+)
 from app.modules.scope.service import approve_scope_version, create_scope_version
 from app.modules.scope_review.models import (
     ScopeProposal,
@@ -509,6 +516,29 @@ async def get_scope_review(
         if item.room_zone_id not in zone_labels:
             raise ScopeReviewConflictError(current.id)
         source_item = ai_items.get(item.item_key)
+        if isinstance(item, ScopeItemV2):
+            description = item.name
+            name = item.name
+            quantity = item.quantity
+            unit = item.unit
+            work_note = item.work_note
+            item_review_status = item.review_status
+            item_source = item.source
+        else:
+            assert isinstance(item, ScopeItem)
+            description = item.description
+            name = item.description
+            quantity = None
+            unit = None
+            work_note = None
+            item_review_status = (
+                ScopeItemReviewStatus.REVIEW_REQUIRED
+                if item.item_key in review_required_keys
+                else ScopeItemReviewStatus.CONFIRMED
+            )
+            item_source = (
+                ScopeItemSource.AI if source_item is not None else ScopeItemSource.CUSTOMER
+            )
         source_media_ids = (
             tuple(UUID(str(value)) for value in source_item.source_media_asset_ids)
             if source_item is not None
@@ -519,8 +549,14 @@ async def get_scope_review(
             ScopeReviewItem(
                 item_key=item.item_key,
                 room_zone_id=item.room_zone_id,
-                description=item.description,
-                review_required=item.item_key in review_required_keys,
+                description=description,
+                name=name,
+                quantity=quantity,
+                unit=unit,
+                work_note=work_note,
+                review_status=item_review_status,
+                source=item_source,
+                review_required=item_review_status is ScopeItemReviewStatus.REVIEW_REQUIRED,
                 source_media_asset_ids=source_media_ids,
             )
         )

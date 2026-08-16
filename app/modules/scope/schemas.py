@@ -1,6 +1,7 @@
 """Work-scope content and HTTP schemas."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -22,12 +23,51 @@ class ScopeItem(ScopeRequestModel):
     description: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
-class ScopeContent(ScopeRequestModel):
-    schema_version: Literal[1] = 1
-    items: Annotated[tuple[ScopeItem, ...], Field(min_length=1, max_length=500)]
+class ScopeItemReviewStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    REVIEW_REQUIRED = "review_required"
+
+
+class ScopeItemSource(StrEnum):
+    AI = "ai"
+    CUSTOMER = "customer"
+    COMPANY = "company"
+    FIELD_CHANGE = "field_change"
+
+
+class ScopeItemV2(ScopeRequestModel):
+    """Structured inventory line preserved inside an immutable scope snapshot."""
+
+    item_key: Annotated[str, Field(min_length=1, max_length=100)]
+    room_zone_id: UUID
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    quantity: Annotated[int, Field(ge=1)] | None = None
+    unit: Annotated[str, Field(min_length=1, max_length=20)] | None = None
+    work_note: Annotated[str, Field(min_length=1, max_length=500)] | None = None
+    review_status: ScopeItemReviewStatus
+    source: ScopeItemSource
 
     @model_validator(mode="after")
-    def require_unique_item_keys(self) -> "ScopeContent":
+    def require_complete_confirmed_quantity(self) -> "ScopeItemV2":
+        if self.review_status is ScopeItemReviewStatus.CONFIRMED and (
+            self.quantity is None or self.unit is None
+        ):
+            raise ValueError("confirmed scope items require quantity and unit")
+        return self
+
+
+class ScopeContent(ScopeRequestModel):
+    schema_version: Literal[1, 2] = 1
+    items: Annotated[
+        tuple[ScopeItem | ScopeItemV2, ...],
+        Field(min_length=1, max_length=500),
+    ]
+
+    @model_validator(mode="after")
+    def require_version_shape_and_unique_item_keys(self) -> "ScopeContent":
+        expected_type = ScopeItem if self.schema_version == 1 else ScopeItemV2
+        if any(not isinstance(item, expected_type) for item in self.items):
+            raise ValueError("scope item shape must match schema version")
         item_keys = [item.item_key for item in self.items]
         if len(item_keys) != len(set(item_keys)):
             raise ValueError("scope item keys must be unique")

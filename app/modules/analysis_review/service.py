@@ -23,7 +23,14 @@ from app.modules.analysis_workflow.models import (
 from app.modules.capture.models import MediaAsset
 from app.modules.move_job.models import Location, LocationKind, RoomZone
 from app.modules.scope.models import ScopeVersion
-from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItem,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
+    ScopeVersionCreate,
+)
 from app.modules.scope.service import (
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
@@ -112,10 +119,39 @@ def _current_items(
         AnalysisReviewItem(
             item_key=item.item_key,
             room_zone_id=item.room_zone_id,
-            description=item.description,
-            source="ai" if item.item_key in ai_items else "customer",
+            description=(item.description if isinstance(item, ScopeItem) else item.name),
+            name=(item.description if isinstance(item, ScopeItem) else item.name),
+            quantity=(None if isinstance(item, ScopeItem) else item.quantity),
+            unit=(None if isinstance(item, ScopeItem) else item.unit),
+            work_note=(None if isinstance(item, ScopeItem) else item.work_note),
+            review_status=(
+                (
+                    ScopeItemReviewStatus.REVIEW_REQUIRED
+                    if item.item_key in review_required_keys
+                    else ScopeItemReviewStatus.CONFIRMED
+                )
+                if isinstance(item, ScopeItem)
+                else item.review_status
+            ),
+            scope_source=(
+                (ScopeItemSource.AI if item.item_key in ai_items else ScopeItemSource.CUSTOMER)
+                if isinstance(item, ScopeItem)
+                else item.source
+            ),
+            source=(
+                "ai"
+                if (
+                    (isinstance(item, ScopeItem) and item.item_key in ai_items)
+                    or (isinstance(item, ScopeItemV2) and item.source is ScopeItemSource.AI)
+                )
+                else "customer"
+            ),
             confidence=(ai_items[item.item_key].confidence if item.item_key in ai_items else None),
-            review_required=item.item_key in review_required_keys,
+            review_required=(
+                item.item_key in review_required_keys
+                if isinstance(item, ScopeItem)
+                else item.review_status is ScopeItemReviewStatus.REVIEW_REQUIRED
+            ),
             source_media_asset_ids=(
                 tuple(ai_items[item.item_key].source_media_asset_ids)
                 if item.item_key in ai_items
@@ -187,6 +223,7 @@ async def _to_response(
         capture_session_id=row.capture_session_id,
         source_scope_version_id=source.id,
         review_scope_version_id=review.id if review else None,
+        scope_schema_version=content.schema_version,
         analysis_completed_at=_aware(row.completed_at),
         review_completed_at=_aware(review.created_at) if review else None,
         zones=await _zone_views(session, row.move_job_id, row.capture_session_id),
@@ -222,18 +259,37 @@ async def complete_analysis_review(
     if command.source_scope_version_id != source.id:
         raise AnalysisReviewConflictError(command.source_scope_version_id)
 
-    requested_content = ScopeContent(
-        items=tuple(
+    requested_items: tuple[ScopeItem | ScopeItemV2, ...]
+    if command.scope_schema_version == 1:
+        requested_items = tuple(
             ScopeItem(
                 item_key=item.item_key,
                 room_zone_id=item.room_zone_id,
-                description=item.description,
+                description=cast(str, item.description),
             )
             for item in command.items
         )
+    else:
+        requested_items = tuple(
+            ScopeItemV2(
+                item_key=item.item_key,
+                room_zone_id=item.room_zone_id,
+                name=cast(str, item.name),
+                quantity=cast(int, item.quantity),
+                unit=cast(str, item.unit),
+                work_note=item.work_note,
+                review_status=ScopeItemReviewStatus.CONFIRMED,
+                source=ScopeItemSource.CUSTOMER,
+            )
+            for item in command.items
+        )
+    requested_content = ScopeContent(
+        schema_version=command.scope_schema_version,
+        items=requested_items,
     )
     normalized_content = ScopeContent(
-        items=tuple(sorted(requested_content.items, key=lambda item: item.item_key))
+        schema_version=requested_content.schema_version,
+        items=tuple(sorted(requested_content.items, key=lambda item: item.item_key)),
     )
     existing = await _child_scope(session, source.id)
     if existing is not None:

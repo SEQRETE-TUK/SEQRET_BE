@@ -662,23 +662,23 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 ## 6. 핵심 data model
 
-### 6.1 `ScopeLineV2`
+### 6.1 `ScopeItemV2`
 
-현재 `ScopeItem v1`은 수량·구분·작업 정보를 표현하지 못하므로 와이어프레임용 schema v2가 필요하다.
+`ScopeItem v1` 응답은 보존하고 새 snapshot부터 `schema_version: 2`와 구조화 품목을 사용할 수 있다.
 
 | Field | Type | 제약 |
 | --- | --- | --- |
 | `item_key` | string | version 내부 고유, 1..100자 |
-| `kind` | enum | `item`, `work`, `exclusion` |
-| `room_zone_id` | UUID/null | 전체 작업·제외는 null 허용 |
+| `room_zone_id` | UUID | 품목이 속한 구역 |
 | `name` | string | 1..200자 |
-| `quantity` | integer/null | 품목이면 1 이상 |
-| `unit` | string/null | `개`, `대`, `봉` 등 1..20자 |
+| `quantity` | integer/null | 1 이상, 검토 완료 품목은 필수 |
+| `unit` | string/null | `개`, `대`, `봉` 등 1..20자, 검토 완료 품목은 필수 |
 | `work_note` | string/null | 포장·운반·분리 등 |
 | `review_status` | enum | `confirmed`, `review_required` |
 | `source` | enum | `ai`, `customer`, `company`, `field_change` |
 
-불변 scope version은 `schema_version: 2`, `lines[]`, 포함·제외, `QuoteSnapshot`과 canonical content hash를 함께 저장한다.
+불변 scope version은 `schema_version: 2`, `items[]`와 canonical content hash를 저장한다. 포함·제외
+작업과 `QuoteSnapshot`은 기존 proposal snapshot에 유지해 같은 의미를 품목 line에 중복 저장하지 않는다.
 
 ### 6.2 `QuoteSnapshot`
 

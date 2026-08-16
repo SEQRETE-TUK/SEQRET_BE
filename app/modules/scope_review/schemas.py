@@ -9,7 +9,11 @@ from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.model import ContractModel
-from app.modules.scope.schemas import ScopeContent
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+)
 from app.modules.scope_review.models import ScopeProposalKind, ScopeProposalStatus
 
 MAX_AMOUNT_KRW = 100_000_000_000
@@ -131,6 +135,12 @@ class ScopeReviewItem(ContractModel):
     item_key: str
     room_zone_id: UUID
     description: str
+    name: str
+    quantity: int | None
+    unit: str | None
+    work_note: str | None
+    review_status: ScopeItemReviewStatus
+    source: ScopeItemSource
     review_required: bool
     source_media_asset_ids: tuple[UUID, ...]
 
