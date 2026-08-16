@@ -39,6 +39,23 @@ def upgrade() -> None:
         ),
     )
 
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("location") as batch:
+            batch.alter_column(
+                "conditions",
+                existing_type=sa.JSON(),
+                existing_nullable=False,
+                server_default=None,
+            )
+    else:
+        op.alter_column(
+            "location",
+            "conditions",
+            existing_type=sa.JSON(),
+            existing_nullable=False,
+            server_default=None,
+        )
+
 
 def downgrade() -> None:
     """Remove structured endpoint conditions."""

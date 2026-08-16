@@ -20,15 +20,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.contracts.actor import ParticipantRole
 from app.platform.db.base import Base
 
-UNKNOWN_LOCATION_CONDITIONS_JSON = (
-    '{"residence_type":"unknown",'
-    '"floor":{"status":"unknown","value":null},'
-    '"elevator":"unknown","stairs":"unknown",'
-    '"parking_access":"unknown",'
-    '"carry_distance":{"status":"unknown","value_m":null},'
-    '"access_note":null}'
-)
-
 
 class MoveJobStatus(StrEnum):
     """Initial lifecycle before capture and scope workflows extend it."""
@@ -162,7 +153,6 @@ class Location(Base):
     conditions: Mapped[dict[str, object]] = mapped_column(
         JSON,
         nullable=False,
-        server_default=UNKNOWN_LOCATION_CONDITIONS_JSON,
         default=lambda: {
             "residence_type": "unknown",
             "floor": {"status": "unknown", "value": None},

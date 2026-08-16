@@ -129,27 +129,22 @@ def test_location_conditions_migration_backfills_and_defaults_existing_clients(
         command.upgrade(configuration, "head")
         migrated = MetaData()
         migrated.reflect(engine, only=("location",))
-        destination_id = uuid4().hex
         with engine.begin() as connection:
             backfilled = connection.scalar(
                 select(migrated.tables["location"].c.conditions).where(
                     migrated.tables["location"].c.id == origin_id
                 )
             )
+        with pytest.raises(IntegrityError), engine.begin() as connection:
             connection.execute(
                 migrated.tables["location"].insert(),
                 {
-                    "id": destination_id,
+                    "id": uuid4().hex,
                     "job_id": job_id,
                     "kind": "DESTINATION",
                     "label": "도착지",
                     "created_at": now,
                 },
-            )
-            defaulted = connection.scalar(
-                select(migrated.tables["location"].c.conditions).where(
-                    migrated.tables["location"].c.id == destination_id
-                )
             )
         expected = {
             "residence_type": "unknown",
@@ -161,7 +156,6 @@ def test_location_conditions_migration_backfills_and_defaults_existing_clients(
             "access_note": None,
         }
         assert backfilled == expected
-        assert defaulted == expected
 
         command.downgrade(configuration, ALEMBIC_LOCATION_PREVIOUS)
         assert "conditions" not in {
@@ -973,6 +967,15 @@ def test_migration_round_trip_preserves_existing_schema(tmp_path: Path) -> None:
                     "job_id": job_id,
                     "kind": "ORIGIN",
                     "label": "migration probe",
+                    "conditions": {
+                        "residence_type": "unknown",
+                        "floor": {"status": "unknown", "value": None},
+                        "elevator": "unknown",
+                        "stairs": "unknown",
+                        "parking_access": "unknown",
+                        "carry_distance": {"status": "unknown", "value_m": None},
+                        "access_note": None,
+                    },
                     "created_at": created_at,
                 },
             )
