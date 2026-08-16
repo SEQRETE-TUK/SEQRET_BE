@@ -193,6 +193,7 @@ jobs:
             -var="container_image=${placeholder_image}" \
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
             -var="api_max_instances=2" \
+            -var="database_connection_alert_threshold=18" \
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
 
       - name: Build and publish immutable image
@@ -307,6 +308,7 @@ jobs:
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
             -var="api_max_instances=2"
+            -var="database_connection_alert_threshold=18"
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="otel_trace_sample_ratio=1"
           )
@@ -351,6 +353,7 @@ jobs:
             -var="database_url_secret_id=${DATABASE_URL_SECRET_ID}"
             -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}"
             -var="api_max_instances=2"
+            -var="database_connection_alert_threshold=18"
             -var="media_retention_days=${MEDIA_RETENTION_DAYS}"
             -var="monitoring_notification_channel_ids=${channels_json}"
             -var="otel_trace_sample_ratio=1"
@@ -672,6 +675,7 @@ jobs:
               -var="container_image=${CONTAINER_IMAGE}" \
               -var="cloud_sql_instance_id=${CLOUD_SQL_SOURCE_INSTANCE}" \
               -var="api_max_instances=2" \
+              -var="database_connection_alert_threshold=18" \
               -var="media_retention_days=${MEDIA_RETENTION_DAYS}" \
               -var="public_traffic_enabled=$1"
           }

@@ -1,16 +1,17 @@
 mock_provider "google" {}
 
 variables {
-  project_id            = "seqret-staging"
-  region                = "asia-northeast3"
-  environment           = "staging"
-  api_domain            = "api.staging.example.com"
-  frontend_origin       = "https://staging.example.com"
-  media_bucket_name     = "seqret-stg-media"
-  container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  cloud_sql_instance_id = "seqret-stg-db"
-  api_max_instances     = 2
-  media_retention_days  = 30
+  project_id                          = "seqret-staging"
+  region                              = "asia-northeast3"
+  environment                         = "staging"
+  api_domain                          = "api.staging.example.com"
+  frontend_origin                     = "https://staging.example.com"
+  media_bucket_name                   = "seqret-stg-media"
+  container_image                     = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  cloud_sql_instance_id               = "seqret-stg-db"
+  api_max_instances                   = 2
+  database_connection_alert_threshold = 18
+  media_retention_days                = 30
 }
 
 run "staging_runtime_isolation" {
@@ -356,6 +357,13 @@ run "staging_runtime_isolation" {
     condition = alltrue([
       google_monitoring_alert_policy.api_server_errors.severity == "ERROR",
       google_monitoring_alert_policy.api_latency.severity == "WARNING",
+      length(google_monitoring_alert_policy.cloud_sql_connections) == 1,
+      google_monitoring_alert_policy.cloud_sql_connections[0].severity == "WARNING",
+      google_monitoring_alert_policy.cloud_sql_connections[0].conditions[0].condition_threshold[0].threshold_value == 18,
+      google_monitoring_alert_policy.cloud_sql_connections[0].conditions[0].condition_threshold[0].duration == "120s",
+      google_monitoring_alert_policy.cloud_sql_connections[0].conditions[0].condition_threshold[0].aggregations[0].cross_series_reducer == "REDUCE_SUM",
+      strcontains(google_monitoring_alert_policy.cloud_sql_connections[0].conditions[0].condition_threshold[0].filter, "cloudsql.googleapis.com/database/postgresql/num_backends"),
+      strcontains(google_monitoring_alert_policy.cloud_sql_connections[0].conditions[0].condition_threshold[0].filter, "resource.label.database_id=\"seqret-staging:seqret-stg-db\""),
       google_monitoring_alert_policy.access_rate_limit_cache_fallback.severity == "WARNING",
       length(google_monitoring_alert_policy.access_rate_limit_cache_fallback.conditions[0].condition_matched_log) == 1,
       strcontains(google_monitoring_alert_policy.access_rate_limit_cache_fallback.conditions[0].condition_matched_log[0].filter, "jsonPayload.event=\"access_rate_limit_cache_fallback\""),
@@ -423,6 +431,16 @@ run "required_labels_cannot_be_overridden" {
     ])
     error_message = "Required labels must remain immutable while additional labels are preserved."
   }
+}
+
+run "invalid_database_connection_threshold_is_rejected" {
+  command = plan
+
+  variables {
+    database_connection_alert_threshold = 0
+  }
+
+  expect_failures = [var.database_connection_alert_threshold]
 }
 
 run "mutable_image_is_rejected" {

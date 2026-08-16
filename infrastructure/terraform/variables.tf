@@ -176,6 +176,25 @@ variable "cloud_sql_instance_id" {
   }
 }
 
+variable "database_connection_alert_threshold" {
+  description = "Optional total PostgreSQL backend count that must be exceeded before warning."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.database_connection_alert_threshold == null ||
+      (
+        var.database_connection_alert_threshold >= 1 &&
+        var.database_connection_alert_threshold <= 5000 &&
+        floor(var.database_connection_alert_threshold) == var.database_connection_alert_threshold
+      )
+    )
+    error_message = "database_connection_alert_threshold must be null or an integer from 1 to 5000."
+  }
+}
+
 variable "redis_url_secret_id" {
   description = "Optional existing Secret Manager secret ID containing the Redis URL."
   type        = string
