@@ -130,6 +130,45 @@ resource "google_monitoring_alert_policy" "api_latency" {
   depends_on = [google_project_service.observability]
 }
 
+resource "google_monitoring_alert_policy" "cloud_sql_connections" {
+  count = var.database_connection_alert_threshold == null ? 0 : 1
+
+  project               = var.project_id
+  display_name          = "${var.cloud_sql_instance_id} connection pressure"
+  combiner              = "OR"
+  notification_channels = var.monitoring_notification_channel_ids
+  severity              = "WARNING"
+  user_labels           = local.common_labels
+
+  conditions {
+    display_name = "PostgreSQL backends exceed the approved connection budget"
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type=\"cloudsql_database\"",
+        "resource.label.database_id=\"${var.project_id}:${var.cloud_sql_instance_id}\"",
+        "metric.type=\"cloudsql.googleapis.com/database/postgresql/num_backends\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = coalesce(var.database_connection_alert_threshold, 1)
+      duration        = "120s"
+      aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_MAX"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["resource.label.database_id"]
+      }
+    }
+  }
+
+  alert_strategy { auto_close = "1800s" }
+  documentation {
+    subject   = "${var.cloud_sql_instance_id} is nearing its PostgreSQL connection ceiling"
+    content   = "The policy sums num_backends across every database on the instance. Inspect Cloud Run revision counts and pool settings before raising max_connections or scaling runtimes."
+    mime_type = "text/markdown"
+  }
+  depends_on = [google_project_service.observability]
+}
+
 resource "google_monitoring_alert_policy" "access_rate_limit_cache_fallback" {
   project               = var.project_id
   display_name          = "${local.api_name} Redis rate-limit fallback"

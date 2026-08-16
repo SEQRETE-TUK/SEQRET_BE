@@ -8,6 +8,7 @@ service_name        = "seqret"
 api_domain          = "api.staging.example.com"
 cloud_sql_instance_id = "seqret-stg-db"
 api_max_instances      = 2
+database_connection_alert_threshold = 18
 deletion_protection = true
 otel_trace_sample_ratio = 1.0
 # Replace with the approved business retention period.
