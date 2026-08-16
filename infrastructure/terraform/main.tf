@@ -87,7 +87,7 @@ resource "google_project_iam_member" "worker_telemetry_consumer" {
 
 resource "google_secret_manager_secret_iam_member" "worker_database" {
   project   = var.project_id
-  secret_id = var.database_url_secret_id
+  secret_id = var.worker_database_url_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.worker.email}"
 }
@@ -328,7 +328,7 @@ resource "google_cloud_run_v2_job" "migration" {
           name = "SEQRET_DATABASE_URL"
           value_source {
             secret_key_ref {
-              secret  = var.database_url_secret_id
+              secret  = var.migration_database_url_secret_id
               version = "latest"
             }
           }
@@ -410,7 +410,7 @@ resource "google_cloud_run_v2_service" "worker" {
         name = "SEQRET_DATABASE_URL"
         value_source {
           secret_key_ref {
-            secret  = var.database_url_secret_id
+            secret  = var.worker_database_url_secret_id
             version = "latest"
           }
         }

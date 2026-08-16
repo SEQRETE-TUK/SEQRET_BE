@@ -37,14 +37,14 @@ resource "google_project_iam_member" "migration_telemetry_consumer" {
 
 resource "google_secret_manager_secret_iam_member" "api_database" {
   project   = var.project_id
-  secret_id = var.database_url_secret_id
+  secret_id = var.api_database_url_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.api.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "migration_database" {
   project   = var.project_id
-  secret_id = var.database_url_secret_id
+  secret_id = var.migration_database_url_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.migration.email}"
 }

@@ -7,15 +7,19 @@ mock_provider "google" {
 }
 
 variables {
-  project_id            = "seqret-staging"
-  region                = "asia-northeast3"
-  environment           = "staging"
-  api_domain            = "api.staging.example.com"
-  frontend_origin       = "https://staging.example.com"
-  media_bucket_name     = "seqret-stg-media"
-  container_image       = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  cloud_sql_instance_id = "seqret-stg-db"
-  media_retention_days  = 30
+  project_id                          = "seqret-staging"
+  region                              = "asia-northeast3"
+  environment                         = "staging"
+  api_domain                          = "api.staging.example.com"
+  frontend_origin                     = "https://staging.example.com"
+  media_bucket_name                   = "seqret-stg-media"
+  container_image                     = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  cloud_sql_instance_id               = "seqret-stg-db"
+  migration_database_url_secret_id    = "seqret-migration-database-url"
+  api_database_url_secret_id          = "seqret-api-database-url"
+  worker_database_url_secret_id       = "seqret-worker-database-url"
+  outbox_relay_database_url_secret_id = "seqret-relay-database-url"
+  media_retention_days                = 30
 }
 
 run "notification_event_pump" {

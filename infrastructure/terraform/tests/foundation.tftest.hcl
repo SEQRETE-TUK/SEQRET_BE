@@ -9,6 +9,10 @@ variables {
   media_bucket_name                   = "seqret-stg-media"
   container_image                     = "asia-northeast3-docker.pkg.dev/seqret-staging/backend/app@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   cloud_sql_instance_id               = "seqret-stg-db"
+  migration_database_url_secret_id    = "seqret-migration-database-url"
+  api_database_url_secret_id          = "seqret-api-database-url"
+  worker_database_url_secret_id       = "seqret-worker-database-url"
+  outbox_relay_database_url_secret_id = "seqret-relay-database-url"
   api_max_instances                   = 2
   database_connection_alert_threshold = 18
   media_retention_days                = 30
@@ -211,7 +215,7 @@ run "staging_runtime_isolation" {
       google_project_iam_member.outbox_relay_trace_writer.member == "serviceAccount:${google_service_account.outbox_relay.email}",
       google_project_iam_member.outbox_relay_telemetry_consumer.role == "roles/serviceusage.serviceUsageConsumer",
       google_project_iam_member.outbox_relay_telemetry_consumer.member == "serviceAccount:${google_service_account.outbox_relay.email}",
-      google_secret_manager_secret_iam_member.outbox_relay_database.secret_id == "seqret-database-url",
+      google_secret_manager_secret_iam_member.outbox_relay_database.secret_id == var.outbox_relay_database_url_secret_id,
       google_secret_manager_secret_iam_member.outbox_relay_database.role == "roles/secretmanager.secretAccessor",
       google_secret_manager_secret_iam_member.outbox_relay_database.member == "serviceAccount:${google_service_account.outbox_relay.email}",
       google_cloud_run_v2_job.outbox_relay.template[0].template[0].service_account == google_service_account.outbox_relay.email,
@@ -240,6 +244,9 @@ run "staging_runtime_isolation" {
       google_project_iam_member.worker_vertex_ai_user.role == "roles/aiplatform.user",
       google_project_iam_member.worker_vertex_ai_user.member == "serviceAccount:${google_service_account.worker.email}",
       google_project_iam_member.migration_cloud_sql_client.role == "roles/cloudsql.client",
+      google_secret_manager_secret_iam_member.api_database.secret_id == var.api_database_url_secret_id,
+      google_secret_manager_secret_iam_member.migration_database.secret_id == var.migration_database_url_secret_id,
+      google_secret_manager_secret_iam_member.worker_database.secret_id == var.worker_database_url_secret_id,
       google_secret_manager_secret_iam_member.worker_database.role == "roles/secretmanager.secretAccessor",
       google_secret_manager_secret_iam_member.worker_database.member == "serviceAccount:${google_service_account.worker.email}",
       google_storage_bucket_iam_member.worker_media_objects.role == "roles/storage.objectUser",
@@ -247,6 +254,28 @@ run "staging_runtime_isolation" {
       google_storage_bucket_iam_member.worker_media_objects.member == "serviceAccount:${google_service_account.worker.email}",
     ])
     error_message = "The runtimes must keep their authenticated Cloud SQL, media, and Vertex AI permissions."
+  }
+
+  assert {
+    condition = alltrue([
+      one([
+        for env in google_cloud_run_v2_service.api.template[0].containers[0].env : env.value_source[0].secret_key_ref[0].secret
+        if env.name == "SEQRET_DATABASE_URL"
+      ]) == var.api_database_url_secret_id,
+      one([
+        for env in google_cloud_run_v2_job.migration.template[0].template[0].containers[0].env : env.value_source[0].secret_key_ref[0].secret
+        if env.name == "SEQRET_DATABASE_URL"
+      ]) == var.migration_database_url_secret_id,
+      one([
+        for env in google_cloud_run_v2_service.worker.template[0].containers[0].env : env.value_source[0].secret_key_ref[0].secret
+        if env.name == "SEQRET_DATABASE_URL"
+      ]) == var.worker_database_url_secret_id,
+      one([
+        for env in google_cloud_run_v2_job.outbox_relay.template[0].template[0].containers[0].env : env.value_source[0].secret_key_ref[0].secret
+        if env.name == "SEQRET_DATABASE_URL"
+      ]) == var.outbox_relay_database_url_secret_id,
+    ])
+    error_message = "Each SQL runtime must receive only its dedicated database secret."
   }
 
   assert {
@@ -569,6 +598,17 @@ run "redis_secret_without_vpc_is_rejected" {
   }
 
   expect_failures = [var.redis_vpc_network]
+}
+
+run "database_secret_ids_must_be_distinct" {
+  command = plan
+
+  variables {
+    api_database_url_secret_id    = "shared-database-url"
+    worker_database_url_secret_id = "shared-database-url"
+  }
+
+  expect_failures = [check.database_secret_ids_are_distinct]
 }
 
 run "redis_vpc_without_secret_is_rejected" {

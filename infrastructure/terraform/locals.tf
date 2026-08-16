@@ -69,9 +69,21 @@ locals {
   })
 
   api_secret_environment = merge(
-    { SEQRET_DATABASE_URL = var.database_url_secret_id },
+    { SEQRET_DATABASE_URL = var.api_database_url_secret_id },
     var.redis_url_secret_id == null ? {} : { SEQRET_REDIS_URL = var.redis_url_secret_id },
   )
+}
+
+check "database_secret_ids_are_distinct" {
+  assert {
+    condition = length(toset([
+      var.migration_database_url_secret_id,
+      var.api_database_url_secret_id,
+      var.worker_database_url_secret_id,
+      var.outbox_relay_database_url_secret_id,
+    ])) == 4
+    error_message = "Migration, API, worker, and Outbox relay database secret IDs must be distinct."
+  }
 }
 
 check "cloud_run_name_lengths" {
