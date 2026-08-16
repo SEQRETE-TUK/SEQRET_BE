@@ -189,7 +189,7 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 | `GET` | `/api/v1/move-jobs/{job_id}/field-brief` | 승인 범위, 일정, 마스킹 경로, 담당자, 현장 조건과 배정 자원 조회 | 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/check-ins` | checklist 전체 확인과 `현장 도착 체크인` 기록 | 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
-| `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 업체에 보고 | 현장기사 | 구현 |
+| `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 보고 | 업체, 현장기사 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 업체, 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/completion-submissions` | 완료 checklist, 실제 근무, 현장 확인과 선택적 완료 미디어 제출 | 대표 현장기사 | 구현 |
 
@@ -668,10 +668,10 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 - `issue_type`: `out_of_scope`, `damage_risk`, `site_blocker`
 - `title`: 1..200자, `description`: 1..2000자
-- 증빙: 1..50장, 현재 현장기사가 촬영하고 upload complete를 마친 `UPLOADED|READY change_evidence`만 허용
+- 증빙: 1..50장, 현재 보고자가 직접 촬영하고 upload complete를 마친 `UPLOADED|READY change_evidence`만 허용
 - `base_scope_version_id`는 현재 잠긴 leaf여야 한다.
-- 현장기사는 금액이나 고객 승인 결과를 입력할 수 없다.
-- 성공: `201`, `{field_issue_id, client_reference, job_id, base_scope_version_id, issue_type, title, description, evidence_media_asset_ids, reported_by_participant_id, reported_at, status: "open", change_proposal_id}`
+- 업체와 현장기사가 이슈를 시작할 수 있다. 현장기사는 금액을 입력할 수 없고, 금액 제안은 업체만, 최종 결정은 고객만 수행한다.
+- 성공: `201`, `{field_issue_id, client_reference, job_id, base_scope_version_id, issue_type, title, description, evidence_media_asset_ids, reported_by_participant_id, reported_by_role, reported_at, status: "open", change_proposal_id}`
 - 작업별 `client_reference`와 정확히 같은 payload 재전송은 기존 결과를 반환하고 다른 payload는 `409`다.
 
 ## 6. 핵심 data model

@@ -189,16 +189,17 @@ async def _ready_evidence(
     created: dict[str, Any],
     *,
     ready: bool = True,
+    role: str = "field_worker",
 ) -> str:
     job_id = created["job"]["id"]
     capture = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions",
-        headers=_headers(created, "field_worker"),
+        headers=_headers(created, role),
     )
     assert capture.status_code == 201
     upload = await client.post(
         f"/api/v1/move-jobs/{job_id}/capture-sessions/{capture.json()['id']}/media-assets/upload",
-        headers=_headers(created, "field_worker"),
+        headers=_headers(created, role),
         json={
             "room_zone_id": created["job"]["locations"][0]["room_zones"][0]["id"],
             "media_purpose": "change_evidence",
@@ -237,11 +238,12 @@ async def _report_issue(
     media_id: str,
     *,
     payload: dict[str, Any] | None = None,
+    role: str = "field_worker",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     command = payload or _issue_payload(created, base_id, media_id)
     response = await client.post(
         f"/api/v1/move-jobs/{created['job']['id']}/field-issues",
-        headers=_headers(created, "field_worker"),
+        headers=_headers(created, role),
         json=command,
     )
     assert response.status_code == 201
@@ -302,6 +304,7 @@ async def test_field_issue_change_proposal_clarification_and_approval(
     issues_url = f"/api/v1/move-jobs/{job_id}/field-issues"
 
     assert issue["status"] == "open"
+    assert issue["reported_by_role"] == "field_worker"
     assert issue["evidence_media_asset_ids"] == [media_id]
     replayed_issue = await client.post(
         issues_url,
@@ -583,13 +586,48 @@ async def test_field_change_permissions_stale_inputs_and_provider_failures(
     issue_payload = _issue_payload(created, base_id, media_id)
     issues_url = f"/api/v1/move-jobs/{created['job']['id']}/field-issues"
 
+    company_media_id = await _ready_evidence(
+        client,
+        factory,
+        created,
+        ready=False,
+        role="company_manager",
+    )
+    company_issue, company_command = await _report_issue(
+        client,
+        created,
+        base_id,
+        company_media_id,
+        payload=_issue_payload(created, base_id, company_media_id),
+        role="company_manager",
+    )
+    assert company_issue["reported_by_role"] == "company_manager"
+    company_replay = await client.post(
+        issues_url,
+        headers=_headers(created, "company_manager"),
+        json=company_command,
+    )
+    assert company_replay.status_code == 201
+    assert company_replay.json()["field_issue_id"] == company_issue["field_issue_id"]
     assert (
         await client.post(
             issues_url,
-            headers=_headers(created, "company_manager"),
-            json=issue_payload,
+            headers=_headers(created, "customer"),
+            json={
+                **issue_payload,
+                "client_reference": str(uuid4()),
+            },
         )
     ).status_code == 403
+    cross_actor_evidence = await client.post(
+        issues_url,
+        headers=_headers(created, "company_manager"),
+        json={
+            **issue_payload,
+            "client_reference": str(uuid4()),
+        },
+    )
+    assert cross_actor_evidence.status_code == 409
     assert (
         await client.post(
             issues_url,
@@ -875,7 +913,17 @@ async def test_field_change_service_maps_integrity_and_missing_resources(
         description=issue.description,
         evidence_media_asset_ids=(uuid4(),),
     )
-    session.scalar = AsyncMock(side_effect=[None])
+    session.scalar = AsyncMock(side_effect=[None, None])
+    with pytest.raises(FieldChangeNotFoundError):
+        await create_field_issue(
+            session,
+            issue.job_id,
+            issue.reported_by_participant_id,
+            command,
+        )
+    session.scalar = AsyncMock(
+        side_effect=[None, SimpleNamespace(role=ParticipantRole.FIELD_WORKER)]
+    )
     scalars = MagicMock()
     scalars.all.return_value = [
         cast(Any, type("Asset", (), {"id": command.evidence_media_asset_ids[0]})())
@@ -1005,6 +1053,7 @@ async def test_field_change_defensive_state_branches(
         "_issue_evidence_ids",
         AsyncMock(return_value=()),
     )
+    session.scalar = AsyncMock(return_value=ParticipantRole.FIELD_WORKER)
     response = await field_change_service._field_issue_response(
         session,
         issue,

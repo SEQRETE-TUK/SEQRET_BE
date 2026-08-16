@@ -1,6 +1,7 @@
 """Commands and frontend screen view for field issues and change proposals."""
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -197,6 +198,15 @@ async def _field_issue_response(
     if proposal is None:
         proposal = await _proposal_for_issue(session, issue.id)
     detail, request = proposal if proposal is not None else (None, None)
+    reported_by_role = cast(
+        ParticipantRole,
+        await session.scalar(
+            select(JobParticipant.role).where(
+                JobParticipant.id == issue.reported_by_participant_id,
+                JobParticipant.job_id == issue.job_id,
+            )
+        ),
+    )
     return FieldIssueResponse(
         field_issue_id=issue.id,
         client_reference=issue.client_reference,
@@ -207,6 +217,7 @@ async def _field_issue_response(
         description=issue.description,
         evidence_media_asset_ids=await _issue_evidence_ids(session, issue.id),
         reported_by_participant_id=issue.reported_by_participant_id,
+        reported_by_role=reported_by_role,
         reported_at=_aware(issue.created_at),
         status=_issue_status(request),
         change_proposal_id=detail.change_request_id if detail is not None else None,
@@ -235,7 +246,7 @@ async def create_field_issue(
     participant_id: UUID,
     command: FieldIssueCreate,
 ) -> FieldIssueResponse:
-    """Persist one replay-safe worker report with validated change evidence."""
+    """Persist one replay-safe field report with same-actor validated evidence."""
 
     existing = await session.scalar(
         select(FieldIssue)
@@ -252,7 +263,17 @@ async def create_field_issue(
         raise FieldChangeConflictError(command.client_reference)
 
     await _require_open_job(session, job_id)
-    await _require_participant(session, job_id, participant_id, ParticipantRole.FIELD_WORKER)
+    participant = await session.scalar(
+        select(JobParticipant).where(
+            JobParticipant.id == participant_id,
+            JobParticipant.job_id == job_id,
+            JobParticipant.role.in_(
+                {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}
+            ),
+        )
+    )
+    if participant is None:
+        raise FieldChangeNotFoundError(job_id)
     await _require_current_locked_scope(session, job_id, command.base_scope_version_id)
     evidence = (
         await session.scalars(

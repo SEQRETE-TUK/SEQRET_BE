@@ -86,7 +86,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 구현 | 확정 배정·현재 잠긴 범위·마스킹 위치·checklist와 체크인 상태를 한 view로 반환 |
 | 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 구현 | 배정된 대표 기사, 예정일 당일과 checklist 전체 확인을 검증하고 정확 replay 허용 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 signed upload URL 발급 | 전환 | 기존 capture 3단계와 `StoragePort` 재사용; frontend path 단순화 |
-| 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 기사 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 제안 전에는 READY 필수 |
+| 현장 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 보고자 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 업체·기사 시작 가능, 제안 전 READY 필수 |
 
 ### 4.2 승인된 추가 P0 화면 2개
 
@@ -146,7 +146,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 차량·인력 선택 원자 확정과 현장기사 알림 생성 | 업체 배차 CTA의 멱등 command |
 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 배정 기사에게 현재 범위·일정·현장 조건·checklist 제공 | 현장기사 상세 화면의 실행 계약; 신뢰 source 없는 연락 URI는 `null` |
 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 예정일 당일 checklist 전체 확인과 도착 기록 | 현장기사 체크인 CTA의 멱등 command |
-| `POST /api/v1/move-jobs/{job_id}/field-issues` | 현장기사가 잠긴 범위에 무가격 이슈·READY 증거 보고 | 현장기사 이슈 화면의 실행 계약 |
+| `POST /api/v1/move-jobs/{job_id}/field-issues` | 업체·현장기사가 잠긴 범위에 무가격 이슈·READY 증거 보고 | 현장 이슈 화면의 실행 계약 |
 | `GET /api/v1/move-jobs/{job_id}/field-issues` | 업체·현장기사의 이슈와 제안 처리 상태 조회 | 업체 후속 처리와 기사 상태 복구에 사용 |
 | `POST /api/v1/move-jobs/{job_id}/change-proposals` | 업체가 이슈를 변경 범위·원화 견적 제안으로 전환 | 업체 현장 변경 command 실행 계약 |
 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 고객·업체 변경 사유·증거 preview·견적·결정 기록 조회 | 고객 현장 변경 화면의 실행 계약 |
