@@ -9,13 +9,18 @@ from pydantic import JsonValue
 
 from app.contracts import (
     AIProviderPort,
+    AnalysisCarryDistanceCondition,
+    AnalysisFloorCondition,
     AnalysisRequest,
     AnalysisResult,
     AnalysisRunId,
+    AnalysisSourceContext,
     CachePort,
     CaptureSessionId,
     DomainEvent,
     DomainEventType,
+    DraftItem,
+    DraftLocationCondition,
     EventBusPort,
     EventId,
     IdempotencyKey,
@@ -260,6 +265,312 @@ async def test_ai_fake_returns_versioned_result_once() -> None:
             request=request.model_copy(update={"object_keys": ("jobs/1/other.jpg",)}),
             idempotency_key=key,
             timeout_seconds=30,
+        )
+
+
+def _analysis_source_context(media_asset_id: MediaAssetId) -> AnalysisSourceContext:
+    return AnalysisSourceContext(
+        media_asset_id=media_asset_id,
+        location_id=uuid4(),
+        location_kind="origin",
+        room_zone_id=uuid4(),
+    )
+
+
+def _analysis_v2_item(
+    media_asset_id: MediaAssetId,
+    *,
+    item_key: str = "box",
+    quantity: int | None = 4,
+    unit: str | None = "개",
+) -> DraftItem:
+    return DraftItem(
+        item_key=item_key,
+        description="이삿짐 상자 4개",
+        name="이삿짐 상자",
+        quantity=quantity,
+        unit=unit,
+        work_note="완충 포장",
+        confidence=0.91,
+        source_media_asset_ids=(media_asset_id,),
+    )
+
+
+def _analysis_v2_location(
+    media_asset_id: MediaAssetId,
+    *,
+    location_id: UUID | None = None,
+    location_kind: str = "origin",
+    source_media_asset_ids: tuple[MediaAssetId, ...] | None = None,
+) -> DraftLocationCondition:
+    return DraftLocationCondition(
+        location_id=location_id or uuid4(),
+        location_kind=location_kind,  # type: ignore[arg-type]
+        residence_type="studio",
+        floor=AnalysisFloorCondition(status="known", value=3),
+        elevator="available",
+        stairs="not_required",
+        parking_access="restricted",
+        carry_distance=AnalysisCarryDistanceCondition(status="known", value_m=35),
+        access_note="골목 진입 확인 필요",
+        confidence=0.74,
+        review_required_fields=("parking_access",),
+        source_media_asset_ids=(media_asset_id,)
+        if source_media_asset_ids is None
+        else source_media_asset_ids,
+    )
+
+
+def _analysis_v2_result(
+    media_asset_id: MediaAssetId,
+    *,
+    draft_items: tuple[DraftItem, ...] | None = None,
+    review_required_items: tuple[DraftItem, ...] = (),
+    location_condition_suggestions: tuple[DraftLocationCondition, ...] | None = None,
+) -> AnalysisResult:
+    return AnalysisResult(
+        analysis_run_id=AnalysisRunId(uuid4()),
+        capture_session_id=CaptureSessionId(uuid4()),
+        model_name="fake-model",
+        model_version="2",
+        prompt_version="scope-v2",
+        result_schema_version=2,
+        draft_items=((_analysis_v2_item(media_asset_id),) if draft_items is None else draft_items),
+        review_required_items=review_required_items,
+        location_condition_suggestions=(
+            (_analysis_v2_location(media_asset_id),)
+            if location_condition_suggestions is None
+            else location_condition_suggestions
+        ),
+    )
+
+
+def test_analysis_v2_contract_preserves_structured_items_and_location_risks() -> None:
+    media_asset_id = MediaAssetId(uuid4())
+    context = _analysis_source_context(media_asset_id)
+    request = AnalysisRequest(
+        analysis_run_id=AnalysisRunId(uuid4()),
+        capture_session_id=CaptureSessionId(uuid4()),
+        source_media_asset_ids=(media_asset_id,),
+        object_keys=("jobs/1/opaque-object",),
+        content_types=("video/mp4",),
+        model_name="fake-model",
+        model_version="2",
+        prompt_version="scope-v2",
+        requested_result_schema_version=2,
+        source_contexts=(context,),
+    )
+    review_item = _analysis_v2_item(
+        media_asset_id,
+        item_key="air-conditioner",
+        quantity=None,
+        unit=None,
+    )
+    result = _analysis_v2_result(
+        media_asset_id,
+        review_required_items=(review_item,),
+    )
+
+    assert request.source_contexts == (context,)
+    assert result.draft_items[0].quantity == 4
+    assert result.review_required_items[0].quantity is None
+    assert result.location_condition_suggestions[0].carry_distance.value_m == 35
+
+
+def test_analysis_request_v2_requires_matching_source_contexts() -> None:
+    media_asset_id = MediaAssetId(uuid4())
+    base = {
+        "analysis_run_id": AnalysisRunId(uuid4()),
+        "capture_session_id": CaptureSessionId(uuid4()),
+        "source_media_asset_ids": (media_asset_id,),
+        "object_keys": ("jobs/1/opaque-object",),
+        "content_types": ("image/jpeg",),
+        "model_name": "fake-model",
+        "model_version": "2",
+        "prompt_version": "scope-v2",
+        "requested_result_schema_version": 2,
+    }
+    with pytest.raises(ValueError, match="requires source contexts"):
+        AnalysisRequest.model_validate(base)
+    with pytest.raises(ValueError, match="must match source media asset IDs in order"):
+        AnalysisRequest.model_validate(
+            {
+                **base,
+                "source_contexts": (_analysis_source_context(MediaAssetId(uuid4())),),
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("floor", {"status": "known", "value": None}, "known floor requires a value"),
+        (
+            "floor",
+            {"status": "unknown", "value": 3},
+            "unknown floor forbids one",
+        ),
+        (
+            "carry_distance",
+            {"status": "known", "value_m": None},
+            "known carry distance requires a value",
+        ),
+        (
+            "carry_distance",
+            {"status": "unknown", "value_m": 35},
+            "unknown distance forbids one",
+        ),
+    ],
+)
+def test_analysis_location_numeric_conditions_require_explicit_knowledge(
+    field: str,
+    value: dict[str, object],
+    message: str,
+) -> None:
+    condition_type = AnalysisFloorCondition if field == "floor" else AnalysisCarryDistanceCondition
+    with pytest.raises(ValueError, match=message):
+        condition_type.model_validate(value)
+
+
+def test_analysis_location_condition_rejects_duplicate_review_fields_and_sources() -> None:
+    media_asset_id = MediaAssetId(uuid4())
+    base = _analysis_v2_location(media_asset_id).model_dump()
+    with pytest.raises(ValueError, match="review-required fields must be unique"):
+        DraftLocationCondition.model_validate(
+            {**base, "review_required_fields": ("floor", "floor")}
+        )
+    with pytest.raises(ValueError, match="source media asset IDs must be unique"):
+        DraftLocationCondition.model_validate(
+            {**base, "source_media_asset_ids": (media_asset_id, media_asset_id)}
+        )
+
+
+def test_analysis_result_v1_rejects_v2_only_fields() -> None:
+    media_asset_id = MediaAssetId(uuid4())
+    with pytest.raises(ValueError, match="cannot contain structured item fields"):
+        AnalysisResult(
+            analysis_run_id=AnalysisRunId(uuid4()),
+            capture_session_id=CaptureSessionId(uuid4()),
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="scope-v1",
+            draft_items=(_analysis_v2_item(media_asset_id),),
+        )
+    with pytest.raises(ValueError, match="cannot contain location conditions"):
+        AnalysisResult(
+            analysis_run_id=AnalysisRunId(uuid4()),
+            capture_session_id=CaptureSessionId(uuid4()),
+            model_name="fake-model",
+            model_version="1",
+            prompt_version="scope-v1",
+            draft_items=(),
+            location_condition_suggestions=(_analysis_v2_location(media_asset_id),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("draft_items", "review_items", "message"),
+    [
+        (
+            (
+                DraftItem(
+                    item_key="box",
+                    description="상자",
+                    confidence=0.8,
+                    source_media_asset_ids=(MediaAssetId(UUID(int=1)),),
+                ),
+            ),
+            (),
+            "items require name",
+        ),
+        (
+            (_analysis_v2_item(MediaAssetId(UUID(int=1)), quantity=None, unit=None),),
+            (),
+            "draft items require quantity and unit",
+        ),
+        (
+            (),
+            (_analysis_v2_item(MediaAssetId(UUID(int=1)), quantity=1, unit=None),),
+            "quantity and unit must be present together",
+        ),
+        (
+            (_analysis_v2_item(MediaAssetId(UUID(int=1))),),
+            (_analysis_v2_item(MediaAssetId(UUID(int=2)), item_key="box"),),
+            "item keys must be unique",
+        ),
+        (
+            (
+                _analysis_v2_item(MediaAssetId(UUID(int=1))).model_copy(
+                    update={"source_media_asset_ids": ()}
+                ),
+            ),
+            (),
+            "require unique source media asset IDs",
+        ),
+        (
+            (
+                _analysis_v2_item(MediaAssetId(UUID(int=1))).model_copy(
+                    update={
+                        "source_media_asset_ids": (
+                            MediaAssetId(UUID(int=1)),
+                            MediaAssetId(UUID(int=1)),
+                        )
+                    }
+                ),
+            ),
+            (),
+            "require unique source media asset IDs",
+        ),
+    ],
+)
+def test_analysis_result_v2_rejects_invalid_item_shapes(
+    draft_items: tuple[DraftItem, ...],
+    review_items: tuple[DraftItem, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _analysis_v2_result(
+            MediaAssetId(UUID(int=9)),
+            draft_items=draft_items,
+            review_required_items=review_items,
+            location_condition_suggestions=(),
+        )
+
+
+def test_analysis_result_v2_rejects_invalid_location_suggestions() -> None:
+    media_asset_id = MediaAssetId(uuid4())
+    location_id = uuid4()
+    origin = _analysis_v2_location(
+        media_asset_id,
+        location_id=location_id,
+        location_kind="origin",
+    )
+    with pytest.raises(ValueError, match="location suggestions must be unique"):
+        _analysis_v2_result(
+            media_asset_id,
+            location_condition_suggestions=(
+                origin,
+                _analysis_v2_location(
+                    media_asset_id,
+                    location_id=location_id,
+                    location_kind="destination",
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match="location suggestions must be unique"):
+        _analysis_v2_result(
+            media_asset_id,
+            location_condition_suggestions=(
+                origin,
+                _analysis_v2_location(media_asset_id, location_kind="origin"),
+            ),
+        )
+    with pytest.raises(ValueError, match="require source media asset IDs"):
+        _analysis_v2_result(
+            media_asset_id,
+            location_condition_suggestions=(
+                _analysis_v2_location(media_asset_id, source_media_asset_ids=()),
+            ),
         )
 
 
