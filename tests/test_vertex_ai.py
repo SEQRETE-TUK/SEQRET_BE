@@ -1,5 +1,6 @@
 """B-04 Vertex AI (google-genai) adapter tests without network access."""
 
+import logging
 import time
 from uuid import uuid4
 
@@ -239,3 +240,65 @@ async def test_analyze_rejects_nonpositive_timeout() -> None:
 
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
         await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=0)
+
+
+def _logging_provider(models: StubModels) -> tuple[VertexAIProvider, list[logging.LogRecord]]:
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger(f"test.vertex.{uuid4().hex}")
+    logger.handlers = [_Capture()]
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    provider = VertexAIProvider(
+        project="seqret-dev",
+        location="us-central1",
+        bucket_name="seqret-media",
+        prompt_library=PROMPTS,
+        client_factory=lambda: StubClient(models),
+        logger=logger,
+    )
+    return provider, records
+
+
+@pytest.mark.anyio
+async def test_provider_call_failure_records_stage_and_status() -> None:
+    provider, records = _logging_provider(StubModels(error=FakeAPIError(503)))
+
+    with pytest.raises(ProviderError):
+        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+    assert len(records) == 1
+    fields = records[0].__dict__
+    assert fields["event"] == "analysis_provider_failure"
+    assert fields["analysis_stage"] == "provider_call"
+    assert fields["provider_status"] == 503
+    assert fields["error_kind"] == "unavailable"
+    assert fields["retryable"] == "true"
+
+
+@pytest.mark.anyio
+async def test_malformed_and_source_index_failures_are_distinguished() -> None:
+    malformed_provider, malformed_records = _logging_provider(StubModels(text="not json"))
+    with pytest.raises(ProviderError, match="malformed"):
+        await malformed_provider.analyze(
+            request=_request(), idempotency_key=KEY, timeout_seconds=30
+        )
+
+    index_output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+        ' "source_indices": [9]}]}'
+    )
+    index_provider, index_records = _logging_provider(StubModels(text=index_output))
+    with pytest.raises(ProviderError, match="unknown media"):
+        await index_provider.analyze(
+            request=_request(source_count=1), idempotency_key=KEY, timeout_seconds=30
+        )
+
+    assert malformed_records[0].__dict__["analysis_stage"] == "parse"
+    assert malformed_records[0].__dict__["retryable"] == "false"
+    assert index_records[0].__dict__["analysis_stage"] == "source_map"
+    assert index_records[0].__dict__["provider_status"] == 0

@@ -11,7 +11,9 @@ Idempotency is intentionally enforced at the analysis-run persistence layer
 """
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping
+from enum import StrEnum
 from typing import Protocol, cast
 
 from google import genai
@@ -21,6 +23,15 @@ from pydantic import BaseModel, Field, ValidationError
 from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import IdempotencyKey
+
+
+class AnalysisFailureStage(StrEnum):
+    """Stage that a Vertex analysis failure is attributed to, for diagnosis."""
+
+    PROMPT = "prompt"
+    PROVIDER_CALL = "provider_call"
+    PARSE = "parse"
+    SOURCE_MAP = "source_map"
 
 
 class _RawDraftItem(BaseModel):
@@ -64,7 +75,9 @@ def _default_client(project: str, location: str) -> GenAIClient:  # pragma: no c
     return cast(GenAIClient, genai.Client(vertexai=True, project=project, location=location))
 
 
-def _map_provider_error(error: Exception) -> ProviderError:
+def _classify_provider_error(error: Exception) -> tuple[ProviderErrorKind, bool, int]:
+    """Map a provider exception to (kind, retryable, http_status) without its body."""
+
     if isinstance(error, errors.APIError):
         code = error.code or 0
         if code == 400:
@@ -79,9 +92,8 @@ def _map_provider_error(error: Exception) -> ProviderError:
             kind, retryable = ProviderErrorKind.DEADLINE_EXCEEDED, True
         else:
             kind, retryable = ProviderErrorKind.UNAVAILABLE, True
-    else:
-        kind, retryable = ProviderErrorKind.UNAVAILABLE, True
-    return ProviderError(kind, "analysis provider call failed", retryable=retryable)
+        return kind, retryable, code
+    return ProviderErrorKind.UNAVAILABLE, True, 0
 
 
 class VertexAIProvider:
@@ -95,11 +107,36 @@ class VertexAIProvider:
         bucket_name: str,
         prompt_library: Mapping[str, str],
         client_factory: Callable[[], GenAIClient] | None = None,
+        logger: logging.Logger | None = None,
     ) -> None:
         factory = client_factory or (lambda: _default_client(project, location))
         self._client = factory()
         self._bucket_name = bucket_name
         self._prompts = dict(prompt_library)
+        self._logger = logger
+
+    def _log_failure(
+        self,
+        stage: AnalysisFailureStage,
+        kind: ProviderErrorKind,
+        retryable: bool,
+        *,
+        status_code: int = 0,
+    ) -> None:
+        """Emit one structured failure event; never logs media, prompts, or URIs."""
+
+        if self._logger is None:
+            return
+        self._logger.warning(
+            "analysis provider failure",
+            extra={
+                "event": "analysis_provider_failure",
+                "analysis_stage": stage.value,
+                "provider_status": status_code,
+                "error_kind": kind.value,
+                "retryable": "true" if retryable else "false",
+            },
+        )
 
     async def analyze(
         self,
@@ -115,6 +152,7 @@ class VertexAIProvider:
         try:
             prompt = self._prompts[request.prompt_version]
         except KeyError as error:
+            self._log_failure(AnalysisFailureStage.PROMPT, ProviderErrorKind.INVALID_INPUT, False)
             raise ProviderError(
                 ProviderErrorKind.INVALID_INPUT,
                 "analysis prompt version is not configured",
@@ -148,19 +186,28 @@ class VertexAIProvider:
         try:
             text = await asyncio.wait_for(asyncio.to_thread(call), timeout=timeout_seconds)
         except TimeoutError as error:
+            self._log_failure(
+                AnalysisFailureStage.PROVIDER_CALL, ProviderErrorKind.DEADLINE_EXCEEDED, True
+            )
             raise ProviderError(
                 ProviderErrorKind.DEADLINE_EXCEEDED,
                 "analysis provider call failed",
                 retryable=True,
             ) from error
         except Exception as error:
-            raise _map_provider_error(error) from error
+            kind, retryable, status_code = _classify_provider_error(error)
+            self._log_failure(
+                AnalysisFailureStage.PROVIDER_CALL, kind, retryable, status_code=status_code
+            )
+            raise ProviderError(
+                kind, "analysis provider call failed", retryable=retryable
+            ) from error
 
         return self._to_result(request, text)
 
-    @staticmethod
-    def _to_result(request: AnalysisRequest, text: str | None) -> AnalysisResult:
+    def _to_result(self, request: AnalysisRequest, text: str | None) -> AnalysisResult:
         if text is None:
+            self._log_failure(AnalysisFailureStage.PARSE, ProviderErrorKind.UNAVAILABLE, True)
             raise ProviderError(
                 ProviderErrorKind.UNAVAILABLE,
                 "analysis provider returned no content",
@@ -169,6 +216,7 @@ class VertexAIProvider:
         try:
             raw = _RawAnalysisOutput.model_validate_json(text)
         except ValidationError as error:
+            self._log_failure(AnalysisFailureStage.PARSE, ProviderErrorKind.INVALID_INPUT, False)
             raise ProviderError(
                 ProviderErrorKind.INVALID_INPUT,
                 "analysis provider returned malformed output",
@@ -182,6 +230,9 @@ class VertexAIProvider:
             sources = []
             for index in item.source_indices:
                 if index < 0 or index >= source_count:
+                    self._log_failure(
+                        AnalysisFailureStage.SOURCE_MAP, ProviderErrorKind.INVALID_INPUT, False
+                    )
                     raise ProviderError(
                         ProviderErrorKind.INVALID_INPUT,
                         "analysis output referenced unknown media",

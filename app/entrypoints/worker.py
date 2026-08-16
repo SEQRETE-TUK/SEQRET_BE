@@ -84,6 +84,7 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                     location=settings.analysis_location,
                     bucket_name=bucket_name,
                     prompt_library=ANALYSIS_PROMPT_LIBRARY,
+                    logger=observability.logger,
                 )
             yield
 
