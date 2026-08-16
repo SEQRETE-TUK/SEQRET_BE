@@ -282,7 +282,6 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert customer_view.json()["scope"]["exclusion_count"] == 1
     assert customer_view.json()["company_confirmed_at"] is not None
     assert customer_view.json()["customer_confirmed_at"] is None
-
     revision_url = f"{review_url}/revision-request"
     revision_command = {
         "scope_version_id": proposal["result_scope_version_id"],
@@ -422,6 +421,54 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
         "customer",
         "company_manager",
     }
+
+
+@pytest.mark.anyio
+async def test_scope_review_exposes_structured_v2_items(
+    scope_review_api: tuple[
+        AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FakeObjectStorage,
+    ],
+) -> None:
+    client, _, _ = scope_review_api
+    created = await _create_job(client)
+    zone_id = created["job"]["locations"][0]["room_zones"][0]["id"]
+    created_scope = await client.post(
+        f"/api/v1/move-jobs/{created['job']['id']}/scope-versions",
+        headers=_headers(_secret(created, "customer")),
+        json={
+            "content": {
+                "schema_version": 2,
+                "items": [
+                    {
+                        "item_key": "fridge",
+                        "room_zone_id": zone_id,
+                        "name": "냉장고",
+                        "quantity": 1,
+                        "unit": "대",
+                        "work_note": "문 분리 확인",
+                        "review_status": "confirmed",
+                        "source": "customer",
+                    }
+                ],
+            }
+        },
+    )
+    assert created_scope.status_code == 201
+    response = await client.get(
+        f"/api/v1/move-jobs/{created['job']['id']}/scope-review",
+        headers=_headers(_secret(created, "company_manager")),
+    )
+    assert response.status_code == 200
+    item = response.json()["scope"]["room_groups"][0]["items"][0]
+    assert item["description"] == "냉장고"
+    assert item["name"] == "냉장고"
+    assert item["quantity"] == 1
+    assert item["unit"] == "대"
+    assert item["work_note"] == "문 분리 확인"
+    assert item["review_status"] == "confirmed"
+    assert item["source"] == "customer"
 
 
 @pytest.mark.anyio

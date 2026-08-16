@@ -20,7 +20,14 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.primitives import utc_now
 from app.main import create_app
 from app.modules.scope.models import ScopeApproval, ScopeVersion
-from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItem,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
+    ScopeVersionCreate,
+)
 from app.modules.scope.service import (
     ScopeApprovalConflictError,
     ScopeResourceNotFoundError,
@@ -246,6 +253,69 @@ def test_scope_content_rejects_duplicate_keys_and_invalid_shape() -> None:
                 }
             }
         )
+
+    structured = ScopeItemV2(
+        item_key="sofa-v2",
+        room_zone_id=zone_id,
+        name="3인 소파",
+        quantity=1,
+        unit="개",
+        work_note="포장 후 운반",
+        review_status=ScopeItemReviewStatus.CONFIRMED,
+        source=ScopeItemSource.CUSTOMER,
+    )
+    assert ScopeContent(schema_version=2, items=(structured,)).schema_version == 2
+    with pytest.raises(ValidationError, match="shape must match schema version"):
+        ScopeContent(schema_version=1, items=(structured,))
+    with pytest.raises(ValidationError, match="require quantity and unit"):
+        ScopeItemV2(
+            item_key="unknown-box",
+            room_zone_id=zone_id,
+            name="박스",
+            review_status=ScopeItemReviewStatus.CONFIRMED,
+            source=ScopeItemSource.AI,
+        )
+    pending = ScopeItemV2(
+        item_key="unknown-box",
+        room_zone_id=zone_id,
+        name="박스",
+        review_status=ScopeItemReviewStatus.REVIEW_REQUIRED,
+        source=ScopeItemSource.AI,
+    )
+    assert pending.quantity is None
+
+
+@pytest.mark.anyio
+async def test_scope_api_preserves_structured_v2_snapshot(scope_client: AsyncClient) -> None:
+    created = await _create_job(scope_client)
+    zone_id = created["job"]["locations"][0]["room_zones"][0]["id"]
+    response = await scope_client.post(
+        f"/api/v1/move-jobs/{created['job']['id']}/scope-versions",
+        headers=_headers(_secret(created, "customer")),
+        json={
+            "content": {
+                "schema_version": 2,
+                "items": [
+                    {
+                        "item_key": "fridge",
+                        "room_zone_id": zone_id,
+                        "name": "양문형 냉장고",
+                        "quantity": 1,
+                        "unit": "대",
+                        "work_note": "문 분리 여부 확인",
+                        "review_status": "confirmed",
+                        "source": "customer",
+                    }
+                ],
+            }
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["content"]["schema_version"] == 2
+    assert body["content"]["items"][0]["quantity"] == 1
+    assert body["content"]["items"][0]["unit"] == "대"
+    assert body["content"]["items"][0]["work_note"] == "문 분리 여부 확인"
 
 
 @pytest.mark.anyio

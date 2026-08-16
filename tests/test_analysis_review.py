@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx2 import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -22,6 +23,7 @@ from app.modules.analysis_review.schemas import AnalysisReviewComplete
 from app.modules.analysis_review.service import (
     AnalysisReviewConflictError,
     _aware,
+    _current_items,
     get_analysis_review,
 )
 from app.modules.analysis_workflow.models import (
@@ -30,6 +32,12 @@ from app.modules.analysis_workflow.models import (
 )
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.scope.models import ScopeVersion
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
+)
 from app.modules.scope.service import import_analysis_draft
 from app.platform.db import Base, create_session_factory
 
@@ -261,6 +269,75 @@ def _complete_payload(seed: ReviewSeed) -> dict[str, Any]:
     }
 
 
+def test_analysis_review_v2_shape_validation() -> None:
+    base = {"item_key": "box", "room_zone_id": str(uuid4())}
+    for invalid in (base, {**base, "description": "박스", "name": "박스"}):
+        with pytest.raises(ValidationError, match="exactly one schema shape"):
+            AnalysisReviewComplete.model_validate(
+                {"source_scope_version_id": str(uuid4()), "items": [invalid]}
+            )
+    with pytest.raises(ValidationError, match="require name, quantity, and unit"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "scope_schema_version": 2,
+                "items": [{**base, "name": "박스"}],
+            }
+        )
+    with pytest.raises(ValidationError, match="legacy review items cannot include work note"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "items": [{**base, "description": "박스", "work_note": "포장"}],
+            }
+        )
+    with pytest.raises(ValidationError, match="shape must match scope schema version"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "scope_schema_version": 2,
+                "items": [{**base, "description": "박스"}],
+            }
+        )
+
+
+def test_analysis_review_maps_unconfirmed_ai_v2_item() -> None:
+    capture_session_id = CaptureSessionId(uuid4())
+    media_asset_id = MediaAssetId(uuid4())
+    result = AnalysisResult(
+        analysis_run_id=AnalysisRunId(uuid4()),
+        capture_session_id=capture_session_id,
+        model_name="fake",
+        model_version="v1",
+        prompt_version="inventory-v2",
+        draft_items=(),
+        review_required_items=(
+            DraftItem(
+                item_key="box",
+                description="수량 확인 필요 박스",
+                confidence=0.4,
+                source_media_asset_ids=(media_asset_id,),
+            ),
+        ),
+    )
+    content = ScopeContent(
+        schema_version=2,
+        items=(
+            ScopeItemV2(
+                item_key="box",
+                room_zone_id=uuid4(),
+                name="박스",
+                review_status=ScopeItemReviewStatus.REVIEW_REQUIRED,
+                source=ScopeItemSource.AI,
+            ),
+        ),
+    )
+    item = _current_items(result, content)[0]
+    assert item.source == "ai"
+    assert item.scope_source is ScopeItemSource.AI
+    assert item.review_required is True
+
+
 @pytest.mark.anyio
 async def test_review_query_is_customer_scoped_and_provider_neutral(
     review_harness: ReviewHarness,
@@ -348,6 +425,12 @@ async def test_review_complete_is_atomic_idempotent_and_detects_conflicts(
         "item_key": "customer-lamp",
         "room_zone_id": str(seed.zone_ids[0]),
         "description": "고객이 추가한 스탠드",
+        "name": "고객이 추가한 스탠드",
+        "quantity": None,
+        "unit": None,
+        "work_note": None,
+        "review_status": "confirmed",
+        "scope_source": "customer",
         "source": "customer",
         "confidence": None,
         "review_required": False,
@@ -376,6 +459,38 @@ async def test_review_complete_is_atomic_idempotent_and_detects_conflicts(
             select(func.count()).select_from(ScopeVersion).where(ScopeVersion.job_id == seed.job_id)
         )
     assert count == 2
+
+
+@pytest.mark.anyio
+async def test_review_completion_creates_structured_v2_scope(
+    review_harness: ReviewHarness,
+) -> None:
+    created = await _create_job(review_harness)
+    seed = await _seed_completed_analysis(review_harness, created)
+    response = await review_harness.client.post(
+        f"/api/v1/move-jobs/{seed.job_id}/analysis-review/complete",
+        headers=_headers(_secret(created, "customer")),
+        json={
+            "source_scope_version_id": str(seed.source_scope_version_id),
+            "scope_schema_version": 2,
+            "items": [
+                {
+                    "item_key": "wardrobe",
+                    "room_zone_id": str(seed.zone_ids[1]),
+                    "name": "큰 옷장",
+                    "quantity": 1,
+                    "unit": "개",
+                    "work_note": "분해 후 재조립",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope_schema_version"] == 2
+    assert body["items"][0]["quantity"] == 1
+    assert body["items"][0]["unit"] == "개"
+    assert body["items"][0]["scope_source"] == "customer"
 
 
 @pytest.mark.anyio

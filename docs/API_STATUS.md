@@ -198,7 +198,7 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 - 완료 포함 화면 단위 view와 command는 구현됨
 - 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
-- 후속 공통 `JobHeader`, `ScopeLineV2`; `QuoteSnapshot`과 signed 범위·완료 preview v1은 구현됨
+- 후속 공통 `JobHeader`; `ScopeItemV2`, `QuoteSnapshot`과 signed 범위·완료 preview는 구현됨
 - 수량·단위·작업 메모가 필요한 AI `AnalysisResult` v2와 B consumer 영향 확인
 
 ### frontend 연동
