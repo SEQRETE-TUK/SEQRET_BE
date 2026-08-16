@@ -546,7 +546,7 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
                 session,
                 uuid4(),
                 uuid4(),
-                CaptureSessionCreate(**MEDIA_CONSENT_PAYLOAD),
+                CaptureSessionCreate.model_validate(MEDIA_CONSENT_PAYLOAD),
                 retention_days=30,
             )
         with pytest.raises(CaptureResourceNotFoundError):
@@ -554,7 +554,7 @@ async def test_capture_enforces_actor_purpose_zone_and_input_boundaries(
                 session,
                 UUID(job["id"]),
                 uuid4(),
-                CaptureSessionCreate(**MEDIA_CONSENT_PAYLOAD),
+                CaptureSessionCreate.model_validate(MEDIA_CONSENT_PAYLOAD),
                 retention_days=30,
             )
 
