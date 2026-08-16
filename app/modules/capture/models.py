@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -55,6 +56,7 @@ class CaptureSession(Base):
         Boolean,
         nullable=False,
         default=False,
+        server_default=false(),
     )
     media_retention_days: Mapped[int | None] = mapped_column(Integer)
     media_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

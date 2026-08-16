@@ -57,21 +57,8 @@ def upgrade() -> None:
 
     if op.get_bind().dialect.name == "sqlite":
         with op.batch_alter_table("capture_session") as batch:
-            batch.alter_column(
-                "privacy_notice_acknowledged",
-                existing_type=sa.Boolean(),
-                existing_nullable=False,
-                server_default=None,
-            )
             batch.create_check_constraint("capture_media_consent_snapshot", _CONSENT_CHECK)
     else:
-        op.alter_column(
-            "capture_session",
-            "privacy_notice_acknowledged",
-            existing_type=sa.Boolean(),
-            existing_nullable=False,
-            server_default=None,
-        )
         op.create_check_constraint(
             "capture_media_consent_snapshot",
             "capture_session",

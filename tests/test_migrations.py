@@ -240,6 +240,16 @@ def test_media_consent_migration_marks_legacy_and_enforces_complete_snapshot(
                 },
             )
         with engine.begin() as connection:
+            omitted_acknowledgement_id = uuid4().hex
+            connection.execute(
+                table.insert(),
+                {
+                    "id": omitted_acknowledgement_id,
+                    "job_id": job_id,
+                    "created_by_participant_id": participant_id,
+                    "created_at": now,
+                },
+            )
             connection.execute(
                 table.insert(),
                 {
@@ -253,6 +263,15 @@ def test_media_consent_migration_marks_legacy_and_enforces_complete_snapshot(
                     "created_at": now,
                 },
             )
+            omitted_acknowledgement = (
+                connection.execute(select(table).where(table.c.id == omitted_acknowledgement_id))
+                .mappings()
+                .one()
+            )
+        assert omitted_acknowledgement["privacy_notice_acknowledged"] is False
+        assert omitted_acknowledgement["media_consent_policy_version"] is None
+        assert omitted_acknowledgement["media_retention_days"] is None
+        assert omitted_acknowledgement["media_consented_at"] is None
 
         command.downgrade(configuration, ALEMBIC_MEDIA_CONSENT_PREVIOUS)
         columns = {column["name"] for column in inspect(engine).get_columns("capture_session")}
