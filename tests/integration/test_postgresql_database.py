@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from asyncio import Barrier, Event, SelectorEventLoop, create_task, gather, wait_for
+from asyncio import Barrier, Event, SelectorEventLoop, create_task, gather, sleep, wait_for
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -22,7 +22,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
-from app.contracts.ai import AnalysisResult, DraftItem
+from app.contracts.ai import AnalysisResult, AnalysisTaskV1, DraftItem
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.maintenance import (
@@ -75,8 +75,11 @@ from app.modules.analysis_workflow.models import (
     CaptureAnalysisDispatch,
     CaptureAnalysisStatus,
 )
+from app.modules.analysis_workflow.schemas import CaptureAnalysisResponse
 from app.modules.analysis_workflow.service import (
     claim_capture_analyses,
+    complete_capture_analysis,
+    start_capture_analysis,
     submit_capture_analysis,
 )
 from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
@@ -1226,6 +1229,172 @@ async def test_capture_analysis_submit_and_claim_are_exclusive_on_postgresql() -
                 assert len(rows) == 1
                 assert rows[0].dispatch_attempt_count == 1
                 assert len(submitted_events) == 1
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_capture_analysis_completion_is_exactly_once_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        operation_time = datetime.now(UTC)
+        trace_id = TraceId("0123456789abcdef0123456789abcdef")
+        command_data = MoveJobCreate(
+            title="Capture analysis completion race",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Field worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            asset_id = uuid4()
+            async with transactional_session(factory) as session:
+                created = await create_move_job(session, command_data)
+                participant_id = next(
+                    participant.id
+                    for participant in created.job.participants
+                    if participant.role is ParticipantRole.CUSTOMER
+                )
+                capture = await create_capture_session(
+                    session,
+                    created.job.id,
+                    participant_id,
+                )
+                session.add(
+                    MediaAsset(
+                        id=asset_id,
+                        capture_session_id=capture.id,
+                        room_zone_id=created.job.locations[0].room_zones[0].id,
+                        media_purpose=MediaPurpose.INVENTORY,
+                        status=MediaAssetStatus.READY,
+                        object_key=f"jobs/{created.job.id}/analysis/{asset_id}",
+                        content_type="image/jpeg",
+                        expected_size_bytes=10,
+                        actual_size_bytes=10,
+                        sha256_hex="a" * 64,
+                        generation="7",
+                        uploaded_at=operation_time,
+                    )
+                )
+
+            async with transactional_session(factory) as session:
+                submitted = await submit_capture_analysis(
+                    session,
+                    created.job.id,
+                    capture.id,
+                    participant_id,
+                    trace_id=trace_id,
+                    now=operation_time,
+                )
+            task = AnalysisTaskV1(
+                analysis_run_id=AnalysisRunId(submitted.analysis_run_id),
+                capture_session_id=CaptureSessionId(capture.id),
+                attempt_count=1,
+                trace_id=trace_id,
+            )
+            result = AnalysisResult(
+                analysis_run_id=AnalysisRunId(submitted.analysis_run_id),
+                capture_session_id=CaptureSessionId(capture.id),
+                model_name="fake-vision",
+                model_version="2026-08",
+                prompt_version="inventory-1",
+                draft_items=(
+                    DraftItem(
+                        item_key="bed",
+                        description="퀸 침대",
+                        confidence=0.9,
+                        source_media_asset_ids=(MediaAssetId(asset_id),),
+                    ),
+                ),
+            )
+            async with transactional_session(factory) as session:
+                assert await start_capture_analysis(session, task)
+
+            first_holds_lock = Event()
+            release_first = Event()
+
+            async def complete_first() -> CaptureAnalysisResponse:
+                async with transactional_session(factory) as session:
+                    response = await complete_capture_analysis(
+                        session,
+                        task,
+                        result,
+                        completed_at=operation_time + timedelta(minutes=1),
+                    )
+                    first_holds_lock.set()
+                    await release_first.wait()
+                    return response
+
+            async def complete_second() -> CaptureAnalysisResponse:
+                await first_holds_lock.wait()
+                async with transactional_session(factory) as session:
+                    return await complete_capture_analysis(
+                        session,
+                        task,
+                        result,
+                        completed_at=operation_time + timedelta(minutes=2),
+                    )
+
+            first_completion = create_task(complete_first())
+            second_completion = create_task(complete_second())
+            await wait_for(first_holds_lock.wait(), timeout=5)
+            await sleep(0)
+            assert not second_completion.done()
+            release_first.set()
+            first_response, second_response = await wait_for(
+                gather(first_completion, second_completion),
+                timeout=10,
+            )
+
+            async with factory() as session:
+                dispatch = await session.get(
+                    CaptureAnalysisDispatch,
+                    submitted.analysis_run_id,
+                )
+                scope_versions = (
+                    await session.scalars(
+                        select(ScopeVersion).where(
+                            ScopeVersion.source_analysis_run_id == submitted.analysis_run_id
+                        )
+                    )
+                ).all()
+                completed_events = (
+                    await session.scalars(
+                        select(OutboxEvent).where(
+                            OutboxEvent.event_type == DomainEventType.ANALYSIS_COMPLETED_V1,
+                            OutboxEvent.aggregate_id == created.job.id,
+                        )
+                    )
+                ).all()
+
+            assert dispatch is not None
+            assert dispatch.status is CaptureAnalysisStatus.COMPLETED
+            assert first_response.scope_version_id == second_response.scope_version_id
+            assert first_response.scope_version_id == dispatch.scope_version_id
+            assert len(scope_versions) == 1
+            assert scope_versions[0].id == dispatch.scope_version_id
+            assert len(completed_events) == 1
         finally:
             await engine.dispose()
 
