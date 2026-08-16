@@ -28,12 +28,14 @@ from app.modules.analysis.handler import (
 )
 from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
 from app.modules.analysis.service import (
+    AnalysisRetryDecision,
     AnalysisRunConflictError,
     AnalysisRunNotFoundError,
     fail_analysis_run,
     get_analysis_run_attempt_count,
     get_analysis_run_failure,
     get_analysis_run_status,
+    prepare_analysis_retry,
     reopen_analysis_run,
     start_analysis_run,
 )
@@ -389,3 +391,93 @@ async def test_reopen_missing_run_raises(
     async with transactional_session(factory) as session:
         with pytest.raises(AnalysisRunNotFoundError):
             await reopen_analysis_run(session, analysis_run_id=AnalysisRunId(uuid4()), now=NOW)
+
+
+@pytest.mark.anyio
+async def test_prepare_retry_reopens_failed_run_below_limit(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    await _fail_fresh_run(factory, request)
+
+    async with transactional_session(factory) as session:
+        decision = await prepare_analysis_retry(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            max_attempts=5,
+            now=NOW,
+        )
+
+    assert decision is AnalysisRetryDecision.RETRY
+    async with transactional_session(factory) as session:
+        run = await session.get(AiAnalysisRun, request.analysis_run_id)
+    assert run is not None
+    assert run.status is AnalysisRunStatus.RUNNING
+    assert run.attempt_count == 2
+    assert run.failure_code is None
+
+
+@pytest.mark.anyio
+async def test_prepare_retry_terminal_when_attempts_exhausted(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    request = _request()
+    await _fail_fresh_run(factory, request)
+
+    async with transactional_session(factory) as session:
+        decision = await prepare_analysis_retry(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            max_attempts=1,
+            now=NOW,
+        )
+
+    assert decision is AnalysisRetryDecision.TERMINAL
+    async with transactional_session(factory) as session:
+        run = await session.get(AiAnalysisRun, request.analysis_run_id)
+    assert run is not None
+    assert run.status is AnalysisRunStatus.FAILED
+    assert run.attempt_count == 1
+    assert run.failure_code == ProviderErrorKind.UNAVAILABLE.value
+
+
+@pytest.mark.anyio
+async def test_prepare_retry_terminal_when_run_absent(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with transactional_session(factory) as session:
+        decision = await prepare_analysis_retry(
+            session,
+            analysis_run_id=AnalysisRunId(uuid4()),
+            max_attempts=5,
+            now=NOW,
+        )
+    assert decision is AnalysisRetryDecision.TERMINAL
+
+
+@pytest.mark.anyio
+async def test_prepare_retry_on_already_reopened_run_defers_to_retry(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Models the concurrent-redelivery loser: the first delivery already reopened
+    # the run to RUNNING, so the second must return RETRY (defer to the 503) and
+    # never finalize the dispatch, leaving the attempt count untouched.
+    request = _request()
+    await _fail_fresh_run(factory, request)
+    async with transactional_session(factory) as session:
+        await reopen_analysis_run(session, analysis_run_id=request.analysis_run_id, now=NOW)
+
+    async with transactional_session(factory) as session:
+        decision = await prepare_analysis_retry(
+            session,
+            analysis_run_id=request.analysis_run_id,
+            max_attempts=5,
+            now=NOW,
+        )
+
+    assert decision is AnalysisRetryDecision.RETRY
+    async with transactional_session(factory) as session:
+        run = await session.get(AiAnalysisRun, request.analysis_run_id)
+    assert run is not None
+    assert run.status is AnalysisRunStatus.RUNNING
+    assert run.attempt_count == 2

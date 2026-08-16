@@ -8,6 +8,7 @@ caller-managed session so a worker owns the transaction and retry policy.
 """
 
 from datetime import datetime
+from enum import StrEnum
 from typing import cast
 from uuid import UUID
 
@@ -24,6 +25,13 @@ from app.contracts.primitives import (
     TraceId,
 )
 from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
+
+
+class AnalysisRetryDecision(StrEnum):
+    """Whether a redelivery should be retried or finalized as terminal."""
+
+    RETRY = "retry"
+    TERMINAL = "terminal"
 
 
 class AnalysisRunNotFoundError(RuntimeError):
@@ -276,3 +284,39 @@ async def reopen_analysis_run(
     run.prompt_version = None
     run.result_schema_version = None
     await session.flush()
+
+
+async def prepare_analysis_retry(
+    session: AsyncSession,
+    *,
+    analysis_run_id: AnalysisRunId,
+    max_attempts: int,
+    now: datetime,
+) -> AnalysisRetryDecision:
+    """Atomically snapshot the run and prepare a bounded retry under a row lock.
+
+    Concurrent redeliveries serialize on the run row: a ``FAILED`` run below the
+    attempt limit reopens a fresh ``RUNNING`` attempt and returns ``RETRY``. A
+    later delivery that finds the run already reopened (``RUNNING``) — or in any
+    other non-terminal state — also returns ``RETRY``, so it never finalizes the
+    dispatch the first delivery already prepared for retry. Only an absent run or
+    a ``FAILED`` run that has exhausted ``max_attempts`` is ``TERMINAL``.
+    """
+
+    run = await _load_run_for_update(session, analysis_run_id)
+    if run is None:
+        return AnalysisRetryDecision.TERMINAL
+    if run.status is AnalysisRunStatus.FAILED:
+        if run.attempt_count >= max_attempts:
+            return AnalysisRetryDecision.TERMINAL
+        run.status = AnalysisRunStatus.RUNNING
+        run.attempt_count += 1
+        run.started_at = now
+        run.completed_at = None
+        run.failure_code = None
+        run.model_name = None
+        run.model_version = None
+        run.prompt_version = None
+        run.result_schema_version = None
+        await session.flush()
+    return AnalysisRetryDecision.RETRY
