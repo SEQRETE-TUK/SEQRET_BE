@@ -6,8 +6,13 @@ from uuid import UUID
 
 from pydantic import ConfigDict, Field, model_validator
 
+from app.contracts.ai import DraftLocationCondition
 from app.contracts.model import ContractModel
-from app.modules.scope.schemas import ScopeItemReviewStatus, ScopeItemSource
+from app.modules.scope.schemas import (
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeLocationConditions,
+)
 
 
 class AnalysisReviewRequestModel(ContractModel):
@@ -49,6 +54,7 @@ class AnalysisReviewComplete(AnalysisReviewRequestModel):
         tuple[AnalysisReviewItemInput, ...],
         Field(min_length=1, max_length=500),
     ]
+    location_conditions: tuple[ScopeLocationConditions, ...] = ()
 
     @model_validator(mode="after")
     def require_unique_item_keys(self) -> Self:
@@ -58,6 +64,14 @@ class AnalysisReviewComplete(AnalysisReviewRequestModel):
         item_keys = [item.item_key for item in self.items]
         if len(item_keys) != len(set(item_keys)):
             raise ValueError("analysis review item keys must be unique")
+        if self.scope_schema_version == 1 and self.location_conditions:
+            raise ValueError("analysis review v1 cannot contain location conditions")
+        location_ids = [item.location_id for item in self.location_conditions]
+        location_kinds = [item.kind for item in self.location_conditions]
+        if len(location_ids) != len(set(location_ids)):
+            raise ValueError("analysis review location IDs must be unique")
+        if len(location_kinds) != len(set(location_kinds)):
+            raise ValueError("analysis review location kinds must be unique")
         return self
 
 
@@ -103,3 +117,5 @@ class AnalysisReviewResponse(ContractModel):
     review_completed_at: datetime | None
     zones: tuple[AnalysisReviewZone, ...]
     items: tuple[AnalysisReviewItem, ...]
+    location_conditions: tuple[ScopeLocationConditions, ...]
+    location_condition_suggestions: tuple[DraftLocationCondition, ...]

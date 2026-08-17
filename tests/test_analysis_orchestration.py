@@ -22,6 +22,7 @@ from app.modules.analysis.orchestration import (
     request_analysis,
 )
 from app.modules.capture.models import MediaAsset
+from app.modules.move_job.models import Location, LocationKind, RoomZone
 from app.platform.db import Base, create_session_factory, transactional_session
 
 NOW = datetime(2026, 8, 13, 11, 0, tzinfo=UTC)
@@ -47,6 +48,7 @@ async def factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSessi
 
 def _asset(
     capture_id: UUID,
+    room_zone_id: UUID,
     *,
     purpose: MediaPurpose,
     status: MediaAssetStatus,
@@ -54,7 +56,7 @@ def _asset(
 ) -> MediaAsset:
     return MediaAsset(
         capture_session_id=capture_id,
-        room_zone_id=uuid4(),
+        room_zone_id=room_zone_id,
         media_purpose=purpose,
         status=status,
         # Production object keys are opaque UUID paths and do not carry a suffix.
@@ -69,22 +71,54 @@ def _asset(
     )
 
 
+def _location_and_zone(
+    job_id: UUID,
+    *,
+    kind: LocationKind,
+    name: str,
+) -> tuple[Location, RoomZone]:
+    location_id = uuid4()
+    location = Location(
+        id=location_id,
+        job_id=job_id,
+        kind=kind,
+        label=name,
+    )
+    zone = RoomZone(
+        id=uuid4(),
+        location_id=location_id,
+        name=name,
+        sort_order=0,
+    )
+    return location, zone
+
+
 @pytest.mark.anyio
 async def test_build_request_uses_ordered_ready_inventory_media(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     capture_id = uuid4()
+    location, zone = _location_and_zone(
+        uuid4(),
+        kind=LocationKind.ORIGIN,
+        name="거실",
+    )
     first = _asset(
-        capture_id, purpose=MediaPurpose.INVENTORY, status=MediaAssetStatus.READY, created_at=NOW
+        capture_id,
+        zone.id,
+        purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.READY,
+        created_at=NOW,
     )
     second = _asset(
         capture_id,
+        zone.id,
         purpose=MediaPurpose.INVENTORY,
         status=MediaAssetStatus.READY,
         created_at=NOW + timedelta(seconds=1),
     )
     async with transactional_session(factory) as session:
-        session.add_all([second, first])
+        session.add_all([location, zone, second, first])
 
     run_id = AnalysisRunId(uuid4())
     async with transactional_session(factory) as session:
@@ -101,27 +135,65 @@ async def test_build_request_uses_ordered_ready_inventory_media(
     assert request.object_keys == (first.object_key, second.object_key)
     assert request.source_media_asset_ids == (first.id, second.id)
     assert request.content_types == (first.content_type, second.content_type)
+    assert request.requested_result_schema_version == 2
+    assert [context.media_asset_id for context in request.source_contexts] == [
+        first.id,
+        second.id,
+    ]
+    assert all(context.location_id == location.id for context in request.source_contexts)
+    assert all(context.location_kind == "origin" for context in request.source_contexts)
+    assert all(context.room_zone_id == zone.id for context in request.source_contexts)
 
 
 @pytest.mark.anyio
-async def test_build_request_ignores_non_ready_or_non_inventory(
+async def test_build_request_uses_ready_inventory_and_condition_media_only(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     capture_id = uuid4()
+    job_id = uuid4()
+    origin, origin_zone = _location_and_zone(
+        job_id,
+        kind=LocationKind.ORIGIN,
+        name="출발지 거실",
+    )
+    destination, destination_zone = _location_and_zone(
+        job_id,
+        kind=LocationKind.DESTINATION,
+        name="도착지 현관",
+    )
     ready_inventory = _asset(
-        capture_id, purpose=MediaPurpose.INVENTORY, status=MediaAssetStatus.READY, created_at=NOW
+        capture_id,
+        origin_zone.id,
+        purpose=MediaPurpose.INVENTORY,
+        status=MediaAssetStatus.READY,
+        created_at=NOW,
     )
     pending_inventory = _asset(
         capture_id,
+        origin_zone.id,
         purpose=MediaPurpose.INVENTORY,
         status=MediaAssetStatus.UPLOADED,
         created_at=NOW,
     )
     ready_condition = _asset(
-        capture_id, purpose=MediaPurpose.CONDITION, status=MediaAssetStatus.READY, created_at=NOW
+        capture_id,
+        destination_zone.id,
+        purpose=MediaPurpose.CONDITION,
+        status=MediaAssetStatus.READY,
+        created_at=NOW + timedelta(seconds=1),
     )
     async with transactional_session(factory) as session:
-        session.add_all([ready_inventory, pending_inventory, ready_condition])
+        session.add_all(
+            [
+                origin,
+                origin_zone,
+                destination,
+                destination_zone,
+                ready_inventory,
+                pending_inventory,
+                ready_condition,
+            ]
+        )
 
     async with transactional_session(factory) as session:
         request = await build_analysis_request(
@@ -133,8 +205,15 @@ async def test_build_request_ignores_non_ready_or_non_inventory(
             prompt_version="inventory-1",
         )
 
-    assert request.object_keys == (ready_inventory.object_key,)
-    assert request.content_types == (ready_inventory.content_type,)
+    assert request.object_keys == (ready_inventory.object_key, ready_condition.object_key)
+    assert request.content_types == (
+        ready_inventory.content_type,
+        ready_condition.content_type,
+    )
+    assert [context.location_kind for context in request.source_contexts] == [
+        "origin",
+        "destination",
+    ]
 
 
 @pytest.mark.anyio

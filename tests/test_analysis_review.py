@@ -15,7 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.config import AppEnvironment, Settings
-from app.contracts.ai import AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisCarryDistanceCondition,
+    AnalysisFloorCondition,
+    AnalysisResult,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
 from app.main import create_app
@@ -127,6 +133,8 @@ def _participant_id(created: dict[str, Any], role: str) -> UUID:
 async def _seed_completed_analysis(
     harness: ReviewHarness,
     created: dict[str, Any],
+    *,
+    structured: bool = False,
 ) -> ReviewSeed:
     job_id = UUID(created["job"]["id"])
     participant_id = _participant_id(created, "customer")
@@ -136,29 +144,80 @@ async def _seed_completed_analysis(
     analysis_run_id = uuid4()
     ready_ids = (uuid4(), uuid4())
     failed_id = uuid4()
-    result = AnalysisResult(
-        analysis_run_id=AnalysisRunId(analysis_run_id),
-        capture_session_id=CaptureSessionId(capture_session_id),
-        model_name="private-model",
-        model_version="private-version",
-        prompt_version="private-prompt",
-        draft_items=(
-            DraftItem(
-                item_key="box",
-                description="이삿짐 상자 4개",
-                confidence=0.91,
-                source_media_asset_ids=(MediaAssetId(ready_ids[0]),),
+    if structured:
+        location_id = UUID(created["job"]["locations"][0]["id"])
+        result = AnalysisResult(
+            analysis_run_id=AnalysisRunId(analysis_run_id),
+            capture_session_id=CaptureSessionId(capture_session_id),
+            model_name="private-model",
+            model_version="private-version",
+            prompt_version="private-prompt-v2",
+            result_schema_version=2,
+            draft_items=(
+                DraftItem(
+                    item_key="box",
+                    description="이삿짐 상자 4개",
+                    name="이삿짐 상자",
+                    quantity=4,
+                    unit="개",
+                    work_note="완충 포장",
+                    confidence=0.91,
+                    source_media_asset_ids=(MediaAssetId(ready_ids[0]),),
+                ),
             ),
-        ),
-        review_required_items=(
-            DraftItem(
-                item_key="wardrobe",
-                description="확인이 필요한 옷장",
-                confidence=0.42,
-                source_media_asset_ids=(MediaAssetId(ready_ids[1]),),
+            review_required_items=(
+                DraftItem(
+                    item_key="wardrobe",
+                    description="수량 확인이 필요한 옷장",
+                    name="옷장",
+                    confidence=0.42,
+                    source_media_asset_ids=(MediaAssetId(ready_ids[1]),),
+                ),
             ),
-        ),
-    )
+            location_condition_suggestions=(
+                DraftLocationCondition(
+                    location_id=location_id,
+                    location_kind="origin",
+                    residence_type="studio",
+                    floor=AnalysisFloorCondition(status="known", value=3),
+                    elevator="available",
+                    stairs="not_required",
+                    parking_access="restricted",
+                    carry_distance=AnalysisCarryDistanceCondition(
+                        status="known",
+                        value_m=35,
+                    ),
+                    access_note="골목 진입 확인 필요",
+                    confidence=0.74,
+                    review_required_fields=("parking_access",),
+                    source_media_asset_ids=(MediaAssetId(ready_ids[1]),),
+                ),
+            ),
+        )
+    else:
+        result = AnalysisResult(
+            analysis_run_id=AnalysisRunId(analysis_run_id),
+            capture_session_id=CaptureSessionId(capture_session_id),
+            model_name="private-model",
+            model_version="private-version",
+            prompt_version="private-prompt",
+            draft_items=(
+                DraftItem(
+                    item_key="box",
+                    description="이삿짐 상자 4개",
+                    confidence=0.91,
+                    source_media_asset_ids=(MediaAssetId(ready_ids[0]),),
+                ),
+            ),
+            review_required_items=(
+                DraftItem(
+                    item_key="wardrobe",
+                    description="확인이 필요한 옷장",
+                    confidence=0.42,
+                    source_media_asset_ids=(MediaAssetId(ready_ids[1]),),
+                ),
+            ),
+        )
     async with harness.factory.begin() as session:
         session.add(
             CaptureSession(
@@ -297,6 +356,54 @@ def test_analysis_review_v2_shape_validation() -> None:
                 "source_scope_version_id": str(uuid4()),
                 "scope_schema_version": 2,
                 "items": [{**base, "description": "박스"}],
+            }
+        )
+    conditions = {
+        "residence_type": "unknown",
+        "floor": {"status": "unknown", "value": None},
+        "elevator": "unknown",
+        "stairs": "unknown",
+        "parking_access": "unknown",
+        "carry_distance": {"status": "unknown", "value_m": None},
+        "access_note": None,
+    }
+    location_id = uuid4()
+    location = {
+        "location_id": str(location_id),
+        "kind": "origin",
+        "conditions": conditions,
+    }
+    with pytest.raises(ValidationError, match="v1 cannot contain location conditions"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "items": [{**base, "description": "박스"}],
+                "location_conditions": [location],
+            }
+        )
+    structured_item = {**base, "name": "박스", "quantity": 1, "unit": "개"}
+    with pytest.raises(ValidationError, match="location IDs must be unique"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "scope_schema_version": 2,
+                "items": [structured_item],
+                "location_conditions": [
+                    location,
+                    {**location, "kind": "destination"},
+                ],
+            }
+        )
+    with pytest.raises(ValidationError, match="location kinds must be unique"):
+        AnalysisReviewComplete.model_validate(
+            {
+                "source_scope_version_id": str(uuid4()),
+                "scope_schema_version": 2,
+                "items": [structured_item],
+                "location_conditions": [
+                    location,
+                    {**location, "location_id": str(uuid4())},
+                ],
             }
         )
 
@@ -491,6 +598,86 @@ async def test_review_completion_creates_structured_v2_scope(
     assert body["items"][0]["quantity"] == 1
     assert body["items"][0]["unit"] == "개"
     assert body["items"][0]["scope_source"] == "customer"
+    assert body["location_conditions"][0]["conditions"]["residence_type"] == "unknown"
+
+
+@pytest.mark.anyio
+async def test_review_v2_exposes_and_persists_customer_edited_location_conditions(
+    review_harness: ReviewHarness,
+) -> None:
+    created = await _create_job(review_harness)
+    seed = await _seed_completed_analysis(review_harness, created, structured=True)
+    headers = _headers(_secret(created, "customer"))
+    url = f"/api/v1/move-jobs/{seed.job_id}/analysis-review"
+
+    loaded = await review_harness.client.get(url, headers=headers)
+    assert loaded.status_code == 200
+    source = loaded.json()
+    assert source["scope_schema_version"] == 2
+    assert source["items"][0]["name"] == "이삿짐 상자"
+    assert source["items"][0]["quantity"] == 4
+    assert source["items"][1]["review_required"] is True
+    suggestion = source["location_condition_suggestions"][0]
+    assert suggestion["confidence"] == 0.74
+    assert suggestion["review_required_fields"] == ["parking_access"]
+    assert suggestion["source_media_asset_ids"]
+    assert source["location_conditions"][0]["conditions"]["residence_type"] == "studio"
+
+    location_id = created["job"]["locations"][0]["id"]
+    payload: dict[str, Any] = {
+        "source_scope_version_id": str(seed.source_scope_version_id),
+        "scope_schema_version": 2,
+        "items": [
+            {
+                "item_key": "box",
+                "room_zone_id": str(seed.zone_ids[0]),
+                "name": "이삿짐 상자",
+                "quantity": 5,
+                "unit": "개",
+                "work_note": "완충 포장",
+            },
+            {
+                "item_key": "wardrobe",
+                "room_zone_id": str(seed.zone_ids[1]),
+                "name": "옷장",
+                "quantity": 1,
+                "unit": "개",
+                "work_note": "분해 후 재조립",
+            },
+        ],
+        "location_conditions": [
+            {
+                "location_id": location_id,
+                "kind": "origin",
+                "conditions": {
+                    "residence_type": "studio",
+                    "floor": {"status": "known", "value": 3},
+                    "elevator": "available",
+                    "stairs": "not_required",
+                    "parking_access": "available",
+                    "carry_distance": {"status": "known", "value_m": 20},
+                    "access_note": "고객이 주차 가능 확인",
+                },
+            }
+        ],
+    }
+    completed = await review_harness.client.post(f"{url}/complete", headers=headers, json=payload)
+    assert completed.status_code == 200
+    body = completed.json()
+    assert body["review_scope_version_id"] is not None
+    assert body["items"][0]["quantity"] == 5
+    assert body["items"][1]["review_status"] == "confirmed"
+    assert body["location_conditions"][0]["conditions"]["parking_access"] == "available"
+    assert body["location_conditions"][0]["conditions"]["carry_distance"]["value_m"] == 20
+    assert body["location_condition_suggestions"] == source["location_condition_suggestions"]
+
+    replay = await review_harness.client.post(
+        f"{url}/complete",
+        headers=headers,
+        json={**payload, "items": list(reversed(payload["items"]))},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["review_scope_version_id"] == body["review_scope_version_id"]
 
 
 @pytest.mark.anyio
@@ -524,6 +711,38 @@ async def test_review_rejects_not_ready_stale_and_invalid_commands(
     foreign_zone["items"][0]["room_zone_id"] = other["job"]["locations"][0]["room_zones"][0]["id"]
     assert (
         await review_harness.client.post(url, headers=headers, json=foreign_zone)
+    ).status_code == 404
+
+    foreign_location = {
+        "source_scope_version_id": str(seed.source_scope_version_id),
+        "scope_schema_version": 2,
+        "items": [
+            {
+                "item_key": "box",
+                "room_zone_id": str(seed.zone_ids[0]),
+                "name": "박스",
+                "quantity": 1,
+                "unit": "개",
+            }
+        ],
+        "location_conditions": [
+            {
+                "location_id": str(uuid4()),
+                "kind": "origin",
+                "conditions": {
+                    "residence_type": "unknown",
+                    "floor": {"status": "unknown", "value": None},
+                    "elevator": "unknown",
+                    "stairs": "unknown",
+                    "parking_access": "unknown",
+                    "carry_distance": {"status": "unknown", "value_m": None},
+                    "access_note": None,
+                },
+            }
+        ],
+    }
+    assert (
+        await review_harness.client.post(url, headers=headers, json=foreign_location)
     ).status_code == 404
 
     newer_capture_id = uuid4()

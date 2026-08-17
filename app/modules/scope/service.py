@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.actor import ParticipantRole
-from app.contracts.ai import AnalysisResult
+from app.contracts.ai import AnalysisResult, DraftLocationCondition
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
@@ -41,6 +41,9 @@ from app.modules.scope.schemas import (
     ScopeApprovalResult,
     ScopeContent,
     ScopeItem,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
     ScopeLocationConditions,
     ScopeVersionCreate,
     ScopeVersionResponse,
@@ -474,6 +477,11 @@ async def import_analysis_draft(
     source_media_ids = {
         media_asset_id for item in result_items for media_asset_id in item.source_media_asset_ids
     }
+    source_media_ids.update(
+        media_asset_id
+        for suggestion in result.location_condition_suggestions
+        for media_asset_id in suggestion.source_media_asset_ids
+    )
     asset_statement = select(MediaAsset).where(
         MediaAsset.id.in_(source_media_ids),
         MediaAsset.capture_session_id == result.capture_session_id,
@@ -484,7 +492,8 @@ async def import_analysis_draft(
     if set(assets_by_id) != source_media_ids:
         raise AnalysisDraftInvalidError(result.analysis_run_id)
 
-    scope_items = []
+    scope_items: list[ScopeItem | ScopeItemV2] = []
+    review_required_keys = {item.item_key for item in result.review_required_items}
     for item in result_items:
         room_zone_ids = {
             assets_by_id[media_asset_id].room_zone_id
@@ -492,12 +501,79 @@ async def import_analysis_draft(
         }
         if len(room_zone_ids) != 1:
             raise AnalysisDraftInvalidError(item.item_key)
-        scope_items.append(
-            ScopeItem(
-                item_key=item.item_key,
-                room_zone_id=room_zone_ids.pop(),
-                description=item.description,
+        room_zone_id = room_zone_ids.pop()
+        if result.result_schema_version == 1:
+            scope_items.append(
+                ScopeItem(
+                    item_key=item.item_key,
+                    room_zone_id=room_zone_id,
+                    description=item.description,
+                )
             )
+        else:
+            scope_items.append(
+                ScopeItemV2(
+                    item_key=item.item_key,
+                    room_zone_id=room_zone_id,
+                    name=cast(str, item.name),
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    work_note=item.work_note,
+                    review_status=(
+                        ScopeItemReviewStatus.REVIEW_REQUIRED
+                        if item.item_key in review_required_keys
+                        else ScopeItemReviewStatus.CONFIRMED
+                    ),
+                    source=ScopeItemSource.AI,
+                )
+            )
+
+    location_conditions: tuple[ScopeLocationConditions, ...] = ()
+    if result.result_schema_version == 2:
+        locations = (
+            await session.scalars(
+                select(Location)
+                .where(Location.job_id == job_id)
+                .order_by(Location.kind, Location.id)
+            )
+        ).all()
+        locations_by_id = {location.id: location for location in locations}
+        if not locations_by_id:
+            raise AnalysisDraftInvalidError(result.analysis_run_id)
+        suggestions_by_id = {
+            suggestion.location_id: suggestion
+            for suggestion in result.location_condition_suggestions
+        }
+        zone_location_rows = (
+            await session.execute(
+                select(RoomZone.id, RoomZone.location_id).where(
+                    RoomZone.id.in_({asset.room_zone_id for asset in assets_by_id.values()})
+                )
+            )
+        ).all()
+        zone_locations: dict[UUID, UUID] = {row[0]: row[1] for row in zone_location_rows}
+        if len(zone_locations) != len({asset.room_zone_id for asset in assets_by_id.values()}):
+            raise AnalysisDraftInvalidError(result.analysis_run_id)
+        for suggestion in result.location_condition_suggestions:
+            location = locations_by_id.get(suggestion.location_id)
+            if location is None or location.kind.value != suggestion.location_kind:
+                raise AnalysisDraftInvalidError(suggestion.location_id)
+            if {
+                zone_locations[assets_by_id[media_asset_id].room_zone_id]
+                for media_asset_id in suggestion.source_media_asset_ids
+            } != {suggestion.location_id}:
+                raise AnalysisDraftInvalidError(suggestion.location_id)
+        location_conditions = tuple(
+            ScopeLocationConditions(
+                location_id=location.id,
+                kind=location.kind,
+                conditions=(
+                    _analysis_location_conditions(suggestions_by_id[location.id])
+                    if location.id in suggestions_by_id
+                    else LocationConditions.model_validate(location.conditions, strict=False)
+                ),
+            )
+            for location in locations
         )
 
     return await create_scope_version(
@@ -506,9 +582,30 @@ async def import_analysis_draft(
         None,
         ScopeVersionCreate(
             parent_version_id=parent_version_id,
-            content=ScopeContent(items=tuple(scope_items)),
+            content=ScopeContent(
+                schema_version=result.result_schema_version,
+                items=tuple(scope_items),
+                location_conditions=location_conditions,
+            ),
         ),
         analysis_source=result,
+    )
+
+
+def _analysis_location_conditions(
+    suggestion: DraftLocationCondition,
+) -> LocationConditions:
+    return LocationConditions.model_validate(
+        {
+            "residence_type": suggestion.residence_type,
+            "floor": suggestion.floor.model_dump(mode="json"),
+            "elevator": suggestion.elevator,
+            "stairs": suggestion.stairs,
+            "parking_access": suggestion.parking_access,
+            "carry_distance": suggestion.carry_distance.model_dump(mode="json"),
+            "access_note": suggestion.access_note,
+        },
+        strict=False,
     )
 
 

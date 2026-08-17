@@ -12,7 +12,7 @@
 - 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 작업별 후보 snapshot 기반 배차·현장기사 알림·브리프·체크인, 현장기사 이슈→업체 변경 제안→고객 결정, 대표기사 완료 제출→업체 요청→고객 확인·문제 신고→문서·보존, 기존 현장 변경요청·완료 확인, 감사·알림 조회와 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `a_16_0001`다. 출·도착지 구조화 조건은 기존 location에 `unknown`으로 안전하게 보강된다. 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `a_19_0001`다. 출·도착지 구조화 조건은 기존 location에 `unknown`으로 안전하게 보강되고 기존 촬영은 동의 미기록 상태로 유지된다. 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
@@ -30,8 +30,8 @@
 - `GET /move-jobs/{job_id}/capture-sessions`는 호출자가 만든 세션만 최신순으로 반환한다. 각 세션의 `media_assets`에서 validation 상태를 복구하고 선택적 `analysis`에서 분석 상태를 이어간다. object key, generation, signed URL과 provider task ID는 이 응답에 없다.
 - 촬영 소유자는 모든 inventory 미디어가 비동기 validation을 마쳐 `READY`가 된 뒤 `POST /move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`을 한 번 호출한다. `202` 응답의 `analysis_run_id`를 보관하고 `GET .../analysis`로 상태를 조회할 수 있다. 제출 뒤 해당 촬영 세션의 새 upload·미완료 upload 확정은 `409`다.
 - 분석 상태는 `pending`, `dispatching`, `queued`, `running`, `completed`, `failed`다. `completed`이면 `scope_version_id`, `failed`이면 provider-neutral `failure_code`와 `retryable`을 사용한다. provider task ID·object key·원본 오류는 FE 계약이 아니다.
-- `GET /move-jobs/{job_id}/analysis-review`는 고객이 가장 최근에 제출한 분석이 `completed`일 때만 공간별 전체·READY·FAILED media 수와 현재 편집 항목을 반환한다. AI 항목에는 신뢰도·검토 필요·source media ID를 제공하지만 model·prompt·provider 정보는 노출하지 않는다.
-- `POST /move-jobs/{job_id}/analysis-review/complete`는 응답의 `source_scope_version_id`와 최종 항목 전체를 받아 고객 편집본을 불변 자식 scope version으로 생성한다. 같은 항목의 재전송은 같은 결과를 반환하고 stale 원본, 다른 내용의 재전송, 다른 참여자가 만든 자식 version은 `409`다. 현재 v1은 항목 key·공간·설명을 지원하며 수량·단위·작업 메모는 AI schema v2 범위다.
+- `GET /move-jobs/{job_id}/analysis-review`는 고객이 가장 최근에 제출한 분석이 `completed`일 때만 공간별 전체·READY·FAILED media 수, v1/v2 편집 품목, 현재 위치조건과 AI 조건 제안을 반환한다. AI 항목·조건에는 신뢰도·검토 필요·source media ID를 제공하지만 model·prompt·provider 정보는 노출하지 않는다.
+- `POST /move-jobs/{job_id}/analysis-review/complete`는 응답의 `source_scope_version_id`, 최종 항목과 선택적 전체 `location_conditions`를 받아 고객 편집본을 불변 자식 scope version으로 생성한다. v2는 이름·수량·단위·작업 메모를 지원하며 AI 위치 제안은 이 command를 거쳐야만 새 범위에 확정된다. 같은 내용의 재전송은 같은 결과를 반환하고 stale 원본, 상충 재전송, 다른 참여자가 만든 자식 version은 `409`다.
 - `GET /move-jobs/{job_id}/scope-review`는 고객과 업체에게 현재 불변 범위, 원화 견적, 포함·제외 작업, 수정요청, 양측 확인 시각과 AI 출처 media preview를 한 번에 반환한다. preview는 READY 객체의 generation-pinned 5분 read URL이며 object key·generation·model·prompt·provider 값은 노출하지 않는다.
 - `POST /move-jobs/{job_id}/scope-proposals`는 업체만 호출한다. 고객 작성 현재 version 또는 고객 수정요청이 열린 제안 version을 source로 새 불변 자식과 견적 snapshot을 만들고 업체 확인을 함께 기록한다. 정확히 같은 payload 재전송만 기존 제안을 반환하며 stale·다른 payload는 `409`다.
 - `POST /move-jobs/{job_id}/scope-review/revision-request`와 `/confirm`은 고객 전용이다. 현재 고객 확인 대기 제안만 수정 요청하거나 확인할 수 있고, 확인은 기존 업체 approval과 합쳐 현재 scope를 잠그고 기존 `scope_locked.v1` event를 기록한다.

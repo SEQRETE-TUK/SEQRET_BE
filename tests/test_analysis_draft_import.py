@@ -14,11 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.contracts.actor import ParticipantRole
-from app.contracts.ai import AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisCarryDistanceCondition,
+    AnalysisFloorCondition,
+    AnalysisResult,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
 from app.modules.capture.models import CaptureSession, MediaAsset
-from app.modules.move_job.models import LocationKind
+from app.modules.move_job.models import Location, LocationKind, RoomZone
 from app.modules.move_job.schemas import (
     LocationCreate,
     MoveJobCreate,
@@ -27,7 +33,14 @@ from app.modules.move_job.schemas import (
 )
 from app.modules.move_job.service import create_move_job
 from app.modules.scope.models import ScopeVersion
-from app.modules.scope.schemas import ScopeContent, ScopeItem, ScopeVersionCreate
+from app.modules.scope.schemas import (
+    ScopeContent,
+    ScopeItem,
+    ScopeItemReviewStatus,
+    ScopeItemSource,
+    ScopeItemV2,
+    ScopeVersionCreate,
+)
 from app.modules.scope.service import (
     AnalysisDraftInvalidError,
     ScopeApprovalConflictError,
@@ -321,6 +334,251 @@ async def test_analysis_import_rejects_invalid_capture_items_and_media(
         await session.flush()
         with pytest.raises(AnalysisDraftInvalidError):
             await import_analysis_draft(session, job_id, result_with(valid_item))
+
+
+def _structured_analysis_result(
+    capture_id: UUID,
+    item_asset_id: UUID,
+    *,
+    location_suggestions: tuple[DraftLocationCondition, ...] = (),
+) -> AnalysisResult:
+    return AnalysisResult(
+        analysis_run_id=AnalysisRunId(uuid4()),
+        capture_session_id=CaptureSessionId(capture_id),
+        model_name="gemini",
+        model_version="2.5",
+        prompt_version="scope-v2",
+        result_schema_version=2,
+        draft_items=(
+            DraftItem(
+                item_key="box",
+                description="이삿짐 상자 4개",
+                name="이삿짐 상자",
+                quantity=4,
+                unit="개",
+                work_note="완충 포장",
+                confidence=0.91,
+                source_media_asset_ids=(MediaAssetId(item_asset_id),),
+            ),
+        ),
+        review_required_items=(
+            DraftItem(
+                item_key="air-conditioner",
+                description="에어컨 철거 여부 확인 필요",
+                name="에어컨",
+                confidence=0.42,
+                source_media_asset_ids=(MediaAssetId(item_asset_id),),
+            ),
+        ),
+        location_condition_suggestions=location_suggestions,
+    )
+
+
+def _location_suggestion(
+    location_id: UUID,
+    source_asset_id: UUID,
+    *,
+    location_kind: str = "origin",
+) -> DraftLocationCondition:
+    return DraftLocationCondition(
+        location_id=location_id,
+        location_kind=location_kind,  # type: ignore[arg-type]
+        residence_type="studio",
+        floor=AnalysisFloorCondition(status="known", value=3),
+        elevator="available",
+        stairs="not_required",
+        parking_access="restricted",
+        carry_distance=AnalysisCarryDistanceCondition(status="known", value_m=35),
+        access_note="골목 진입 확인 필요",
+        confidence=0.74,
+        review_required_fields=("parking_access",),
+        source_media_asset_ids=(MediaAssetId(source_asset_id),),
+    )
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_becomes_structured_scope_with_condition_suggestions(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, zone_id, _, asset_id, condition_asset_id = await _seed_analysis(
+        analysis_database
+    )
+    async with analysis_database() as session:
+        zone = await session.get(RoomZone, zone_id)
+        assert zone is not None
+        location_id = zone.location_id
+    result = _structured_analysis_result(
+        capture_id,
+        asset_id,
+        location_suggestions=(_location_suggestion(location_id, condition_asset_id),),
+    )
+
+    async with analysis_database.begin() as session:
+        imported = await import_analysis_draft(session, job_id, result)
+
+    assert imported.content.schema_version == 2
+    items = {item.item_key: item for item in imported.content.items}
+    box = items["box"]
+    pending = items["air-conditioner"]
+    assert isinstance(box, ScopeItemV2)
+    assert box.quantity == 4
+    assert box.unit == "개"
+    assert box.work_note == "완충 포장"
+    assert box.review_status is ScopeItemReviewStatus.CONFIRMED
+    assert box.source is ScopeItemSource.AI
+    assert isinstance(pending, ScopeItemV2)
+    assert pending.quantity is None
+    assert pending.unit is None
+    assert pending.review_status is ScopeItemReviewStatus.REVIEW_REQUIRED
+    assert imported.content.location_conditions[0].location_id == location_id
+    conditions = imported.content.location_conditions[0].conditions
+    assert conditions.residence_type.value == "studio"
+    assert conditions.floor.value == 3
+    assert conditions.carry_distance.value_m == 35
+    assert imported.analysis_source == result
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_uses_current_location_snapshot_without_suggestion(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, _, _, asset_id, _ = await _seed_analysis(analysis_database)
+
+    async with analysis_database.begin() as session:
+        imported = await import_analysis_draft(
+            session,
+            job_id,
+            _structured_analysis_result(capture_id, asset_id),
+        )
+
+    assert imported.content.schema_version == 2
+    assert imported.content.location_conditions[0].conditions.residence_type.value == "unknown"
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_rejects_unknown_or_mismatched_location_suggestions(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, zone_id, _, asset_id, condition_asset_id = await _seed_analysis(
+        analysis_database
+    )
+    async with analysis_database() as session:
+        zone = await session.get(RoomZone, zone_id)
+        assert zone is not None
+        location_id = zone.location_id
+    invalid_suggestions = (
+        _location_suggestion(uuid4(), condition_asset_id),
+        _location_suggestion(location_id, condition_asset_id, location_kind="destination"),
+    )
+
+    async with analysis_database.begin() as session:
+        for suggestion in invalid_suggestions:
+            with pytest.raises(AnalysisDraftInvalidError):
+                await import_analysis_draft(
+                    session,
+                    job_id,
+                    _structured_analysis_result(
+                        capture_id,
+                        asset_id,
+                        location_suggestions=(suggestion,),
+                    ),
+                )
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_rejects_condition_evidence_from_another_location(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, zone_id, _, asset_id, _ = await _seed_analysis(analysis_database)
+    destination_id = uuid4()
+    destination_zone_id = uuid4()
+    destination_asset_id = uuid4()
+    async with analysis_database.begin() as session:
+        origin_zone = await session.get(RoomZone, zone_id)
+        assert origin_zone is not None
+        origin_location_id = origin_zone.location_id
+        session.add(
+            Location(
+                id=destination_id,
+                job_id=job_id,
+                kind=LocationKind.DESTINATION,
+                label="도착지",
+            )
+        )
+        session.add(
+            RoomZone(
+                id=destination_zone_id,
+                location_id=destination_id,
+                name="현관",
+                sort_order=0,
+            )
+        )
+        session.add(
+            MediaAsset(
+                id=destination_asset_id,
+                capture_session_id=capture_id,
+                room_zone_id=destination_zone_id,
+                media_purpose=MediaPurpose.CONDITION,
+                status=MediaAssetStatus.READY,
+                object_key=f"analysis/{uuid4()}",
+                content_type="image/jpeg",
+                expected_size_bytes=10,
+                actual_size_bytes=10,
+                generation="3",
+                uploaded_at=datetime.now(UTC),
+            )
+        )
+        await session.flush()
+        with pytest.raises(AnalysisDraftInvalidError):
+            await import_analysis_draft(
+                session,
+                job_id,
+                _structured_analysis_result(
+                    capture_id,
+                    asset_id,
+                    location_suggestions=(
+                        _location_suggestion(origin_location_id, destination_asset_id),
+                    ),
+                ),
+            )
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_rejects_corrupt_missing_location_topology(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, zone_id, _, asset_id, _ = await _seed_analysis(analysis_database)
+    async with analysis_database.begin() as session:
+        zone = await session.get(RoomZone, zone_id)
+        assert zone is not None
+        location = await session.get(Location, zone.location_id)
+        assert location is not None
+        location.job_id = uuid4()
+        await session.flush()
+        with pytest.raises(AnalysisDraftInvalidError):
+            await import_analysis_draft(
+                session,
+                job_id,
+                _structured_analysis_result(capture_id, asset_id),
+            )
+
+
+@pytest.mark.anyio
+async def test_analysis_v2_rejects_corrupt_media_zone_topology(
+    analysis_database: AnalysisDatabase,
+) -> None:
+    job_id, _, capture_id, _, _, asset_id, _ = await _seed_analysis(analysis_database)
+    async with analysis_database.begin() as session:
+        asset = await session.get(MediaAsset, asset_id)
+        assert asset is not None
+        asset.room_zone_id = uuid4()
+        await session.flush()
+        with pytest.raises(AnalysisDraftInvalidError):
+            await import_analysis_draft(
+                session,
+                job_id,
+                _structured_analysis_result(capture_id, asset_id),
+            )
 
 
 @pytest.mark.anyio
