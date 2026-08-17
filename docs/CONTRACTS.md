@@ -132,12 +132,13 @@
 - 촬영 세션 소유자는 `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit`으로 분석을 한 번만 제출한다. `inventory` 미디어가 하나 이상이고 전부 `READY`일 때만 `202`를 반환하며, 제출 뒤 같은 촬영 세션의 새 upload·미완료 upload 확정은 `409`로 막는다. 같은 제출 replay는 동일한 `analysis_run_id`와 상태를 반환한다.
 - `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis`는 촬영 소유자에게 `pending|dispatching|queued|running|completed|failed`, 선택적 `scope_version_id`, provider-neutral `failure_code`·`retryable`만 반환한다. object key, provider task 원문과 provider 오류 원문은 노출하지 않는다.
 - A의 `capture_analysis_dispatch`는 제출, Cloud Tasks enqueue lease·backoff, worker 실행, 결과 import와 terminal 상태를 소유한다. due row는 `FOR UPDATE SKIP LOCKED`로 선점하고 `analysis:{analysis_run_id}:attempt:1` key로 enqueue한다. enqueue 실패는 정제된 오류 코드만 저장한 뒤 최대 300초 지수 backoff로 재시도한다.
-- `ai_analysis_run`과 `detection`은 사람이 검토할 파생 초안만 저장한다. B는 `scope_version`을 생성·수정·잠금하지 않고, 확정 범위 반영은 A의 `ImportAnalysisDraft` command만 수행한다.
-- Vertex adapter는 각 품목의 media 출처를 provider 출력 단계에서 검증한다. 입력 미디어가 하나면 provider index 표현과 무관하게 그 유일한 source로 정규화하고, 입력이 여러 개인데 index가 비었거나 중복·범위 밖이면 `source_map / invalid_input / retryable=false`로 거부한다.
+- `ai_analysis_run`, `detection`, `analysis_location_condition_suggestion`은 사람이 검토할 파생 초안만 저장한다. v1 detection은 기존 필드만 유지하고 v2 detection은 이름·수량·단위·작업 메모를 함께 보존한다. 위치 조건 제안은 A의 location ORM을 참조하지 않고 계약 ID·종류와 구조화 조건·검수 필드·출처만 저장한다. B는 `scope_version`을 생성·수정·잠금하지 않고, 확정 범위 반영은 A의 `ImportAnalysisDraft` command만 수행한다.
+- Vertex adapter는 각 품목과 위치 조건의 media 출처를 provider 출력 단계에서 검증한다. v1 단일 입력은 provider index 표현과 무관하게 유일한 source로 정규화하는 호환 동작을 유지한다. v2는 단일 입력도 명시적이고 유효한 index를 요구하고, 위치 제안의 모든 source가 같은 server-owned 비주소 location context인지 확인한다. 비었거나 중복·범위 밖·서로 다른 위치가 섞인 출처는 `source_map / invalid_input / retryable=false`로 거부한다.
+- Vertex v2 prompt에는 주소·사용자·UUID 대신 입력 순번, 출·도착 종류와 익명 위치·방 group만 전달한다. provider는 최종 가격이나 ID를 결정하지 않으며 `unknown`과 `review_required_fields`로 불확실성을 보존한다.
 - `analysis_run_id`가 실행 멱등성 key다. start·complete·fail은 해당 run을 잠그며, 같은 start·결과·오류 replay는 no-op이고 capture session이나 terminal 결과가 다르면 `AnalysisRunConflictError`다.
 - private worker는 먼저 A의 `start_capture_analysis` command를 호출하고, B handler 완료 후 `AnalysisResult`만 A의 `complete_capture_analysis`에 전달한다. A는 기존 `import_analysis_draft`를 통해 편집 가능하고 잠기지 않은 `scope_version`을 만들며 `analysis_completed.v1`을 같은 transaction에 기록한다. READY 입력이 사라졌거나 결과를 안전하게 가져올 수 없으면 `analysis_failed.v1`을 기록하고 수동 작업 경로를 유지한다.
 - B-06은 실패 run을 새 attempt로 여는 명시적 command를 제공한다. INT-06은 저장된 status·failure snapshot과 row-locked retry 준비 command로 FAILED 저장 직후 재전달도 원래 error kind·retryability를 복원한다. retryable attempt는 worker 503과 Cloud Tasks 재전달로 이어지고, 동시 재전달·범위 import는 PostgreSQL 잠금과 dedup으로 한 번만 반영된다.
-- capture analysis dispatch나 analysis run이 생성된 뒤에는 파생 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
+- v2 analysis result나 위치 조건 제안이 생성된 뒤에는 B-08 schema downgrade를 금지한다. capture analysis dispatch나 analysis run이 생성된 더 오래된 schema도 자체 guard를 유지한다. 장애 복구는 확장 schema를 유지한 채 이전 application revision으로 되돌린다.
 
 ## 완료와 감사 이력
 

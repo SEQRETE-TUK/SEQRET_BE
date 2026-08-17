@@ -20,6 +20,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     Uuid,
     func,
     text,
@@ -76,7 +77,7 @@ class AiAnalysisRun(Base):
             name="ai_analysis_run_result_versions",
         ),
         CheckConstraint(
-            "result_schema_version IS NULL OR result_schema_version = 1",
+            "result_schema_version IS NULL OR result_schema_version IN (1, 2)",
             name="ai_analysis_run_result_schema_version",
         ),
         Index(
@@ -130,6 +131,25 @@ class Detection(Base):
         CheckConstraint("length(item_key) > 0", name="detection_item_key_present"),
         CheckConstraint("length(description) > 0", name="detection_description_present"),
         CheckConstraint("ordinal >= 0", name="detection_ordinal_nonnegative"),
+        CheckConstraint(
+            "(item_schema_version = 1 AND name IS NULL AND quantity IS NULL "
+            "AND unit IS NULL AND work_note IS NULL) OR "
+            "(item_schema_version = 2 AND name IS NOT NULL "
+            "AND length(name) > 0 "
+            "AND ((review_required = false AND quantity IS NOT NULL "
+            "AND unit IS NOT NULL) OR (review_required = true "
+            "AND ((quantity IS NULL AND unit IS NULL) "
+            "OR (quantity IS NOT NULL AND unit IS NOT NULL)))) "
+            "AND (quantity IS NULL OR quantity >= 1) "
+            "AND (unit IS NULL OR length(unit) > 0) "
+            "AND (work_note IS NULL OR length(work_note) > 0))",
+            name="detection_item_schema_shape",
+        ),
+        UniqueConstraint(
+            "analysis_run_id",
+            "ordinal",
+            name="uq_detection_analysis_run_ordinal",
+        ),
         Index("ix_detection_analysis_run", "analysis_run_id", "ordinal", "id"),
     )
 
@@ -139,8 +159,18 @@ class Detection(Base):
         nullable=False,
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_schema_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
     item_key: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(2000), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(200))
+    quantity: Mapped[int | None] = mapped_column(Integer)
+    unit: Mapped[str | None] = mapped_column(String(20))
+    work_note: Mapped[str | None] = mapped_column(String(500))
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     review_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     source_media_asset_ids: Mapped[list[str]] = mapped_column(
@@ -148,6 +178,108 @@ class Detection(Base):
         nullable=False,
         default=list,
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class AnalysisLocationConditionSuggestion(Base):
+    """One provider-derived location condition that always requires review."""
+
+    __tablename__ = "analysis_location_condition_suggestion"
+    __table_args__ = (
+        CheckConstraint("ordinal >= 0", name="analysis_location_suggestion_ordinal_nonnegative"),
+        CheckConstraint(
+            "location_kind IN ('origin', 'destination')",
+            name="analysis_location_suggestion_kind",
+        ),
+        CheckConstraint(
+            "residence_type IN ('apartment', 'villa', 'officetel', 'house', "
+            "'studio', 'other', 'unknown')",
+            name="analysis_location_suggestion_residence_type",
+        ),
+        CheckConstraint(
+            "floor_status IN ('known', 'unknown') "
+            "AND ((floor_status = 'known' AND floor_value IS NOT NULL) "
+            "OR (floor_status = 'unknown' AND floor_value IS NULL)) "
+            "AND (floor_value IS NULL OR (floor_value >= -10 AND floor_value <= 200))",
+            name="analysis_location_suggestion_floor",
+        ),
+        CheckConstraint(
+            "elevator IN ('available', 'unavailable', 'unknown')",
+            name="analysis_location_suggestion_elevator",
+        ),
+        CheckConstraint(
+            "stairs IN ('required', 'not_required', 'unknown')",
+            name="analysis_location_suggestion_stairs",
+        ),
+        CheckConstraint(
+            "parking_access IN ('available', 'restricted', 'unavailable', 'unknown')",
+            name="analysis_location_suggestion_parking",
+        ),
+        CheckConstraint(
+            "carry_distance_status IN ('known', 'unknown') "
+            "AND ((carry_distance_status = 'known' "
+            "AND carry_distance_value_m IS NOT NULL) "
+            "OR (carry_distance_status = 'unknown' "
+            "AND carry_distance_value_m IS NULL)) "
+            "AND (carry_distance_value_m IS NULL "
+            "OR (carry_distance_value_m >= 0 AND carry_distance_value_m <= 100000))",
+            name="analysis_location_suggestion_carry_distance",
+        ),
+        CheckConstraint(
+            "access_note IS NULL OR length(access_note) > 0",
+            name="analysis_location_suggestion_access_note",
+        ),
+        CheckConstraint(
+            "confidence >= 0.0 AND confidence <= 1.0",
+            name="analysis_location_suggestion_confidence",
+        ),
+        UniqueConstraint(
+            "analysis_run_id",
+            "ordinal",
+            name="uq_analysis_location_suggestion_run_ordinal",
+        ),
+        UniqueConstraint(
+            "analysis_run_id",
+            "location_id",
+            name="uq_analysis_location_suggestion_run_location",
+        ),
+        UniqueConstraint(
+            "analysis_run_id",
+            "location_kind",
+            name="uq_analysis_location_suggestion_run_kind",
+        ),
+        Index(
+            "ix_analysis_location_suggestion_run",
+            "analysis_run_id",
+            "ordinal",
+            "id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("ai_analysis_run.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    location_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    location_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    residence_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    floor_status: Mapped[str] = mapped_column(String(10), nullable=False)
+    floor_value: Mapped[int | None] = mapped_column(Integer)
+    elevator: Mapped[str] = mapped_column(String(20), nullable=False)
+    stairs: Mapped[str] = mapped_column(String(20), nullable=False)
+    parking_access: Mapped[str] = mapped_column(String(20), nullable=False)
+    carry_distance_status: Mapped[str] = mapped_column(String(10), nullable=False)
+    carry_distance_value_m: Mapped[int | None] = mapped_column(Integer)
+    access_note: Mapped[str | None] = mapped_column(String(1000))
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    review_required_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    source_media_asset_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

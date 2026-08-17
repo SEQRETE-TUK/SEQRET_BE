@@ -22,7 +22,13 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from app.config import Settings
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
-from app.contracts.ai import AnalysisResult, AnalysisTaskV1, DraftItem
+from app.contracts.ai import (
+    AnalysisFloorCondition,
+    AnalysisResult,
+    AnalysisTaskV1,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.maintenance import (
@@ -157,7 +163,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_19_0001"
+ALEMBIC_HEAD = "b_08_0001"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -200,6 +206,7 @@ BUSINESS_TABLES = {
     "completion_confirmation",
     "completion_evidence",
     "detection",
+    "analysis_location_condition_suggestion",
     "audit_event",
     "outbox_event",
     "event_consumption",
@@ -1332,11 +1339,30 @@ async def test_capture_analysis_completion_is_exactly_once_on_postgresql() -> No
                 model_name="fake-vision",
                 model_version="2026-08",
                 prompt_version="inventory-1",
+                result_schema_version=2,
                 draft_items=(
                     DraftItem(
                         item_key="bed",
-                        description="퀸 침대",
+                        description="퀸 침대 1개",
+                        name="퀸 침대",
+                        quantity=1,
+                        unit="개",
+                        work_note="프레임 분해 여부 확인",
                         confidence=0.9,
+                        source_media_asset_ids=(MediaAssetId(asset_id),),
+                    ),
+                ),
+                location_condition_suggestions=(
+                    DraftLocationCondition(
+                        location_id=created.job.locations[0].id,
+                        location_kind="origin",
+                        residence_type="apartment",
+                        floor=AnalysisFloorCondition(status="known", value=8),
+                        elevator="available",
+                        stairs="not_required",
+                        parking_access="restricted",
+                        confidence=0.8,
+                        review_required_fields=("parking_access",),
                         source_media_asset_ids=(MediaAssetId(asset_id),),
                     ),
                 ),
@@ -1407,6 +1433,12 @@ async def test_capture_analysis_completion_is_exactly_once_on_postgresql() -> No
             assert first_response.scope_version_id == dispatch.scope_version_id
             assert len(scope_versions) == 1
             assert scope_versions[0].id == dispatch.scope_version_id
+            assert scope_versions[0].content["schema_version"] == 2
+            assert scope_versions[0].content["items"][0]["quantity"] == 1
+            assert scope_versions[0].content["location_conditions"][0]["floor"] == {
+                "status": "known",
+                "value": 8,
+            }
             assert len(completed_events) == 1
         finally:
             await engine.dispose()

@@ -16,7 +16,14 @@ from sqlalchemy.pool import NullPool
 # Import model modules so create_all sees capture_session/move_job FK targets.
 import app.modules.capture.models
 import app.modules.move_job.models  # noqa: F401
-from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisCarryDistanceCondition,
+    AnalysisFloorCondition,
+    AnalysisRequest,
+    AnalysisResult,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.fakes import FakeAIProvider
 from app.contracts.ports import ProviderErrorKind
 from app.contracts.primitives import (
@@ -26,7 +33,12 @@ from app.contracts.primitives import (
     MediaAssetId,
     TraceId,
 )
-from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
+from app.modules.analysis.models import (
+    AiAnalysisRun,
+    AnalysisLocationConditionSuggestion,
+    AnalysisRunStatus,
+    Detection,
+)
 from app.modules.analysis.service import (
     AnalysisRunConflictError,
     AnalysisRunNotFoundError,
@@ -101,6 +113,57 @@ def _result(
     )
 
 
+def _result_v2(run_id: AnalysisRunId, capture_id: CaptureSessionId) -> AnalysisResult:
+    origin_id = uuid4()
+    item_source = MediaAssetId(uuid4())
+    condition_source = MediaAssetId(uuid4())
+    return AnalysisResult(
+        analysis_run_id=run_id,
+        capture_session_id=capture_id,
+        model_name="fake-vision",
+        model_version="2026-08",
+        prompt_version="inventory-1",
+        result_schema_version=2,
+        draft_items=(
+            DraftItem(
+                item_key="refrigerator",
+                description="냉장고 1대",
+                name="냉장고",
+                quantity=1,
+                unit="대",
+                work_note="문 분리 여부 확인",
+                confidence=0.92,
+                source_media_asset_ids=(item_source,),
+            ),
+        ),
+        review_required_items=(
+            DraftItem(
+                item_key="boxes",
+                description="수량 확인이 필요한 박스",
+                name="박스",
+                confidence=0.55,
+                source_media_asset_ids=(item_source,),
+            ),
+        ),
+        location_condition_suggestions=(
+            DraftLocationCondition(
+                location_id=origin_id,
+                location_kind="origin",
+                residence_type="apartment",
+                floor=AnalysisFloorCondition(status="known", value=12),
+                elevator="available",
+                stairs="not_required",
+                parking_access="restricted",
+                carry_distance=AnalysisCarryDistanceCondition(status="known", value_m=45),
+                access_note="지하주차장 높이 확인 필요",
+                confidence=0.81,
+                review_required_fields=("parking_access", "access_note"),
+                source_media_asset_ids=(condition_source,),
+            ),
+        ),
+    )
+
+
 async def _fake_pipeline(
     factory: async_sessionmaker[AsyncSession],
     request: AnalysisRequest,
@@ -148,6 +211,43 @@ async def test_fake_pipeline_persists_editable_draft(
     assert run.model_name == "fake-vision"
     assert run.failure_code is None
     assert detection_count == 3
+
+
+@pytest.mark.anyio
+async def test_v2_result_persists_reloads_and_replays_exactly(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = AnalysisRunId(uuid4())
+    capture_id = CaptureSessionId(uuid4())
+    result = _result_v2(run_id, capture_id)
+
+    async with transactional_session(factory) as session:
+        await start_analysis_run(
+            session,
+            analysis_run_id=run_id,
+            capture_session_id=capture_id,
+            trace_id=TRACE_ID,
+            now=NOW,
+        )
+        await complete_analysis_run(session, result=result, now=LATER)
+    async with transactional_session(factory) as session:
+        await complete_analysis_run(session, result=result, now=LATER)
+        reloaded = await load_analysis_result(session, analysis_run_id=run_id)
+        detections = (
+            (await session.execute(select(Detection).order_by(Detection.ordinal))).scalars().all()
+        )
+        suggestions = (
+            (await session.execute(select(AnalysisLocationConditionSuggestion))).scalars().all()
+        )
+
+    assert reloaded == result
+    assert [(row.item_schema_version, row.name, row.quantity, row.unit) for row in detections] == [
+        (2, "냉장고", 1, "대"),
+        (2, "박스", None, None),
+    ]
+    assert len(suggestions) == 1
+    assert suggestions[0].floor_value == 12
+    assert suggestions[0].review_required_fields == ["parking_access", "access_note"]
 
 
 @pytest.mark.anyio
