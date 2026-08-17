@@ -1,6 +1,6 @@
 # 공통 계약
 
-이 문서는 트랙 A와 B가 공유하는 provider-independent 계약의 version 1을 정의한다. 계약 구현은 `app/contracts`에 있고, 두 트랙은 상대 트랙의 ORM model이나 repository 대신 이 계약만 사용한다.
+이 문서는 트랙 A와 B가 공유하는 provider-independent versioned 계약을 정의한다. 계약 구현은 `app/contracts`에 있고, 두 트랙은 상대 트랙의 ORM model이나 repository 대신 이 계약만 사용한다.
 
 ## 공통 원칙
 
@@ -27,7 +27,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `StoragePort` (`ObjectStoragePort` 호환 별칭) | B | object key와 제약 → signed upload target, read URL, metadata, generation-pinned SHA-256 또는 삭제 완료 | 삭제는 `idempotency_key`로 중복 효과를 막는다 | 모든 provider 호출에 초 단위 명시 | provider 오류를 adapter 예외로 매핑하며 A ORM을 갱신하지 않는다 |
 | `TaskQueuePort` | B | queue, handler, JSON payload → provider task ID | 같은 key는 한 task만 반환한다 | enqueue 호출에 초 단위 명시 | 재시도 가능 여부를 provider 외부 타입으로 노출하지 않는다 |
-| `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, object key, model/prompt version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
+| `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, 비주소 위치·구역 context, object key, model/prompt/result version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
 | `EventBusPort` | A | `DomainEvent` → 발행 완료 | event ID 기반 key로 중복 발행 효과를 막는다 | 발행 호출에 초 단위 명시 | Outbox 상태와 retry 정책은 A가 관리한다 |
 | `CachePort` | A | namespace가 포함된 key와 fixed-window 길이 → 원자적으로 증가한 count | 같은 window의 증가가 기존 TTL을 연장하지 않는다 | cache 호출에 초 단위 명시 | Redis 오류는 adapter 예외로 매핑하며 application은 DB 원본 제한을 계속 적용한다 |
 
@@ -40,6 +40,10 @@
 - 업로드 완료 command는 metadata의 object key, MIME type, 크기와 generation을 모두 검증하며, signed URL과 필수 header는 cache하거나 문자열을 정규화하지 않고 원문 그대로 전달한다.
 - `PENDING_UPLOAD` 미디어는 실제 크기·hash·generation·업로드 시각을 갖지 않는다. 그 밖의 상태는 실제 크기, 비어 있지 않은 generation과 업로드 시각을 반드시 보존한다.
 - `AnalysisRequest.source_media_asset_ids[n]`, `object_keys[n]`, `content_types[n]`은 같은 미디어를 가리킨다. 세 배열은 길이가 같고 ID와 object key 배열 안에서 중복이 없어야 한다. `content_types`는 A가 validation을 끝낸 `image/jpeg`, `image/png`, `video/mp4` 중 하나이며 B adapter는 확장자가 없는 object key에서 MIME type을 추정하지 않는다.
+- v2 분석 요청은 `requested_result_schema_version=2`와 각 source에 정확히 대응하는 `source_contexts[]`를 사용한다. context에는 media asset, location, origin/destination kind와 room-zone ID만 포함하고 주소 원문은 포함하지 않는다.
+- `AnalysisResult` v1은 기존 `description` 중심 품목만 유지한다. v2는 같은 품목에 `name`, `quantity`, `unit`, `work_note`를 구조화하고, 수량·단위가 불확실한 품목은 `review_required_items`에 함께 비운다. `draft_items`의 v2 품목은 수량·단위가 모두 있어야 한다.
+- v2 `location_condition_suggestions[]`는 주거 형태, 층, 엘리베이터, 계단, 주차·진입, 운반거리와 접근 메모를 값 또는 명시적 `unknown`으로 전달한다. 각 제안은 source media ID, confidence와 `review_required_fields`를 보존하며 자동으로 작업 원본이나 확정 범위를 갱신하지 않는다.
+- 모든 v2 품목과 위치 조건은 고객 검수 대상이다. B는 제안까지만 생성하고 A의 application command가 작업 topology와 source media를 다시 검증한 뒤 수정 가능한 범위 초안으로 가져온다.
 - merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.
 
 ## 범위 검토와 견적

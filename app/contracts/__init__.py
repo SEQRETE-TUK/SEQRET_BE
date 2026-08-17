@@ -1,7 +1,16 @@
 """Versioned provider-independent contracts shared by both tracks."""
 
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
-from app.contracts.ai import AnalysisContentType, AnalysisRequest, AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisCarryDistanceCondition,
+    AnalysisContentType,
+    AnalysisFloorCondition,
+    AnalysisRequest,
+    AnalysisResult,
+    AnalysisSourceContext,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.maintenance import (
     BackgroundJobType,
@@ -49,10 +58,13 @@ __all__ = [
     "ActorContext",
     "ActorKind",
     "AggregateId",
+    "AnalysisCarryDistanceCondition",
     "AnalysisContentType",
+    "AnalysisFloorCondition",
     "AnalysisRequest",
     "AnalysisResult",
     "AnalysisRunId",
+    "AnalysisSourceContext",
     "BackgroundJobId",
     "BackgroundJobType",
     "CachePort",
@@ -60,6 +72,7 @@ __all__ = [
     "DomainEvent",
     "DomainEventType",
     "DraftItem",
+    "DraftLocationCondition",
     "EventBusPort",
     "EventId",
     "IdempotencyKey",
