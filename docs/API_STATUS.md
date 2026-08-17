@@ -198,6 +198,7 @@ A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 ### 조건부 계약·조회 재구성
 
 - 완료 포함 화면 단위 view와 command는 구현됨
+- A-24에서 현장 변경 승인 뒤 기사 `field-brief`가 변경 누적 견적과 기존 포함·제외 작업을 복원하도록 보완됨
 - 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
 - 후속 공통 `JobHeader`; `ScopeItemV2`, `LocationConditions`, `QuoteSnapshot`, 공동확인 상태와 signed 범위·완료 preview는 구현됨
 - A-21의 AI `AnalysisResult` v2 범위 가져오기·고객 검수 API와 B-08의 영속화·Vertex v2 출력은 구현됨. FE 검수 UI 연결만 남음

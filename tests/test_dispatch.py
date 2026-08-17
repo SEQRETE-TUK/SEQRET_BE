@@ -37,10 +37,11 @@ from app.modules.dispatch.service import (
     get_dispatch_view,
     get_field_brief,
 )
+from app.modules.field_change.models import ChangeProposalDetail, FieldIssue, FieldIssueType
 from app.modules.move_job.models import JobParticipant, MoveJob, MoveJobStatus
 from app.modules.notification.models import NotificationDelivery
 from app.modules.notification.service import consume_notification_event
-from app.modules.scope.models import ScopeVersion
+from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeVersion
 from app.modules.scope_review.models import ScopeProposal, ScopeProposalKind, ScopeProposalStatus
 from app.platform.db import Base, create_session_factory
 from app.platform.event_bus.models import OutboxEvent
@@ -195,6 +196,74 @@ async def _locked_scope(
     return scope_id
 
 
+async def _approved_change_scope(
+    factory: async_sessionmaker[AsyncSession],
+    created: dict[str, Any],
+    base_scope_id: UUID,
+) -> UUID:
+    result_scope_id = uuid4()
+    field_issue_id = uuid4()
+    change_request_id = uuid4()
+    now = datetime.now(UTC)
+    async with factory.begin() as session:
+        base = await session.get(ScopeVersion, base_scope_id)
+        assert base is not None
+        session.add(
+            ScopeVersion(
+                id=result_scope_id,
+                job_id=base.job_id,
+                parent_version_id=base.id,
+                sequence_number=base.sequence_number + 1,
+                content=base.content,
+                content_hash="3" * 64,
+                created_by_participant_id=_participant_id(created, "company_manager"),
+                created_at=now,
+                locked_at=now,
+            )
+        )
+        session.add(
+            FieldIssue(
+                id=field_issue_id,
+                job_id=base.job_id,
+                client_reference=uuid4(),
+                base_scope_version_id=base.id,
+                reported_by_participant_id=_participant_id(created, "company_manager"),
+                issue_type=FieldIssueType.SITE_BLOCKER,
+                title="사다리차 반입 필요",
+                description="현장 진입 조건 변경",
+                created_at=now,
+            )
+        )
+        session.add(
+            ChangeRequest(
+                id=change_request_id,
+                job_id=base.job_id,
+                base_scope_version_id=base.id,
+                requested_by_participant_id=_participant_id(created, "company_manager"),
+                description="사다리차 반입 추가",
+                proposed_content=base.content,
+                status=ChangeRequestStatus.APPROVED,
+                decided_by_participant_id=_participant_id(created, "customer"),
+                decision_note="증빙 확인",
+                decided_at=now,
+                result_scope_version_id=result_scope_id,
+                created_at=now,
+            )
+        )
+        session.add(
+            ChangeProposalDetail(
+                change_request_id=change_request_id,
+                field_issue_id=field_issue_id,
+                title="사다리차 반입 추가",
+                base_amount_krw=600_000,
+                adjustments=[{"label": "사다리차", "amount_krw": 150_000}],
+                total_amount_krw=750_000,
+                created_at=now,
+            )
+        )
+    return result_scope_id
+
+
 def _setup_payload(created: dict[str, Any], scope_id: UUID) -> dict[str, Any]:
     return {
         "client_reference": str(uuid4()),
@@ -293,6 +362,7 @@ def _selection(view: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_field_brief_rejects_unconfirmed_quote_snapshot() -> None:
+    assert dispatch_service._confirmed_quote(None) is None
     proposal = ScopeProposal(
         job_id=uuid4(),
         source_scope_version_id=uuid4(),
@@ -310,6 +380,28 @@ def test_field_brief_rejects_unconfirmed_quote_snapshot() -> None:
     )
     with pytest.raises(DispatchConflictError):
         dispatch_service._confirmed_quote(proposal)
+
+
+@pytest.mark.anyio
+async def test_field_brief_quote_context_rejects_ambiguous_sources() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.return_value = SimpleNamespace()
+    rows = SimpleNamespace(one_or_none=lambda: (SimpleNamespace(), SimpleNamespace()))
+    session.execute.return_value = SimpleNamespace(tuples=lambda: rows)
+
+    with pytest.raises(DispatchConflictError):
+        await dispatch_service._field_brief_quote_context(session, uuid4(), uuid4())
+
+
+@pytest.mark.anyio
+async def test_field_brief_quote_context_rejects_change_without_agreement() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.side_effect = (None, None)
+    rows = SimpleNamespace(one_or_none=lambda: (SimpleNamespace(), SimpleNamespace()))
+    session.execute.return_value = SimpleNamespace(tuples=lambda: rows)
+
+    with pytest.raises(DispatchConflictError):
+        await dispatch_service._field_brief_quote_context(session, uuid4(), uuid4())
 
 
 async def _setup(
@@ -505,6 +597,45 @@ async def test_dispatch_to_field_check_in_is_replay_safe_and_notifies_worker(
         json=selection,
     )
     assert worker_forbidden.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_field_brief_uses_approved_change_quote_and_inherited_classifications(
+    dispatch_api: DispatchApi,
+) -> None:
+    client, factory = dispatch_api
+    created = await _create_job(client)
+    base_scope_id = await _locked_scope(factory, created, with_quote=True)
+    changed_scope_id = await _approved_change_scope(factory, created, base_scope_id)
+    manager_headers = _headers(created, "company_manager")
+
+    setup = await client.post(
+        f"/api/v1/move-jobs/{created['job']['id']}/dispatch/setup",
+        headers=manager_headers,
+        json=_setup_payload(created, changed_scope_id),
+    )
+    assert setup.status_code == 201
+    selection = _selection(cast(dict[str, Any], setup.json()))
+    confirmed = await client.put(
+        f"/api/v1/move-jobs/{created['job']['id']}/dispatch",
+        headers=manager_headers,
+        json=selection,
+    )
+    assert confirmed.status_code == 200
+
+    brief = await client.get(
+        f"/api/v1/move-jobs/{created['job']['id']}/field-brief",
+        headers=_headers(created, "field_worker"),
+    )
+    assert brief.status_code == 200
+    assert brief.json()["scope_version_id"] == str(changed_scope_id)
+    assert brief.json()["quote"] == {
+        "base_amount_krw": 600_000,
+        "adjustments": [{"label": "사다리차", "amount_krw": 150_000}],
+        "total_amount_krw": 750_000,
+    }
+    assert brief.json()["included_works"] == ["포장", "운반"]
+    assert brief.json()["exclusions"] == ["에어컨 설치"]
 
 
 @pytest.mark.anyio

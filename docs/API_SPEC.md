@@ -343,7 +343,10 @@ Response `FieldBriefView`:
 
 현장기사에게는 이 단일 view만 공개한다. 전체 `GET /scope-versions` 이력은 소비자와 업체만
 조회할 수 있으며 기사에게 미확정 초안이나 AI provenance를 반환하지 않는다. 과거 저수준 승인
-흐름처럼 quote가 없는 잠긴 범위는 `quote: null`로 명시한다.
+흐름처럼 quote가 없는 잠긴 범위는 `quote: null`로 명시한다. 현장 변경으로 만들어진 최신
+승인본은 해당 변경안의 누적 `quote`를 반환하고, 포함·제외 작업은 조상 업체 확정안에서
+상속한다. 변경안과 업체 제안이 같은 결과 version을 가리키거나 조상 확정안이 없는 손상 상태는
+임의로 추론하지 않고 `409`로 차단한다.
 - `completion_check_items[]`, `completion_required_count`, `completion_submission_id`
 - `assigned_vehicle`, `assigned_workers[]`, `assigned_worker_count`, `required_skills[]`
 - `safety_notice`, `navigation_uri`
