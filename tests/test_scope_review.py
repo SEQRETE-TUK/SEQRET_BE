@@ -596,6 +596,7 @@ async def test_scope_review_exposes_structured_v2_items(
         headers=_headers(_secret(created, "company_manager")),
     )
     assert response.status_code == 200
+    assert response.json()["scope"]["schema_version"] == 2
     item = response.json()["scope"]["room_groups"][0]["items"][0]
     assert item["description"] == "냉장고"
     assert item["name"] == "냉장고"

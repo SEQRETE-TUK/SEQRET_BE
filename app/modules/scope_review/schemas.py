@@ -185,6 +185,7 @@ class ScopeMediaPreview(ContractModel):
 class ScopeReviewScope(ContractModel):
     id: UUID
     version_label: str
+    schema_version: Literal[1, 2]
     content_hash: str
     locked_at: datetime | None
     status: ScopeReviewStatus

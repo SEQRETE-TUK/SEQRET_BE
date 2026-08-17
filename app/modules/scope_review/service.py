@@ -792,6 +792,7 @@ async def get_scope_review(
         scope=ScopeReviewScope(
             id=current.id,
             version_label=f"v{current.sequence_number}",
+            schema_version=content.schema_version,
             content_hash=current.content_hash,
             locked_at=_aware(current.locked_at) if current.locked_at is not None else None,
             status=review_status,

@@ -137,7 +137,7 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 `scope-review`는 화면 한 번의 조회로 다음 공동확인 카드 계약을 반환한다.
 
-- `scope`: version label, `content_hash`, 잠금 시각, 품목·작업 옵션, 출·도착지 조건, 포함·제외 작업
+- `scope`: version label, `schema_version`, `content_hash`, 잠금 시각, 품목·작업 옵션, 출·도착지 조건, 포함·제외 작업
 - `quote`: 현재 version에 효력이 있는 누적 총액. 승인된 현장 변경 뒤에는 변경 견적 총액을 반환
 - `company_participation_status`: `company_not_invited|company_invited|company_joined|company_declined|company_invitation_expired|company_invitation_revoked`
 - `collaboration_status`: `draft|awaiting_company_proposal|awaiting_confirmation|revision_requested|confirmed`
@@ -225,6 +225,7 @@ Response `ScopeReviewView`:
 | `job` | `ScopeReviewJobHeader` | 작업 ID·표시 code·제목·고객·업체·현재 역할·일정·출발/도착 label |
 | `scope.id` | UUID | 확인 command 대상 |
 | `scope.version_label` | string | `v3` |
+| `scope.schema_version` | `1` 또는 `2` | 후속 제안에서 보존할 범위 내용 계약 버전 |
 | `scope.status` | enum | `company_review`, `customer_review`, `revision_requested`, `confirmed` |
 | `scope.item_count` | integer | 물품 34개 |
 | `scope.work_count` | integer | 작업 8개 |
