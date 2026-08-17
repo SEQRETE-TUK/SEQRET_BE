@@ -865,7 +865,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 52개 path와 60개 operation이 있다. `/api/v1` 업무 operation 57개와
+현재 OpenAPI에는 53개 path와 61개 operation이 있다. `/api/v1` 업무 operation 58개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
 배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
@@ -881,7 +881,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | 최신 완료 분석의 v1/v2 구조화 품목·위치 조건 제안을 조회하고 고객 편집본을 불변 자식 scope version으로 한 번만 생성한다. FE는 v2 필드와 위치조건 검수 UI를 추가 연결해야 한다. |
-| scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1만 노출한다. |
+| scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1·v2 내용과 `schema_version`을 노출한다. |
 | dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
 | change request 생성·목록·증거 read URL·설명·결정 | 호환 경로로 유지한다. 일반 FE는 역할을 분리하고 증거 preview를 묶은 `field-issues`와 `change-proposals` 실행 계약을 사용한다. |

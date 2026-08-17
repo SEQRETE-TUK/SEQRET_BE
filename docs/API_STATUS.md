@@ -1,6 +1,6 @@
 # SEQRET MVP API 구현 현황
 
-> 기준일: 2026-08-16
+> 기준일: 2026-08-17
 >
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
@@ -15,14 +15,14 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 60개 | 52개 path의 업무 operation 57개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 61개 | 53개 path의 업무 operation 58개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 실제 API 연동 범위 | capture + 3역할 | 촬영·분석과 고객·업체·현장기사의 초대, 범위·변경, 배차·체크인, 완료 흐름을 query·mutation으로 호출; 별도 signed PUT 포함 |
 | 기존 8화면 기준 backend 목표 API | 17개 | 16개 구현; 화면용 `media-uploads` adapter만 조건부 잔여 |
 | 승인된 P0 화면 포함 backend 목표 API | 19개 | 18개 구현; 완료 제출과 고객 결정 포함 |
 | 남은 목표 API | 1개 | 기존 capture 상태 전이를 보존할 upload adapter만 조건부 잔여 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 57개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 58개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -108,7 +108,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 현장 변경 화면을 지원하기 위해 목표 17개 밖의 업체용 `GET /field-issues`,
 `POST /change-proposals`, `POST /change-proposals/{id}/explanation`도 실행 계약으로 등록됐다.
 
-## 5. 현재 서버 업무 operation 57개
+## 5. 현재 서버 업무 operation 58개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -193,7 +193,7 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 ## 7. 남은 backend·연동 범위
 
-A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 시각, 누적 총액과 승인된 현장 변경을 포함하는 한 장 공동확인 계약을 제공한다. 아래 항목은 FE 연동 결과나 B·외부 결정을 선행조건으로 둔 조건부 범위다.
+A-24까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 시각, 누적 총액과 승인된 현장 변경을 포함하는 한 장 공동확인 계약을 제공한다. 아래 항목은 FE 연동 결과나 B·외부 결정을 선행조건으로 둔 조건부 범위다.
 
 ### 조건부 계약·조회 재구성
 
@@ -202,6 +202,7 @@ A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 - 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
 - 후속 공통 `JobHeader`; `ScopeItemV2`, `LocationConditions`, `QuoteSnapshot`, 공동확인 상태와 signed 범위·완료 preview는 구현됨
 - A-21의 AI `AnalysisResult` v2 범위 가져오기·고객 검수 API와 B-08의 영속화·Vertex v2 출력은 구현됨. FE 검수 UI 연결만 남음
+- 2026-08-17 최신 main staging에서 실제 Vertex v2 분석 → A 범위 import → 고객 검수 완료·replay, 업체 시작 현장 이슈 → 고객 승인 → A-24 `field-brief` 누적 견적 복원까지 검증됨
 
 ### frontend 연동
 
