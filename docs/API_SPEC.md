@@ -133,12 +133,13 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 | `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 출·도착지 조건, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 구현·범위 v1·v2 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
-| `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·사유를 고객에게 전송 | 업체 | 구현·범위 v1 |
+| `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·차량·인원·사유를 고객에게 전송 | 업체 | 구현·범위 v1·v2 |
 
 `scope-review`는 화면 한 번의 조회로 다음 공동확인 카드 계약을 반환한다.
 
 - `scope`: version label, `schema_version`, `content_hash`, 잠금 시각, 품목·작업 옵션, 출·도착지 조건, 포함·제외 작업
 - `quote`: 현재 version에 효력이 있는 누적 총액. 승인된 현장 변경 뒤에는 변경 견적 총액을 반환
+- `execution_plan`: 업체가 견적에 사용한 차량 수·규격, 작업자 수, 예상 작업시간과 메모. 업체 제안 전 또는 A-23 이전 legacy 제안은 `null`
 - `company_participation_status`: `company_not_invited|company_invited|company_joined|company_declined|company_invitation_expired|company_invitation_revoked`
 - `collaboration_status`: `draft|awaiting_company_proposal|awaiting_confirmation|revision_requested|confirmed`
 - `company_confirmed_at`, `customer_confirmed_at`: 현재 version을 확인한 시각
@@ -236,6 +237,7 @@ Response `ScopeReviewView`:
 | `scope.exclusions[]` | string[] | 에어컨 이전, 귀중품 등 |
 | `proposal_id` | UUID/null | 현재 범위에 연결된 업체 제안 |
 | `quote` | `QuoteSnapshot`/null | 기본·추가·제안 총액 |
+| `execution_plan` | `ExecutionPlanSnapshot`/null | 차량 수·규격, 작업자 수, 예상 작업시간과 메모 |
 | `proposal_reason` | string/null | 업체 변경 사유 |
 | `media_previews[]` | `MediaPreview[]` | 공간별 원본 사진 |
 | `company_confirmed_at` | datetime/null | 업체 상태 |
@@ -480,17 +482,25 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
     ],
     "total_amount_krw": 1280000
   },
+  "execution_plan": {
+    "vehicle_count": 1,
+    "vehicle_description": "1톤 탑차",
+    "worker_count": 3,
+    "estimated_duration_minutes": 240,
+    "notes": "피아노 안전 장비 포함"
+  },
   "reason": "피아노 안전 운반을 위해 작업자 1명 추가가 필요합니다."
 }
 ```
 
-- `content.items`: 1..500개, `item_key` 중복 불가. 현재 schema version은 1이다.
+- `content.items`: 1..500개, `item_key` 중복 불가. v1과 구조화 v2를 모두 허용하며 source의 schema version을 축소하지 않는다.
+- `execution_plan`: 신규 업체 제안에서 필수다. 차량 1..20대, 작업자 1..100명, 예상 30..2880분과 구체적인 차량 규격을 불변 snapshot으로 저장한다.
 - `included_works`와 `exclusions`: 각각 최대 100개, 내부 중복과 양쪽 겹침 불가.
 - server는 `base + sum(adjustments) == total`과 adjustment label 고유성을 검증한다.
 - 최초 제안은 고객이 만든 현재 scope version을 source로 사용한다.
 - 수정 제안은 고객이 수정 요청한 제안의 현재 result version을 source로 사용한다.
 - 전송 자체가 업체 확인을 의미하고 새 불변 자식 scope version을 생성한다.
-- 성공: `201`, `{proposal_id, proposal_kind, status, source_scope_version_id, result_scope_version_id, quote, included_works, exclusions, reason, sent_at, confirmed_at}`
+- 성공: `201`, `{proposal_id, proposal_kind, status, source_scope_version_id, result_scope_version_id, quote, execution_plan, included_works, exclusions, reason, sent_at, confirmed_at}`
 - 같은 업체가 같은 source와 정확히 같은 payload를 재전송하면 기존 제안을 반환한다. 다른 payload, 과거 source, 수정 요청 없는 재제안은 `409`다.
 
 ### 5.4.1 업체 현장 변경 제안

@@ -211,6 +211,13 @@ async def _confirmed_scope(client: AsyncClient, created: dict[str, Any]) -> str:
                 "adjustments": [],
                 "total_amount_krw": 550_000,
             },
+            "execution_plan": {
+                "vehicle_count": 1,
+                "vehicle_description": "1톤 탑차",
+                "worker_count": 2,
+                "estimated_duration_minutes": 180,
+                "notes": None,
+            },
             "included_works": ["포장", "운반"],
             "exclusions": ["가전 설치"],
             "reason": "INT-04 합성 견적",

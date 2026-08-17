@@ -73,7 +73,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객·업체 범위 | `GET /api/v1/move-jobs/{job_id}/scope-review` | 최신 범위, 금액, 사진, 양측 확인 상태 조회 | 구현 | 현재 불변 범위·견적·수정요청·양측 확인과 generation-pinned preview를 한 view로 반환 |
 | 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객 수정 요청 접수 | 구현 | 현재 고객 확인 대기 제안에 한해 immutable 요청을 생성하고 동일 요청은 재사용 |
 | 고객 범위 | `POST /api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 현재 범위 확인 | 구현 | 현재 업체 제안만 확인하며 기존 approval·scope lock·event를 원자적으로 재사용 |
-| 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액 제안을 고객에게 전송 | 구현 | 범위 v1 snapshot, 원화 견적·포함·제외·사유를 저장하고 업체 확인을 함께 기록 |
+| 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액·실행계획을 고객에게 전송 | 구현 | 범위 v1·v2, 원화 견적, 차량·인원·예상시간, 포함·제외·사유를 저장하고 업체 확인을 함께 기록 |
 | 고객 AI 검토 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 업로드와 AI 검토 초안 조회 | 구현 | v1/v2 품목, 위치조건 snapshot·AI 제안과 공간별 media 수를 provider-neutral view로 반환 |
 | 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 구현 | 구조화 품목·전체 위치조건 고객 편집본을 불변 자식으로 생성하고 동일 payload 재전송은 멱등 처리 |
 | 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 구현 | 변경요청·견적 snapshot과 generation-pinned READY preview를 한 view로 반환 |
@@ -210,7 +210,7 @@ A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 
 ### migration
 
-INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했다. 단일 head는 `b_08_0001`이며 A-20·A-21은 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했고 A-23은 `a_23_0001`과 `scope_proposal.execution_plan`을 추가했다. 단일 head는 `a_23_0001`이며 A-20·A-21·A-22는 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
 
 ## 8. frontend 연동 기준
 

@@ -68,6 +68,13 @@
 - 고객의 `approve|reject|request_clarification` 결정과 업체 설명은 terminal 또는 동일 설명의 정확 재전송만 멱등이다. 상충 결정·설명, 과거 기준 범위, 이슈 재사용과 승인 뒤 후속 변경은 거부한다.
 - `field_issue`, `field_issue_evidence` 또는 `change_proposal_detail` 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
+## 업체 범위 제안 실행계획
+
+- 신규 `POST /move-jobs/{job_id}/scope-proposals`는 범위·원화 견적뿐 아니라 차량 수·차량 규격, 작업자 수, 예상 작업시간과 선택 메모를 `execution_plan`으로 반드시 받는다.
+- 실행계획은 해당 불변 견적 version에 고정한다. 재전송 멱등성 비교에도 포함하며 어느 값이든 다르면 기존 제안을 재사용하지 않고 `409`다.
+- `GET /scope-review`는 현재 합의 제안의 실행계획을 공동확인 카드에 반환한다. A-23 이전 legacy 제안과 업체 제안 전 고객 초안은 `null`로 명시한다.
+- 실행계획이 저장된 schema는 downgrade로 제거하지 않는다. rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+
 ## 미디어 검증 작업
 
 - A는 `MEDIA_VALIDATION` background job의 생성·attempt·상태 전이를 소유하고, B는 A ORM 대신 version 1 task·work·result 계약과 후속 application command만 사용한다.

@@ -50,12 +50,23 @@ class QuoteSnapshot(ScopeReviewRequestModel):
         return self
 
 
+class ExecutionPlanSnapshot(ScopeReviewRequestModel):
+    """Vehicle and staffing assumptions frozen with one company quote."""
+
+    vehicle_count: Annotated[int, Field(ge=1, le=20)]
+    vehicle_description: Annotated[str, Field(min_length=1, max_length=200)]
+    worker_count: Annotated[int, Field(ge=1, le=100)]
+    estimated_duration_minutes: Annotated[int, Field(ge=30, le=2_880)]
+    notes: Annotated[str, Field(min_length=1, max_length=1000)] | None = None
+
+
 class ScopeProposalCreate(ScopeReviewRequestModel):
     """Send one company quote based on the exact current scope version."""
 
     source_scope_version_id: UUID
     content: ScopeContent
     quote: QuoteSnapshot
+    execution_plan: ExecutionPlanSnapshot
     included_works: Annotated[tuple[ClassificationLabel, ...], Field(max_length=100)] = ()
     exclusions: Annotated[tuple[ClassificationLabel, ...], Field(max_length=100)] = ()
     reason: Annotated[str, Field(min_length=1, max_length=2000)]
@@ -78,6 +89,7 @@ class ScopeProposalResponse(ContractModel):
     source_scope_version_id: UUID
     result_scope_version_id: UUID
     quote: QuoteSnapshot
+    execution_plan: ExecutionPlanSnapshot
     included_works: tuple[str, ...]
     exclusions: tuple[str, ...]
     reason: str
@@ -216,6 +228,7 @@ class ScopeReviewView(ContractModel):
     scope: ScopeReviewScope
     proposal_id: UUID | None
     quote: QuoteSnapshot | None
+    execution_plan: ExecutionPlanSnapshot | None
     proposal_reason: str | None
     company_participation_status: CompanyParticipationStatus
     collaboration_status: ScopeCollaborationStatus
