@@ -152,8 +152,8 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/analysis-review` | 공간별 업로드 수, 실패 수, AI 항목·신뢰도 조회 | 고객 | 구현·현재 AI schema v1 범위 |
-| `POST` | `/api/v1/move-jobs/{job_id}/analysis-review/complete` | 수정·직접 추가를 반영한 최종 AI 검토 결과 제출 | 고객 | 구현·불변 고객 편집본 생성 |
+| `GET` | `/api/v1/move-jobs/{job_id}/analysis-review` | 공간별 업로드 수, 구조화 AI 품목·위치조건 제안 조회 | 고객 | 구현·AI schema v1/v2 호환 |
+| `POST` | `/api/v1/move-jobs/{job_id}/analysis-review/complete` | 품목·위치조건 수정과 직접 추가를 반영한 최종 검토 제출 | 고객 | 구현·불변 고객 편집본 생성 |
 
 ### 3.3 고객 현장 변경 승인
 
@@ -242,11 +242,11 @@ Response `ScopeReviewView`:
 | `revision_request` | object/null | 수정 요청 ID·대상·사유·요청/해결 상태와 시각 |
 
 `RoomScopeGroup`은 `room_zone_id`, `label`, `item_count`, `review_required_count`, `items[]`를 가진다.
-각 item은 `item_key`, `room_zone_id`, `description`, `review_required`,
+각 item은 `item_key`, `room_zone_id`, `description`, `name`, `quantity`, `unit`, `work_note`, `review_required`,
 `source_media_asset_ids`를 반환한다. `MediaPreview`는 READY media만 대상으로
 `media_asset_id`, `room_zone_id`, `content_type`, 5분짜리 generation-pinned `read_url`,
 `expires_at`을 반환한다. object key, generation, model·prompt·provider 값은 응답에 포함하지 않는다.
-현재 범위 v1은 항목 key·공간·설명만 지원하며 수량·단위·작업 메모는 AI schema v2 이후 확장한다.
+v1 범위는 항목 key·공간·설명을 유지하고 v2 범위는 수량·단위·작업 메모와 출·도착지 조건 snapshot을 반환한다.
 
 ### 4.3 `GET /analysis-review`
 
@@ -263,6 +263,8 @@ Response `AnalysisReviewView`:
 | `detected_count` | integer | AI 분석 34개 |
 | `review_required_count` | integer | 검토 필요 2개 |
 | `items[]` | `AnalysisReviewItem[]` | 품목·수량·신뢰도·검토 상태 |
+| `location_conditions[]` | `ScopeLocationConditions[]` | 현재 편집 중인 출·도착지 조건 snapshot |
+| `location_condition_suggestions[]` | `DraftLocationCondition[]` | AI 신뢰도·확인 필요 필드·source media가 포함된 원본 제안 |
 
 `AnalysisReviewItem`: `item_key`, `room_zone_id`, `name`, `quantity`, `unit`, `work_note`, `confidence`, `review_required`, `source_media[]`.
 
@@ -416,7 +418,8 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 
 ```json
 {
-  "analysis_run_id": "uuid",
+  "source_scope_version_id": "uuid",
+  "scope_schema_version": 2,
   "items": [
     {
       "item_key": "living-sofa-1",
@@ -424,15 +427,30 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
       "name": "3인 소파",
       "quantity": 1,
       "unit": "개",
-      "work_note": "일반 운반",
-      "source_media_asset_ids": ["uuid"]
+      "work_note": "일반 운반"
+    }
+  ],
+  "location_conditions": [
+    {
+      "location_id": "uuid",
+      "kind": "origin",
+      "conditions": {
+        "residence_type": "studio",
+        "floor": {"status": "known", "value": 3},
+        "elevator": "available",
+        "stairs": "not_required",
+        "parking_access": "available",
+        "carry_distance": {"status": "known", "value_m": 20},
+        "access_note": "주차 가능 확인"
+      }
     }
   ]
 }
 ```
 
 - `items`: 1..500개, `item_key` 중복 불가
-- 성공: `200`, `{scope_draft_id, status: "company_review"}`
+- v2 `location_conditions`: 작업의 모든 location ID와 kind가 현재 topology와 정확히 일치해야 한다. 생략 시 현재 서버 원본 조건을 snapshot한다.
+- 성공: `200`, 최신 `AnalysisReviewResponse`와 `review_scope_version_id`
 - AI confidence는 원본 분석 기록에 보존하고 고객 수정값을 AI 결과로 덮어쓰지 않는다.
 
 ### 5.4 업체 범위·금액 제안 전송
@@ -768,7 +786,7 @@ v1은 검증된 원본 객체의 저장된 generation을 고정한 짧은 read U
 
 ### 6.5 `AnalysisDraftItemV2`
 
-현재 AI `DraftItem v1`은 화면의 수량과 작업 정보를 표현하지 못하므로 다음 필드가 필요하다.
+AI `AnalysisResult` v2는 v1의 설명형 품목과 호환하면서 다음 구조화 필드를 보존한다.
 
 - `item_key`, `room_zone_id`
 - `name`, `quantity`, `unit`, `work_note`
@@ -776,8 +794,10 @@ v1은 검증된 원본 객체의 저장된 generation을 고정한 짧은 read U
 - `source_media_asset_ids[]`
 
 AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거치기 전에는 확정 scope나 금액을 변경하지 않는다.
+READY `inventory|condition` 미디어마다 주소 원문이 없는 location·room-zone context를 전달하며, 위치 조건 제안은
+주거 형태·층·엘리베이터·계단·주차·운반거리·접근 메모, 신뢰도, 확인 필요 필드와 source media를 포함한다.
 
-### 6.6 현재 `AnalysisReview` v1 실행 계약
+### 6.6 현재 `AnalysisReview` v1/v2 실행 계약
 
 `GET /api/v1/move-jobs/{job_id}/analysis-review`는 호출 고객이 제출한 가장 최신 분석이
 `completed`일 때만 성공한다. 더 최신 분석이 진행·실패 상태면 이전 결과로 자동 후퇴하지 않고
@@ -788,12 +808,15 @@ AI 결과는 검토용 초안일 뿐이며 고객 검토와 업체 제안을 거
 - `zones[]`: 출발지 공간별 `total_media_count`, `ready_media_count`, `failed_media_count`
 - `items[]`: 현재 편집 내용과 `source`, 선택적 `confidence`, `review_required`,
   `source_media_asset_ids`
+- `location_conditions[]`: AI 원본 또는 고객 편집본에 고정된 전체 출·도착지 조건
+- `location_condition_suggestions[]`: AI 원본 조건·신뢰도·확인 필요 필드와 source media
 
 model·prompt version, provider task ID, object key와 signed URL은 이 view에 포함하지 않는다.
 `POST .../analysis-review/complete`는 `source_scope_version_id`와 최종 `items[]` 전체를 받는다.
-현재 v1 item은 `item_key`, `room_zone_id`, `description`을 지원한다. 같은 고객이 같은 최종
+v1 item은 `item_key`, `room_zone_id`, `description`을 지원하고 v2는 `name`, `quantity`, `unit`,
+`work_note`와 `location_conditions[]`를 지원한다. 같은 고객이 같은 최종
 내용을 재전송하면 기존 자식 version을 반환하고, stale 원본·상충 내용·다른 참여자가 만든 자식
-version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승인 뒤 확장한다.
+version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 고객이 제출한 자식 scope에만 확정된다.
 
 ## 7. 화면과 API 대응
 
@@ -843,7 +866,7 @@ version은 `409`다. 수량·단위·작업 메모는 `AnalysisDraftItemV2` 승�
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
-| analysis review 조회·완료 2개 | FE #5가 최신 완료 분석 조회·고객 검토 완료를 연결했고 FE #6이 `409` 최신 상태 복구를 보강했다. 검토 결과는 AI 원본의 불변 자식 scope version으로 한 번만 생성하며, 수량·단위·작업 메모는 AI schema v2 이후 확장한다. |
+| analysis review 조회·완료 2개 | 최신 완료 분석의 v1/v2 구조화 품목·위치 조건 제안을 조회하고 고객 편집본을 불변 자식 scope version으로 한 번만 생성한다. FE는 v2 필드와 위치조건 검수 UI를 추가 연결해야 한다. |
 | scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1만 노출한다. |
 | dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |

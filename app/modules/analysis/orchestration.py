@@ -2,17 +2,22 @@
 
 ``request_analysis`` enqueues a minimal analysis task; the durable run is
 created lazily by the worker handler. ``build_analysis_request`` reconstructs
-the provider-neutral request from A-approved READY inventory media, so object
-keys never travel inside the queue message.
+the provider-neutral request from A-approved READY inventory and condition
+media, so object keys never travel inside the queue message.
 """
 
-from collections.abc import Sequence
 from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.contracts.ai import AnalysisContentType, AnalysisRequest, AnalysisTaskV1
+from app.contracts.ai import (
+    AnalysisContentType,
+    AnalysisLocationKind,
+    AnalysisRequest,
+    AnalysisSourceContext,
+    AnalysisTaskV1,
+)
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import TaskQueuePort
 from app.contracts.primitives import (
@@ -23,12 +28,13 @@ from app.contracts.primitives import (
     TraceId,
 )
 from app.modules.capture.models import MediaAsset
+from app.modules.move_job.models import Location, RoomZone
 
 DEFAULT_ENQUEUE_TIMEOUT_SECONDS = 10.0
 
 
 class AnalysisInputsUnavailableError(RuntimeError):
-    """Raised when a capture session has no analyzable inventory media."""
+    """Raised when a capture session has no analyzable scope media."""
 
 
 async def build_analysis_request(
@@ -40,25 +46,24 @@ async def build_analysis_request(
     model_version: str,
     prompt_version: str,
 ) -> AnalysisRequest:
-    """Reconstruct the analysis request from READY inventory media."""
+    """Reconstruct a v2 analysis request from READY scope media."""
 
-    assets: Sequence[MediaAsset] = (
-        (
-            await session.execute(
-                select(MediaAsset)
-                .where(
-                    MediaAsset.capture_session_id == capture_session_id,
-                    MediaAsset.media_purpose == MediaPurpose.INVENTORY,
-                    MediaAsset.status == MediaAssetStatus.READY,
-                )
-                .order_by(MediaAsset.created_at, MediaAsset.id)
+    source_rows = (
+        await session.execute(
+            select(MediaAsset, RoomZone.location_id, Location.kind)
+            .join(RoomZone, RoomZone.id == MediaAsset.room_zone_id)
+            .join(Location, Location.id == RoomZone.location_id)
+            .where(
+                MediaAsset.capture_session_id == capture_session_id,
+                MediaAsset.media_purpose.in_({MediaPurpose.INVENTORY, MediaPurpose.CONDITION}),
+                MediaAsset.status == MediaAssetStatus.READY,
             )
+            .order_by(MediaAsset.created_at, MediaAsset.id)
         )
-        .scalars()
-        .all()
-    )
-    if not assets:
+    ).all()
+    if not source_rows:
         raise AnalysisInputsUnavailableError(str(capture_session_id))
+    assets = tuple(row[0] for row in source_rows)
 
     return AnalysisRequest(
         analysis_run_id=analysis_run_id,
@@ -69,6 +74,16 @@ async def build_analysis_request(
         model_name=model_name,
         model_version=model_version,
         prompt_version=prompt_version,
+        requested_result_schema_version=2,
+        source_contexts=tuple(
+            AnalysisSourceContext(
+                media_asset_id=MediaAssetId(asset.id),
+                location_id=location_id,
+                location_kind=cast(AnalysisLocationKind, location_kind.value),
+                room_zone_id=asset.room_zone_id,
+            )
+            for asset, location_id, location_kind in source_rows
+        ),
     )
 
 

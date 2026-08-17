@@ -34,6 +34,8 @@ from app.modules.scope.schemas import (
 from app.modules.scope.service import (
     ScopeResourceNotFoundError,
     ScopeVersionConflictError,
+    _normalize_scope_content,
+    _with_location_condition_snapshot,
     create_scope_version,
 )
 
@@ -228,6 +230,8 @@ async def _to_response(
         review_completed_at=_aware(review.created_at) if review else None,
         zones=await _zone_views(session, row.move_job_id, row.capture_session_id),
         items=_current_items(source_result, content),
+        location_conditions=content.location_conditions,
+        location_condition_suggestions=source_result.location_condition_suggestions,
     )
 
 
@@ -283,14 +287,19 @@ async def complete_analysis_review(
             )
             for item in command.items
         )
-    requested_content = ScopeContent(
-        schema_version=command.scope_schema_version,
-        items=requested_items,
-    )
-    normalized_content = ScopeContent(
-        schema_version=requested_content.schema_version,
-        items=tuple(sorted(requested_content.items, key=lambda item: item.item_key)),
-    )
+    try:
+        requested_content = await _with_location_condition_snapshot(
+            session,
+            job_id,
+            ScopeContent(
+                schema_version=command.scope_schema_version,
+                items=requested_items,
+                location_conditions=command.location_conditions,
+            ),
+        )
+    except ScopeResourceNotFoundError as error:
+        raise AnalysisReviewNotFoundError(job_id) from error
+    normalized_content = _normalize_scope_content(requested_content)
     existing = await _child_scope(session, source.id)
     if existing is not None:
         stored_content = ScopeContent.model_validate(existing.content, strict=False)

@@ -106,7 +106,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 고객과 회사 관리자가 같은 현재 버전을 각각 확인하면 해당 버전이 잠깁니다. 이미 다음 버전이 있는 과거 버전, 중복 확인, 잠긴 버전의 후속 편집은 거부합니다.
 
-일반 frontend의 범위 화면은 저수준 scope API 대신 `scope-review` 흐름을 사용합니다. 업체 제안은 고객이 작성한 현재 범위 또는 고객 수정요청이 열린 현재 제안을 source로 새 불변 자식 version과 원화 견적 snapshot을 만들고 업체 확인을 함께 기록합니다. 고객은 수정요청 또는 확인 중 하나를 선택하며, 확인되면 기존 scope lock·Outbox·감사 계약을 재사용합니다. 같은 source와 정확히 같은 command 재전송은 기존 결과를 반환하고 다른 payload나 stale source는 거부합니다. 범위 조회의 AI 원본 사진은 READY 객체의 짧은 generation-pinned signed URL만 제공하며 provider 내부값은 노출하지 않습니다. 현재 범위 schema v1은 항목 key·공간·설명을 지원하고 수량·단위·작업 메모는 후속 AI schema v2 범위입니다.
+일반 frontend의 범위 화면은 저수준 scope API 대신 `scope-review` 흐름을 사용합니다. 업체 제안은 고객이 작성한 현재 범위 또는 고객 수정요청이 열린 현재 제안을 source로 새 불변 자식 version과 원화 견적 snapshot을 만들고 업체 확인을 함께 기록합니다. 고객은 수정요청 또는 확인 중 하나를 선택하며, 확인되면 기존 scope lock·Outbox·감사 계약을 재사용합니다. 같은 source와 정확히 같은 command 재전송은 기존 결과를 반환하고 다른 payload나 stale source는 거부합니다. 범위 조회의 AI 원본 사진은 READY 객체의 짧은 generation-pinned signed URL만 제공하며 provider 내부값은 노출하지 않습니다. 범위 schema v1은 항목 key·공간·설명을 호환 유지하고 v2는 이름·수량·단위·작업 메모와 출·도착지 조건 snapshot을 지원합니다.
 
 내부 `import_analysis_draft` application command는 공용 `AnalysisResult`를 검증해 새 작업범위 버전으로 변환합니다. AI 제안의 출처 미디어와 구역을 확인하고 모델·프롬프트·confidence·검토 필요 여부를 provenance로 보존하며, 같은 analysis run은 한 번만 가져옵니다. 외부 HTTP에서 raw AI 결과를 직접 등록하는 경로는 제공하지 않습니다.
 
