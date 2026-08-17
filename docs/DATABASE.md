@@ -10,6 +10,7 @@
 - `field_issue`와 `field_issue_evidence`는 잠긴 기준 범위에 대한 현장기사 보고와 검증된 증거 연결을 보존한다. `change_proposal_detail`은 기존 `change_request`에 이슈·제목·원화 견적 snapshot을 1:1로 연결하며 기존 범위·금액 이력을 덮어쓰지 않는다.
 - `dispatch_setup`은 작업별 현재 범위·일정·요구사항·checklist와 차량·인력 후보의 불변 snapshot을 저장한다. `dispatch_plan`은 그 snapshot에서 확정한 차량·인력 ID와 command hash를 작업별 한 건으로 고정하고, `field_check_in`은 배정된 대표 현장기사의 checklist 확인과 당일 도착 시각을 한 번 기록한다.
 - `completion_submission`은 현재 배차·범위·대표 기사, 완료 checklist, 작업자 근무 구간과 현장 확인 시각을 불변 command hash와 함께 저장한다. 선택적 `completion_submission_evidence`는 검증된 completion 미디어를 연결한다. `completion_request`는 업체의 7일 고객 확인 요청·철회·결정 상태를 보존하고, `completion_problem_report`는 고객 문제 유형·설명을 요청별 최대 한 건으로 분리한다.
+- `detection`은 결과 schema version별 AI 품목 초안을 저장한다. v1 row의 구조화 필드는 비어 있고 v2 row는 이름과 수량·단위의 함께 존재 규칙을 DB에서 검증한다. `analysis_location_condition_suggestion`은 출·도착지별 최대 한 건의 구조화 조건과 검수 필요 필드·출처를 저장하며 A 소유 location table을 직접 갱신하지 않는다.
 - SQLAlchemy engine은 `pool_pre_ping`과 parameter hiding을 활성화한다.
 - application command는 `transactional_session`을 경계로 한 번 commit되며 예외 시 전체 rollback된다.
 - 각 ORM model은 `app.platform.db.Base`를 사용해 Alembic constraint 이름을 결정적으로 유지한다.
@@ -28,7 +29,7 @@ uv run alembic downgrade -1
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
 
-현재 단일 head는 `a_19_0001`이다. `location.conditions`는 출·도착지 조건을 값 또는 `unknown`으로 보존하고 `capture_session`은 미디어 동의 정책 버전·확인 여부·보관기간·동의 시각 snapshot을 보존한다. 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 기본 checklist만 자동 보강된 기존 A-13 setup은 INT-04 history로 간주하지 않아 더 오래된 migration의 자체 guard까지 정상 진행한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
+현재 단일 head는 `b_08_0001`이다. `location.conditions`는 출·도착지 조건을 값 또는 `unknown`으로 보존하고 `capture_session`은 미디어 동의 정책 버전·확인 여부·보관기간·동의 시각 snapshot을 보존한다. B-08은 기존 v1 detection을 안전하게 backfill하고 AI v2 품목·위치 조건 제안을 추가한다. v2 결과 이력, 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력이 존재하면 이를 제거하는 schema downgrade는 거부한다. 기본 checklist만 자동 보강된 기존 A-13 setup은 INT-04 history로 간주하지 않아 더 오래된 migration의 자체 guard까지 정상 진행한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

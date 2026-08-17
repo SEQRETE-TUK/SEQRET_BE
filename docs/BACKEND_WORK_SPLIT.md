@@ -98,6 +98,7 @@ entrypoints/media_jobs
 
 - `ai_analysis_run`
 - `detection`
+- `analysis_location_condition_suggestion`
 
 핵심 책임:
 
@@ -110,7 +111,7 @@ entrypoints/media_jobs
 - worker handler의 멱등 실행, retry 분류와 provider 오류 매핑
 - `AIProviderPort`의 Vertex AI/Gemini adapter 구현
 - AI 입력 구성, prompt·model version과 결과 Pydantic schema
-- `ai_analysis_run`, `detection`과 사람이 검토할 AI 초안 생성
+- `ai_analysis_run`, `detection`, `analysis_location_condition_suggestion`과 사람이 검토할 AI 초안 생성
 - 장시간 미디어 처리와 물리 삭제를 수행하는 Cloud Run Job handler
 - GCS·Cloud Tasks·Vertex AI 실제 adapter contract test
 - AI 지연시간, 토큰·비용, task 실패와 미디어 처리 지표 추가
@@ -135,7 +136,7 @@ entrypoints/media_jobs
 | 미디어 업로드 | actor 권한, 목적, 크기 제한, `media_asset` 생성과 완료 상태 | GCS signed URL과 object metadata 조회 |
 | 미디어 열람 | 작업·역할·미디어 목적별 접근 허용 판단 | GCS signed read URL 생성 |
 | 미디어 삭제 | 보존기간, 삭제 대상 결정, job 상태와 감사 event | GCS 객체 물리 삭제와 결과 반환 |
-| AI 분석 | 분석 job 생성, 실행 요청, 결과를 범위 초안으로 가져오기 | Gemini 호출, 결과 검증, `ai_analysis_run`과 `detection` 저장 |
+| AI 분석 | 분석 job 생성, 실행 요청, 결과를 범위 초안으로 가져오기 | Gemini 호출, 결과 검증, `ai_analysis_run`·`detection`·위치 조건 제안 저장 |
 | Task Queue | `background_job`과 enqueue 시점, 재실행 정책 | Cloud Tasks 생성과 worker 실행 |
 | 장시간 Job | 실행 조건, 스케줄과 대상 범위 | 미디어 처리·삭제 handler |
 | Event | Outbox 저장, Pub/Sub 발행, 알림과 업무 consumer | B 모듈 event를 계약에 맞게 생성하고 필요한 handler 제공 |
@@ -313,7 +314,7 @@ event consumer는 `event_id`를 기준으로 중복 처리를 방지한다.
 | B-05 | 미디어 검증과 파생 처리 정책 | B-01 | v1은 크기·MIME·hash와 generation을 검증하고 원본만 사용한다. 파생 파일은 실제 소비 화면이 생길 때 별도 versioned 계약으로 추가한다. |
 | B-06 | worker 멱등성과 오류 매핑 | B-02, B-04 | 중복 실행과 재시도 가능한 오류가 안전하게 처리된다. |
 | B-07 | GCS 삭제·장시간 Job handler | B-01, B-02 | A가 지정한 대상만 삭제하고 결과를 반환한다. |
-| B-08 | AI v2 영속화와 Vertex 출력 | A-20, A-21, B-04 | 수량·단위·작업 메모와 위치 조건 제안을 저장·복원하고 Vertex 결과를 v2 계약으로 검증한다. |
+| B-08 | AI v2 영속화와 Vertex 출력 | A-20, A-21, B-04 | 구현 완료. 수량·단위·작업 메모와 위치 조건 제안을 저장·복원하고 Vertex 결과를 v2 계약으로 검증한다. |
 
 ### Phase 3 — 공동 통합
 

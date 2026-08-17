@@ -200,7 +200,7 @@ A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 - 완료 포함 화면 단위 view와 command는 구현됨
 - 조건부 화면용 `media-uploads` adapter; 현재 capture 생성·upload·complete 상태 전이를 보존할 때만 추가
 - 후속 공통 `JobHeader`; `ScopeItemV2`, `LocationConditions`, `QuoteSnapshot`, 공동확인 상태와 signed 범위·완료 preview는 구현됨
-- A-21의 AI `AnalysisResult` v2 범위 가져오기·고객 검수 API는 구현됨. B-08 영속화·Vertex v2 출력과 FE 검수 UI 연결이 남음
+- A-21의 AI `AnalysisResult` v2 범위 가져오기·고객 검수 API와 B-08의 영속화·Vertex v2 출력은 구현됨. FE 검수 UI 연결만 남음
 
 ### frontend 연동
 
@@ -210,7 +210,7 @@ A-17까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 
 ### migration
 
-INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. 단일 head는 `a_19_0001`이며 A-20·A-21은 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했다. 단일 head는 `b_08_0001`이며 A-20·A-21은 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
 
 ## 8. frontend 연동 기준
 

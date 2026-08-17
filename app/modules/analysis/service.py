@@ -10,14 +10,27 @@ caller-managed session so a worker owns the transaction and retry policy.
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.contracts.ai import AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisCarryDistanceCondition,
+    AnalysisElevatorAvailability,
+    AnalysisFloorCondition,
+    AnalysisKnowledgeStatus,
+    AnalysisLocationConditionField,
+    AnalysisLocationKind,
+    AnalysisParkingAccess,
+    AnalysisResidenceType,
+    AnalysisResult,
+    AnalysisStairUsage,
+    DraftItem,
+    DraftLocationCondition,
+)
 from app.contracts.ports import ProviderErrorKind
 from app.contracts.primitives import (
     AnalysisRunId,
@@ -25,7 +38,12 @@ from app.contracts.primitives import (
     MediaAssetId,
     TraceId,
 )
-from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
+from app.modules.analysis.models import (
+    AiAnalysisRun,
+    AnalysisLocationConditionSuggestion,
+    AnalysisRunStatus,
+    Detection,
+)
 
 
 class AnalysisRetryDecision(StrEnum):
@@ -150,8 +168,13 @@ async def complete_analysis_run(
                 Detection(
                     analysis_run_id=result.analysis_run_id,
                     ordinal=ordinal,
+                    item_schema_version=result.result_schema_version,
                     item_key=item.item_key,
                     description=item.description,
+                    name=item.name,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    work_note=item.work_note,
                     confidence=item.confidence,
                     review_required=review_required,
                     source_media_asset_ids=[
@@ -160,6 +183,29 @@ async def complete_analysis_run(
                 )
             )
             ordinal += 1
+    for ordinal, suggestion in enumerate(result.location_condition_suggestions):
+        session.add(
+            AnalysisLocationConditionSuggestion(
+                analysis_run_id=result.analysis_run_id,
+                ordinal=ordinal,
+                location_id=suggestion.location_id,
+                location_kind=suggestion.location_kind,
+                residence_type=suggestion.residence_type,
+                floor_status=suggestion.floor.status,
+                floor_value=suggestion.floor.value,
+                elevator=suggestion.elevator,
+                stairs=suggestion.stairs,
+                parking_access=suggestion.parking_access,
+                carry_distance_status=suggestion.carry_distance.status,
+                carry_distance_value_m=suggestion.carry_distance.value_m,
+                access_note=suggestion.access_note,
+                confidence=suggestion.confidence,
+                review_required_fields=list(suggestion.review_required_fields),
+                source_media_asset_ids=[
+                    str(asset_id) for asset_id in suggestion.source_media_asset_ids
+                ],
+            )
+        )
     await session.flush()
 
 
@@ -214,6 +260,10 @@ async def load_analysis_result(
         item = DraftItem(
             item_key=detection.item_key,
             description=detection.description,
+            name=detection.name,
+            quantity=detection.quantity,
+            unit=detection.unit,
+            work_note=detection.work_note,
             confidence=detection.confidence,
             source_media_asset_ids=tuple(
                 MediaAssetId(UUID(asset_id)) for asset_id in detection.source_media_asset_ids
@@ -221,14 +271,52 @@ async def load_analysis_result(
         )
         (review_required_items if detection.review_required else draft_items).append(item)
 
+    suggestions = (
+        await session.execute(
+            select(AnalysisLocationConditionSuggestion)
+            .where(AnalysisLocationConditionSuggestion.analysis_run_id == analysis_run_id)
+            .order_by(AnalysisLocationConditionSuggestion.ordinal)
+        )
+    ).scalars()
+    location_condition_suggestions = tuple(
+        DraftLocationCondition(
+            location_id=suggestion.location_id,
+            location_kind=cast(AnalysisLocationKind, suggestion.location_kind),
+            residence_type=cast(AnalysisResidenceType, suggestion.residence_type),
+            floor=AnalysisFloorCondition(
+                status=cast(AnalysisKnowledgeStatus, suggestion.floor_status),
+                value=suggestion.floor_value,
+            ),
+            elevator=cast(AnalysisElevatorAvailability, suggestion.elevator),
+            stairs=cast(AnalysisStairUsage, suggestion.stairs),
+            parking_access=cast(AnalysisParkingAccess, suggestion.parking_access),
+            carry_distance=AnalysisCarryDistanceCondition(
+                status=cast(AnalysisKnowledgeStatus, suggestion.carry_distance_status),
+                value_m=suggestion.carry_distance_value_m,
+            ),
+            access_note=suggestion.access_note,
+            confidence=suggestion.confidence,
+            review_required_fields=cast(
+                tuple[AnalysisLocationConditionField, ...],
+                tuple(suggestion.review_required_fields),
+            ),
+            source_media_asset_ids=tuple(
+                MediaAssetId(UUID(asset_id)) for asset_id in suggestion.source_media_asset_ids
+            ),
+        )
+        for suggestion in suggestions
+    )
+
     return AnalysisResult(
         analysis_run_id=AnalysisRunId(run.id),
         capture_session_id=CaptureSessionId(run.capture_session_id),
         model_name=cast(str, run.model_name),
         model_version=cast(str, run.model_version),
         prompt_version=cast(str, run.prompt_version),
+        result_schema_version=cast(Literal[1, 2], run.result_schema_version),
         draft_items=tuple(draft_items),
         review_required_items=tuple(review_required_items),
+        location_condition_suggestions=location_condition_suggestions,
     )
 
 

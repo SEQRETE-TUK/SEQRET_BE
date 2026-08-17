@@ -11,8 +11,8 @@
 - OpenAPI operation은 52개 path에 60개다: `/api/v1` 업무 operation 57개와 `/healthz`, `/readyz`, `/edgez` 3개다.
 - 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 작업별 후보 snapshot 기반 배차·현장기사 알림·브리프·체크인, 현장기사 이슈→업체 변경 제안→고객 결정, 대표기사 완료 제출→업체 요청→고객 확인·문제 신고→문서·보존, 기존 현장 변경요청·완료 확인, 감사·알림 조회와 미디어 보존 background job을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
-- 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI 분석 실행·초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `a_19_0001`다. 출·도착지 구조화 조건은 기존 location에 `unknown`으로 안전하게 보강되고 기존 촬영은 동의 미기록 상태로 유지된다. 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI v1·v2 분석 실행·구조화 초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
+- Alembic은 단일 head `b_08_0001`다. 출·도착지 구조화 조건은 기존 location에 `unknown`으로 안전하게 보강되고 기존 촬영은 동의 미기록 상태로 유지된다. 기존 AI v1 detection은 구조화 필드가 비어 있는 version 1로 backfill되며 v2 품목과 위치 조건 제안은 별도 파생 이력으로 저장된다. v2 AI 결과, 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
