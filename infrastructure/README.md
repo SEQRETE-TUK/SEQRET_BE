@@ -117,6 +117,8 @@ The workflow serializes with staging deploys, creates only `seqret-stg-recovery-
 
 The run summary is the recovery evidence: source commit, requested and available recovery times, Cloud SQL operation ID, expected and restored migration head, marker result, cleanup result, and run URL. It intentionally excludes database URLs, credentials, addresses, and row contents. Record a successful run at the agreed recovery-drill cadence; workflow code alone does not prove that the external PITR and network path work.
 
+The 2026-08-17 current-main drill is [Verify staging DB recovery #31989429786](https://github.com/SEQRETE-TUK/SEQRET_BE/actions/runs/31989429786). Source `1b2d8de3596c398fe706da0d0b9f6f24ff053e20` restored the requested 2026-08-17T02:49:00.726907470Z point, connected with the dedicated recovery identity in read-only mode, matched expected and restored Alembic head `a_23_0001`, and found the supplied pre-restore marker. The workflow deleted exact clone `seqret-stg-recovery-31989429786-1`; no generated recovery instance remained afterward.
+
 If cancellation or runner loss prevents cleanup, first look up the latest `CLONE` operation for the exact generated `seqret-stg-recovery-<run-id>-<attempt>` target, even when the instance is not visible yet. Verify the operation has the same project and target ID, then wait for or cancel it. On that exact clone only, disable deletion protection, retained backups on delete, and final backup, delete the instance, wait for the delete operation, and confirm the name is absent. Never patch or delete `CLOUD_SQL_SOURCE_INSTANCE`; an unverified recovery instance remains an incident until removed.
 
 ## Artifact vulnerability and cleanup policy
