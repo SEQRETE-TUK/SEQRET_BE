@@ -32,13 +32,14 @@ from app.modules.dispatch.schemas import (
     FieldCheckInCreate,
     FieldCheckInResponse,
 )
+from app.modules.field_change.models import ChangeProposalDetail
 from app.modules.move_job.models import (
     JobParticipant,
     LocationKind,
     MoveJob,
     MoveJobStatus,
 )
-from app.modules.scope.models import ScopeVersion
+from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeVersion
 from app.modules.scope.schemas import ScopeContent
 from app.modules.scope_review.models import ScopeProposal, ScopeProposalStatus
 from app.modules.scope_review.schemas import QuoteAdjustment, QuoteSnapshot, ScopeReviewJobHeader
@@ -83,6 +84,70 @@ def _confirmed_quote(proposal: ScopeProposal | None) -> QuoteSnapshot | None:
         ),
         total_amount_krw=proposal.total_amount_krw,
     )
+
+
+def _approved_change_quote(detail: ChangeProposalDetail) -> QuoteSnapshot:
+    return QuoteSnapshot.model_validate(
+        {
+            "base_amount_krw": detail.base_amount_krw,
+            "adjustments": detail.adjustments,
+            "total_amount_krw": detail.total_amount_krw,
+        },
+        strict=False,
+    )
+
+
+async def _field_brief_quote_context(
+    session: AsyncSession,
+    job_id: UUID,
+    scope_version_id: UUID,
+) -> tuple[QuoteSnapshot | None, ScopeProposal | None]:
+    """Resolve the effective quote and inherited classifications for a locked scope."""
+
+    proposal = await session.scalar(
+        select(ScopeProposal).where(
+            ScopeProposal.job_id == job_id,
+            ScopeProposal.result_scope_version_id == scope_version_id,
+        )
+    )
+    change_row = (
+        (
+            await session.execute(
+                select(ChangeProposalDetail, ChangeRequest)
+                .join(
+                    ChangeRequest,
+                    ChangeRequest.id == ChangeProposalDetail.change_request_id,
+                )
+                .where(
+                    ChangeRequest.job_id == job_id,
+                    ChangeRequest.result_scope_version_id == scope_version_id,
+                    ChangeRequest.status == ChangeRequestStatus.APPROVED,
+                )
+            )
+        )
+        .tuples()
+        .one_or_none()
+    )
+    if proposal is not None and change_row is not None:
+        raise DispatchConflictError(scope_version_id)
+    if proposal is not None:
+        return _confirmed_quote(proposal), proposal
+    if change_row is None:
+        return None, None
+
+    detail, _ = change_row
+    agreement_proposal = await session.scalar(
+        select(ScopeProposal)
+        .where(
+            ScopeProposal.job_id == job_id,
+            ScopeProposal.status == ScopeProposalStatus.CONFIRMED,
+        )
+        .order_by(ScopeProposal.confirmed_at.desc(), ScopeProposal.id.desc())
+        .limit(1)
+    )
+    if agreement_proposal is None:
+        raise DispatchConflictError(scope_version_id)
+    return _approved_change_quote(detail), agreement_proposal
 
 
 async def _require_participant(
@@ -649,14 +714,12 @@ async def get_field_brief(
     if setup is None or plan is None:
         raise DispatchConflictError(job_id)
     version = await _current_locked_scope(session, job_id, setup.source_scope_version_id)
-    proposal = await session.scalar(
-        select(ScopeProposal).where(
-            ScopeProposal.job_id == job_id,
-            ScopeProposal.result_scope_version_id == version.id,
-        )
-    )
     scope_content = ScopeContent.model_validate(version.content, strict=False)
-    quote = _confirmed_quote(proposal)
+    quote, agreement_proposal = await _field_brief_quote_context(
+        session,
+        job_id,
+        version.id,
+    )
     assert version.locked_at is not None
     _assigned_worker(setup, plan, participant_id)
     workers = {option.id: option for option in _worker_options(setup)}
@@ -720,8 +783,10 @@ async def get_field_brief(
         scope_locked_at=_aware(version.locked_at),
         scope_content=scope_content,
         quote=quote,
-        included_works=tuple(proposal.included_works) if proposal is not None else (),
-        exclusions=tuple(proposal.exclusions) if proposal is not None else (),
+        included_works=(
+            tuple(agreement_proposal.included_works) if agreement_proposal is not None else ()
+        ),
+        exclusions=(tuple(agreement_proposal.exclusions) if agreement_proposal is not None else ()),
         start_at=_aware(setup.start_at),
         masked_origin=locations.get(LocationKind.ORIGIN),
         masked_destination=locations.get(LocationKind.DESTINATION),
