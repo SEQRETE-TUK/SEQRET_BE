@@ -188,6 +188,13 @@ def _proposal_payload(
             ],
             "total_amount_krw": base + adjustment,
         },
+        "execution_plan": {
+            "vehicle_count": 1,
+            "vehicle_description": "1톤 탑차",
+            "worker_count": 2 if revision else 3,
+            "estimated_duration_minutes": 240,
+            "notes": "피아노 안전 장비 포함",
+        },
         "included_works": ["포장", "운반", "피아노 전문 운반"],
         "exclusions": ["에어컨 이전"],
         "reason": (
@@ -254,6 +261,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert proposal["proposal_kind"] == "initial"
     assert proposal["status"] == "customer_review"
     assert proposal["quote"]["total_amount_krw"] == 1_280_000
+    assert proposal["execution_plan"] == payload["execution_plan"]
 
     replay = await client.post(
         proposals_url,
@@ -292,6 +300,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert customer_view.json()["scope"]["exclusion_count"] == 1
     assert customer_view.json()["company_confirmed_at"] is not None
     assert customer_view.json()["customer_confirmed_at"] is None
+    assert customer_view.json()["execution_plan"] == payload["execution_plan"]
     revision_url = f"{review_url}/revision-request"
     revision_command = {
         "scope_version_id": proposal["result_scope_version_id"],
@@ -929,6 +938,12 @@ def test_scope_review_rejects_invalid_storage_read_urls(value: str) -> None:
         _validated_read_url(value)
 
 
+def test_scope_review_preserves_legacy_proposal_without_execution_plan() -> None:
+    proposal = cast(ScopeProposal, SimpleNamespace(execution_plan=None))
+
+    assert scope_review_service._execution_plan_from_proposal(proposal) is None
+
+
 def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> None:
     zone_id = uuid4()
     source_id = uuid4()
@@ -947,6 +962,13 @@ def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> N
             "base_amount_krw": 1000,
             "adjustments": [{"label": "추가", "amount_krw": 100}],
             "total_amount_krw": 1100,
+        },
+        "execution_plan": {
+            "vehicle_count": 1,
+            "vehicle_description": "1톤 탑차",
+            "worker_count": 2,
+            "estimated_duration_minutes": 180,
+            "notes": None,
         },
         "included_works": ["운반"],
         "exclusions": ["에어컨"],
@@ -973,6 +995,18 @@ def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> N
     }
     with pytest.raises(ValidationError, match="labels must be unique"):
         ScopeProposalCreate.model_validate(duplicate_adjustment)
+    for plan_field, plan_value in (
+        ("vehicle_count", 0),
+        ("vehicle_description", ""),
+        ("worker_count", 0),
+        ("estimated_duration_minutes", 29),
+    ):
+        invalid_plan = {
+            **base,
+            "execution_plan": {**base["execution_plan"], plan_field: plan_value},
+        }
+        with pytest.raises(ValidationError):
+            ScopeProposalCreate.model_validate(invalid_plan)
     for field, value, message in (
         ("included_works", ["운반", "운반"], "included works must be unique"),
         ("exclusions", ["에어컨", "에어컨"], "exclusions must be unique"),

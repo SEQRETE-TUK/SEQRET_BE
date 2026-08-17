@@ -104,6 +104,7 @@ class ScopeProposal(Base):
     base_amount_krw: Mapped[int] = mapped_column(BigInteger, nullable=False)
     adjustments: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     total_amount_krw: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    execution_plan: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     included_works: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     exclusions: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     reason: Mapped[str] = mapped_column(String(2000), nullable=False)

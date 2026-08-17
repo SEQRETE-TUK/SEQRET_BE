@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "b_08_0001"
+ALEMBIC_HEAD = "a_23_0001"
+ALEMBIC_AI_V2_HEAD = "b_08_0001"
 ALEMBIC_AI_V2_PREVIOUS = "a_19_0001"
 ALEMBIC_MEDIA_CONSENT_PREVIOUS = "a_16_0001"
 ALEMBIC_LOCATION_PREVIOUS = "int_04_0001"
@@ -91,6 +92,67 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_scope_execution_plan_migration_roundtrips_and_guards_history(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'scope-plan.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+
+    try:
+        command.upgrade(configuration, ALEMBIC_AI_V2_HEAD)
+        assert "execution_plan" not in {
+            column["name"] for column in inspect(engine).get_columns("scope_proposal")
+        }
+
+        command.upgrade(configuration, "head")
+        proposal = Table("scope_proposal", MetaData(), autoload_with=engine)
+        now = datetime.now(UTC)
+        with engine.begin() as connection:
+            connection.execute(text("PRAGMA foreign_keys=OFF"))
+            connection.execute(
+                proposal.insert(),
+                {
+                    "id": uuid4().hex,
+                    "job_id": uuid4().hex,
+                    "source_scope_version_id": uuid4().hex,
+                    "result_scope_version_id": uuid4().hex,
+                    "proposed_by_participant_id": uuid4().hex,
+                    "kind": "INITIAL",
+                    "status": "CUSTOMER_REVIEW",
+                    "base_amount_krw": 500_000,
+                    "adjustments": [],
+                    "total_amount_krw": 500_000,
+                    "execution_plan": {
+                        "vehicle_count": 1,
+                        "vehicle_description": "1톤 탑차",
+                        "worker_count": 2,
+                        "estimated_duration_minutes": 180,
+                        "notes": None,
+                    },
+                    "included_works": ["운반"],
+                    "exclusions": [],
+                    "reason": "migration guard",
+                    "sent_at": now,
+                },
+            )
+
+        with pytest.raises(RuntimeError, match="scope execution plan rows exist"):
+            command.downgrade(configuration, ALEMBIC_AI_V2_HEAD)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            connection.execute(proposal.delete())
+        command.downgrade(configuration, ALEMBIC_AI_V2_HEAD)
+        assert "execution_plan" not in {
+            column["name"] for column in inspect(engine).get_columns("scope_proposal")
+        }
+        command.upgrade(configuration, "head")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 def test_ai_v2_migration_backfills_v1_roundtrips_and_guards_v2_history(
@@ -268,7 +330,7 @@ def test_ai_v2_migration_backfills_v1_roundtrips_and_guards_v2_history(
             )
         with pytest.raises(RuntimeError, match="AI result v2 rows exist"):
             command.downgrade(configuration, ALEMBIC_AI_V2_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_AI_V2_HEAD
     finally:
         engine.dispose()
 

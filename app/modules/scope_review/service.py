@@ -55,6 +55,7 @@ from app.modules.scope_review.models import (
 from app.modules.scope_review.schemas import (
     ApprovedChangeSummary,
     CompanyParticipationStatus,
+    ExecutionPlanSnapshot,
     QuoteSnapshot,
     RoomScopeGroup,
     ScopeCollaborationStatus,
@@ -112,6 +113,14 @@ def _quote_from_proposal(proposal: ScopeProposal) -> QuoteSnapshot:
     )
 
 
+def _execution_plan_from_proposal(
+    proposal: ScopeProposal,
+) -> ExecutionPlanSnapshot | None:
+    if proposal.execution_plan is None:
+        return None
+    return ExecutionPlanSnapshot.model_validate(proposal.execution_plan, strict=False)
+
+
 def _proposal_response(proposal: ScopeProposal) -> ScopeProposalResponse:
     return ScopeProposalResponse(
         proposal_id=proposal.id,
@@ -120,6 +129,10 @@ def _proposal_response(proposal: ScopeProposal) -> ScopeProposalResponse:
         source_scope_version_id=proposal.source_scope_version_id,
         result_scope_version_id=proposal.result_scope_version_id,
         quote=_quote_from_proposal(proposal),
+        execution_plan=ExecutionPlanSnapshot.model_validate(
+            proposal.execution_plan,
+            strict=False,
+        ),
         included_works=tuple(proposal.included_works),
         exclusions=tuple(proposal.exclusions),
         reason=proposal.reason,
@@ -317,6 +330,7 @@ def _proposal_matches_replay(
             )
         )
         and _quote_from_proposal(proposal) == command.quote
+        and _execution_plan_from_proposal(proposal) == command.execution_plan
         and tuple(proposal.included_works) == command.included_works
         and tuple(proposal.exclusions) == command.exclusions
         and proposal.reason == command.reason
@@ -405,6 +419,7 @@ async def create_scope_proposal(
                 adjustment.model_dump(mode="json") for adjustment in command.quote.adjustments
             ],
             total_amount_krw=command.quote.total_amount_krw,
+            execution_plan=command.execution_plan.model_dump(mode="json"),
             included_works=list(command.included_works),
             exclusions=list(command.exclusions),
             reason=command.reason,
@@ -809,6 +824,11 @@ async def get_scope_review(
         ),
         proposal_id=agreement_proposal.id if agreement_proposal is not None else None,
         quote=current_quote,
+        execution_plan=(
+            _execution_plan_from_proposal(agreement_proposal)
+            if agreement_proposal is not None
+            else None
+        ),
         proposal_reason=agreement_proposal.reason if agreement_proposal is not None else None,
         company_participation_status=company_participation,
         collaboration_status=collaboration_status,

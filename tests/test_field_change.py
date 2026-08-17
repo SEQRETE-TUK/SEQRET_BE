@@ -168,6 +168,13 @@ async def _confirmed_scope(
                 "adjustments": [],
                 "total_amount_krw": total_amount,
             },
+            "execution_plan": {
+                "vehicle_count": 1,
+                "vehicle_description": "1톤 탑차",
+                "worker_count": 2,
+                "estimated_duration_minutes": 180,
+                "notes": None,
+            },
             "included_works": ["포장", "운반"],
             "exclusions": ["에어컨 이전"],
             "reason": "합성 기준 견적",
