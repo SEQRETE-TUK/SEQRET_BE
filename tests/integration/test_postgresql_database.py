@@ -1435,7 +1435,7 @@ async def test_capture_analysis_completion_is_exactly_once_on_postgresql() -> No
             assert scope_versions[0].id == dispatch.scope_version_id
             assert scope_versions[0].content["schema_version"] == 2
             assert scope_versions[0].content["items"][0]["quantity"] == 1
-            assert scope_versions[0].content["location_conditions"][0]["floor"] == {
+            assert scope_versions[0].content["location_conditions"][0]["conditions"]["floor"] == {
                 "status": "known",
                 "value": 8,
             }
