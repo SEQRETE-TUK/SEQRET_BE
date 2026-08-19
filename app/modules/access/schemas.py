@@ -74,6 +74,27 @@ class ActorSelfResponse(ContractModel):
     invitation: InvitationResponse | None
 
 
+class MoveConnectionCreate(ContractModel):
+    """Connect one shared move code as the role selected on the entry screen."""
+
+    model_config = ConfigDict(strict=False)
+
+    connection_code: Annotated[str, Field(min_length=13, max_length=13)]
+    role: ParticipantRole
+
+    @field_validator("connection_code")
+    @classmethod
+    def normalize_connection_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 13 or not normalized.startswith("MOVE-"):
+            raise ValueError("connection code must use MOVE-XXXXXXXX format")
+        try:
+            int(normalized[5:], 16)
+        except ValueError as error:
+            raise ValueError("connection code must use MOVE-XXXXXXXX format") from error
+        return normalized
+
+
 class WorkspaceMemberResponse(ContractModel):
     """One job role restored from a server-owned workspace session."""
 

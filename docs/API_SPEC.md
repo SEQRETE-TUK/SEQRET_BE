@@ -113,6 +113,7 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 | Method | Path | 용도 | 인증 | 구현 상태 |
 | --- | --- | --- | --- | --- |
 | `POST` | `/api/v1/move-jobs/onboarding` | 작업과 고객 참여자·고객 전용 capability 하나 생성 | 공개 | 구현 |
+| `POST` | `/api/v1/connections` | 이사 연결 코드와 선택 역할로 30일 작업공간 연결 | 공개 | 구현 |
 | `GET` | `/api/v1/me` | 현재 역할·초대 상태·명시적 permission 조회 | 모든 link | 구현 |
 | `DELETE` | `/api/v1/move-jobs/{job_id}` | 견적 전 작업 취소와 모든 capability 철회 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations` | 다음 역할 초대와 one-time secret 발급 | 고객, 업체 | 구현 |
@@ -133,8 +134,11 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
 `locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 기본 주소용 `label`,
 선택적 `detail_address`, 구조화된 `conditions`와 1~100개의 고유한 `room_zones`를 가진다. 조건을 생략한 기존 요청은
-각 값을 명시적인 `unknown`으로 저장한다. 응답은 `job`과 `customer_access_link`만 반환하며
-업체·현장기사 참여자나 secret을 미리 만들지 않는다. secret 응답은 `Cache-Control: no-store`다.
+각 값을 명시적인 `unknown`으로 저장한다. 응답은 `job`, 하위 호환용 `customer_access_link`와
+`MOVE-XXXXXXXX` 형식의 `connection_code`를 반환한다. 공용 연결 endpoint는 이 code와 사용자가
+선택한 역할을 받아 필요한 참여자를 만들고 workspace cookie를 발급한다. code는 이사 UUID의 앞
+8자리에서 만든 해커톤용 표시값이며 고객·업체·현장기사가 함께 사용한다. 기존 역할별 invitation과
+access-link endpoint는 하위 호환을 위해 유지한다.
 초대 순서는 소비자→업체, 수락 업체→현장기사로 고정한다. 상태는
 `pending|accepted|declined|expired|revoked`이며 pending token은 `/me`와 자기 수락·거절 외 업무
 API에서 401이다. 하위 link 만료는 발급자 만료를 넘지 않고 상위 초대 폐기·재발급 또는 발급자
@@ -918,7 +922,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 59개 path와 72개 operation이 있다. `/api/v1` 업무 operation 69개와
+현재 OpenAPI에는 60개 path와 73개 operation이 있다. `/api/v1` 업무 operation 70개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
 배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
@@ -929,7 +933,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 
 | 현재 공개 경로 묶음 | 최종 처리 |
 | --- | --- |
-| `POST /move-jobs/onboarding` | 소비자 작업과 고객 capability 하나만 생성하는 공개 실행 계약이다. |
+| `POST /move-jobs/onboarding`, `POST /connections` | 소비자 작업별 공용 연결 코드를 만들고 선택 역할의 workspace를 연결하는 frontend 실행 계약이다. |
 | `GET /me`, invitation 생성·목록·action | 역할별 landing, 단계적 초대와 link lifecycle의 공개 실행 계약이다. |
 | session 생성·복원·종료, contact-point 조회·저장·삭제 6개 | 역할 link를 서버 작업공간에 연결하고 새로고침 복원·CSRF·명시적 외부 알림 동의를 제공한다. |
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |

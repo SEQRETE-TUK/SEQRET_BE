@@ -86,6 +86,106 @@ def _secret(created: dict[str, Any], role: str) -> str:
 
 
 @pytest.mark.anyio
+async def test_one_move_connection_code_opens_each_selected_role(
+    workspace_client: AsyncClient,
+) -> None:
+    created_response = await workspace_client.post(
+        "/api/v1/move-jobs/onboarding",
+        json={
+            "title": "공용 코드 이사",
+            "scheduled_at": "2026-08-20T09:00:00+09:00",
+            "customer_display_name": "김고객",
+            "locations": [
+                {
+                    "kind": "origin",
+                    "label": "출발지",
+                    "room_zones": [{"name": "거실", "sort_order": 0}],
+                }
+            ],
+        },
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    code = created["connection_code"]
+
+    invited = await workspace_client.post(
+        f"/api/v1/move-jobs/{created['job']['id']}/invitations",
+        json={"role": "company_manager", "display_name": "공용 코드 업체"},
+        headers={"Authorization": f"Bearer {created['customer_access_link']['secret']}"},
+    )
+    assert invited.status_code == 201
+
+    connected_customer = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": code.lower(), "role": "customer"},
+    )
+    assert connected_customer.status_code == 201
+    reconnected_customer = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": code, "role": "customer"},
+    )
+    assert reconnected_customer.status_code == 201
+    assert "set-cookie" not in reconnected_customer.headers
+    role_conflict = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": code, "role": "company_manager"},
+    )
+    assert role_conflict.status_code == 409
+
+    for role in ("company_manager", "field_worker"):
+        workspace_client.cookies.clear()
+        connected = await workspace_client.post(
+            "/api/v1/connections",
+            json={"connection_code": code.lower(), "role": role},
+        )
+        assert connected.status_code == 201
+        assert connected.headers["cache-control"] == "no-store"
+        assert connected.json()["role"] == role
+        assert len(connected.json()["members"]) == 1
+        member = connected.json()["members"][0]
+        assert member["job_id"] == created["job"]["id"]
+        assert member["role"] == role
+        if role == "company_manager":
+            assert member["invitation"]["status"] == "accepted"
+        else:
+            assert member["invitation"] is None
+
+    workspace_client.cookies.clear()
+    rejected = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": "MOVE-00000000", "role": "customer"},
+    )
+    assert rejected.status_code == 401
+    malformed_prefix = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": "NOPE-00000000", "role": "customer"},
+    )
+    assert malformed_prefix.status_code == 422
+    malformed_length = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": " MOVE-123456", "role": "customer"},
+    )
+    assert malformed_length.status_code == 422
+    malformed_hex = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": "MOVE-ZZZZZZZZ", "role": "customer"},
+    )
+    assert malformed_hex.status_code == 422
+
+    canceled = await workspace_client.delete(
+        f"/api/v1/move-jobs/{created['job']['id']}",
+        headers={"Authorization": f"Bearer {created['customer_access_link']['secret']}"},
+    )
+    assert canceled.status_code == 204
+    workspace_client.cookies.clear()
+    rejected_canceled = await workspace_client.post(
+        "/api/v1/connections",
+        json={"connection_code": code, "role": "customer"},
+    )
+    assert rejected_canceled.status_code == 401
+
+
+@pytest.mark.anyio
 async def test_workspace_restores_and_searches_multiple_jobs(
     workspace_client: AsyncClient,
 ) -> None:

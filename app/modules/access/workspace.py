@@ -8,7 +8,8 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import String, func, select, update
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -31,7 +32,7 @@ from app.modules.access.schemas import (
     WorkspaceMemberResponse,
     WorkspaceSessionResponse,
 )
-from app.modules.move_job.models import JobParticipant
+from app.modules.move_job.models import JobParticipant, MoveJob, MoveJobStatus
 from app.modules.notification.models import (
     NotificationChannel,
     NotificationDelivery,
@@ -56,6 +57,10 @@ class WorkspaceConflictError(ValueError):
 
 class WorkspaceContactNotFoundError(LookupError):
     """Raised when a requested contact point does not exist."""
+
+
+class InvalidMoveConnectionError(PermissionError):
+    """Raised without exposing whether a shared move code or role was missing."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +360,60 @@ async def create_or_extend_workspace_session(
         response=await _workspace_response(session, workspace_session, account),
         cookie_secret=cookie_secret,
     )
+
+
+async def resolve_move_connection(
+    session: AsyncSession,
+    connection_code: str,
+    role: ParticipantRole,
+) -> JobParticipant:
+    """Resolve a displayable move code and materialize the selected demo role."""
+
+    # ponytail: 32-bit display codes can collide; use a stored random code if this leaves demo use.
+    prefix = connection_code.removeprefix("MOVE-").lower()
+    jobs = tuple(
+        (
+            await session.scalars(
+                select(MoveJob)
+                .where(
+                    MoveJob.status != MoveJobStatus.CANCELED,
+                    func.lower(sql_cast(MoveJob.id, String)).like(f"{prefix}%"),
+                )
+                .limit(2)
+            )
+        ).all()
+    )
+    if len(jobs) != 1:
+        raise InvalidMoveConnectionError
+    job = jobs[0]
+    participant = await session.scalar(
+        select(JobParticipant).where(
+            JobParticipant.job_id == job.id,
+            JobParticipant.role == role,
+        )
+    )
+    if participant is None:
+        participant = JobParticipant(
+            job_id=job.id,
+            role=role,
+            display_name={
+                ParticipantRole.CUSTOMER: "고객",
+                ParticipantRole.COMPANY_MANAGER: "이사업체",
+                ParticipantRole.FIELD_WORKER: "현장기사",
+            }[role],
+        )
+        session.add(participant)
+        await session.flush()
+    invitation = await session.scalar(
+        select(ParticipantInvitation).where(
+            ParticipantInvitation.invitee_participant_id == participant.id
+        )
+    )
+    if invitation is not None and invitation.status is not InvitationStatus.ACCEPTED:
+        invitation.status = InvitationStatus.ACCEPTED
+        invitation.resolved_at = utc_now()
+        await session.flush()
+    return participant
 
 
 async def get_workspace_session(
