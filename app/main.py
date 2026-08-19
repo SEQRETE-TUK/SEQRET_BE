@@ -4,9 +4,11 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.errors import request_validation_error_response
 from app.api.routes.system import router as system_router
 from app.config import AppEnvironment, Settings
 from app.modules.access.router import identity_router
@@ -84,6 +86,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.cache_port = None
     application.state.database_session_factory = None
     application.state.storage_port = None
+    application.add_exception_handler(
+        RequestValidationError,
+        request_validation_error_response,
+    )
     application.include_router(system_router)
     application.include_router(identity_router, prefix=runtime_context.settings.api_prefix)
     application.include_router(move_job_router, prefix=runtime_context.settings.api_prefix)

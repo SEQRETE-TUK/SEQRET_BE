@@ -42,7 +42,6 @@ from app.platform.observability import current_correlation
 WORKSPACE_SESSION_COOKIE = "seqret_workspace_session"
 WORKSPACE_SESSION_TTL = timedelta(days=30)
 WORKSPACE_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
-EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PHONE_PATTERN = re.compile(r"^\+[1-9][0-9]{7,14}$")
 REVOKED_CONTACT_DESTINATION_PREFIX = "revoked:"
 
@@ -390,7 +389,21 @@ def _normalized_destination(channel: NotificationContactChannel, destination: st
     normalized = destination.strip()
     if channel is NotificationContactChannel.EMAIL:
         normalized = normalized.lower()
-        if EMAIL_PATTERN.fullmatch(normalized) is None:
+        if normalized.count("@") != 1:
+            raise ValueError("email destination is invalid")
+        local, domain = normalized.split("@")
+        if (
+            not local
+            or not domain
+            or local.startswith(".")
+            or local.endswith(".")
+            or ".." in local
+            or domain.startswith(".")
+            or domain.endswith(".")
+            or "." not in domain
+            or ".." in domain
+            or any(character.isspace() or not character.isprintable() for character in normalized)
+        ):
             raise ValueError("email destination is invalid")
         return normalized
     normalized = re.sub(r"[\s()-]", "", normalized)
