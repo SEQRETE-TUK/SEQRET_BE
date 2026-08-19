@@ -90,7 +90,7 @@ The database-recovery identity is separate from the deployment identity. Restric
 
 ## Deployment and rollback
 
-Run `Deploy staging` from `main`. The workflow checks out the current `origin/main` commit and:
+`Deploy staging` runs automatically on every push to `main` and remains available for manual dispatch from `main`. The workflow checks out the triggering commit, requires it to still match the current `origin/main` commit, and:
 
 1. builds and publishes a uniquely tagged image, then resolves its immutable digest;
 2. deploys and executes the migration job before changing the API service;
