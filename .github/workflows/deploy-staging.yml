@@ -45,8 +45,15 @@ env:
   OUTBOX_RELAY_JOB: seqret-stg-relay
 
 jobs:
+  quality-gate:
+    name: Verify deployable revision
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   deploy:
     name: Build, migrate, and roll out staging
+    needs: quality-gate
     runs-on: ubuntu-latest
     timeout-minutes: 75
     environment: staging
