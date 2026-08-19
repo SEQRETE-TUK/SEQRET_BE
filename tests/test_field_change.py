@@ -370,7 +370,9 @@ async def test_field_issue_change_proposal_clarification_and_approval(
     assert listed.status_code == 200
     assert listed.json()[0]["status"] == "customer_review"
     assert listed.json()[0]["change_proposal_id"] == proposal_id
-    assert (await client.get(issues_url, headers=_headers(created, "customer"))).status_code == 403
+    customer_issues = await client.get(issues_url, headers=_headers(created, "customer"))
+    assert customer_issues.status_code == 200
+    assert customer_issues.json()[0]["change_proposal_id"] == proposal_id
 
     decision_url = f"{proposal_url}/decision"
     clarification_payload = {
@@ -431,6 +433,21 @@ async def test_field_issue_change_proposal_clarification_and_approval(
     ).status_code == 409
 
     approve_payload = {"decision": "approve", "note": "증빙과 동선 확인"}
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.UPLOADED
+    assert (
+        await client.post(
+            decision_url,
+            headers=_headers(created, "customer"),
+            json=approve_payload,
+        )
+    ).status_code == 409
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.READY
     approved = await client.post(
         decision_url,
         headers=_headers(created, "customer"),
@@ -678,6 +695,10 @@ async def test_field_change_permissions_stale_inputs_and_provider_failures(
             json=proposal_payload,
         )
     ).status_code == 403
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.PROCESSING
     not_ready = await client.post(
         proposal_url,
         headers=_headers(created, "company_manager"),
@@ -695,7 +716,7 @@ async def test_field_change_permissions_stale_inputs_and_provider_failures(
     async with factory.begin() as session:
         asset = await session.get(MediaAsset, UUID(media_id))
         assert asset is not None
-        asset.status = MediaAssetStatus.READY
+        asset.status = MediaAssetStatus.UPLOADED
     wrong_base_amount = await client.post(
         proposal_url,
         headers=_headers(created, "company_manager"),
@@ -792,11 +813,16 @@ async def test_field_change_permissions_stale_inputs_and_provider_failures(
         asset = await session.get(MediaAsset, UUID(media_id))
         assert asset is not None
         asset.status = MediaAssetStatus.UPLOADED
+    assert (await client.get(detail_url, headers=_headers(created, "customer"))).status_code == 200
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.PROCESSING
     assert (await client.get(detail_url, headers=_headers(created, "customer"))).status_code == 409
     async with factory.begin() as session:
         asset = await session.get(MediaAsset, UUID(media_id))
         assert asset is not None
-        asset.status = MediaAssetStatus.READY
+        asset.status = MediaAssetStatus.UPLOADED
         asset.generation = " 7"
     assert (await client.get(detail_url, headers=_headers(created, "customer"))).status_code == 409
     async with factory.begin() as session:
@@ -1156,7 +1182,19 @@ async def test_field_change_defensive_state_branches(
         "decide_change_request",
         AsyncMock(side_effect=ScopeResourceNotFoundError(request.id)),
     )
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: []))
     approve_command = ChangeProposalDecisionCreate(decision="approve")
+    with pytest.raises(FieldChangeConflictError):
+        await field_change_service.decide_change_proposal(
+            session,
+            job_id,
+            request.id,
+            viewer_id,
+            approve_command,
+            trace_id=str(uuid4()),
+        )
+
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [MediaAssetStatus.READY]))
     with pytest.raises(FieldChangeConflictError):
         await field_change_service.decide_change_proposal(
             session,

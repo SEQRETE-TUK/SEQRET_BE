@@ -35,7 +35,13 @@ from app.modules.scope_review.service import (
 from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["scope-review"])
-REVIEW_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER})
+REVIEW_ROLES = frozenset(
+    {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+        ParticipantRole.FIELD_WORKER,
+    }
+)
 
 
 def _not_found(error: Exception) -> HTTPException:

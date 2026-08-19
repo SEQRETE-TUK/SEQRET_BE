@@ -184,9 +184,16 @@ class CompletionDecisionResponse(ContractModel):
     retention_scheduled_count: int
 
 
+class CompletionChecklistItem(ContractModel):
+    key: str
+    label: str
+    confirmed: bool
+
+
 class CompletionChecklistSummary(ContractModel):
     completed_count: int
     total_count: int
+    items: tuple[CompletionChecklistItem, ...] = ()
 
 
 class CompletionMediaPreview(ContractModel):

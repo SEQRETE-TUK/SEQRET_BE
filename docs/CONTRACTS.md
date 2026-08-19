@@ -18,6 +18,7 @@
 - `GET /api/v1/me`는 현재 link의 작업·참여자·역할, 표시명, 명시적 permission 목록, 만료와 선택적 초대 상태만 반환한다. secret과 token hash는 반환하지 않는다.
 - 초대·재발급 응답의 평문 secret은 한 번만 반환하고 `Cache-Control: no-store`를 사용한다. DB에는 SHA-256 hash와 현재 link ID만 저장한다.
 - 하위 초대 만료는 발급자 access link 만료를 넘지 않는다. 상위 초대를 폐기·재발급하거나 발급자의 access link를 직접 철회하면 그 참여자가 발급한 모든 하위 초대와 access link도 같은 transaction에서 철회한다.
+- 고객의 `DELETE /api/v1/move-jobs/{job_id}`는 견적이 한 번도 생성되지 않은 작업만 `CANCELED`로 전이한다. 업무·감사 row를 물리 삭제하지 않고 모든 초대와 활성 access link를 같은 transaction에서 철회하며, link 철회 감사 payload의 `operation`은 `job_canceled`다.
 - 수락 시에만 `PARTICIPANT_CONNECTED` 감사 event를 기록한다. 초대 landing 조회는 참여 완료로 기록하지 않으며, 감사 payload에는 invitation·link·participant ID와 역할만 남기고 secret은 넣지 않는다.
 - `participant_invitation` 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 schema를 유지한 application revision 전환으로 수행한다.
 
@@ -56,12 +57,12 @@
 
 ## 미디어 열람
 
-- 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부된 `READY` 상태의 `change_evidence` 미디어와 저장된 generation만 허용한다.
-- 변경 제안 화면은 같은 `READY` 증거의 generation-pinned 5분 preview를 응답에 묶어 제공하고 object key·generation은 노출하지 않는다. 응답은 `Cache-Control: no-store`다.
+- 변경요청 증거 열람 URL은 해당 작업의 고객·회사 관리자에게만 5분간 발급하며, 요청에 첨부되고 upload complete로 metadata가 고정된 `UPLOADED|READY` `change_evidence` 미디어와 저장된 generation만 허용한다.
+- 변경 제안 화면은 같은 `UPLOADED|READY` 증거의 generation-pinned 5분 preview를 응답에 묶어 제공하고 object key·generation은 노출하지 않는다. 응답은 `Cache-Control: no-store`이며 고객 승인은 증거가 모두 `READY`일 때만 처리한다.
 
 ## 현장 이슈와 변경 제안
 
-- 현장기사는 현재 잠긴 범위를 `base_scope_version_id`로 지정하고 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 하나 이상 첨부해 무가격 `field_issue`를 만든다. 업체가 변경 제안을 만들 때는 모든 증거가 generation을 가진 `READY`여야 한다. 이슈 종류는 `out_of_scope|damage_risk|site_blocker`이며 금액·고객 결정은 입력할 수 없다.
+- 현장기사는 현재 잠긴 범위를 `base_scope_version_id`로 지정하고 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 하나 이상 첨부해 무가격 `field_issue`를 만든다. 업체는 generation이 고정된 `UPLOADED|READY` 증거로 변경 제안을 만들 수 있지만 고객 승인은 모든 증거가 `READY`일 때만 처리한다. 이슈 종류는 `out_of_scope|damage_risk|site_blocker`이며 금액·고객 결정은 입력할 수 없다.
 - `field_issue`는 작업별 `client_reference`로 식별한다. 같은 reference와 정확히 같은 payload는 기존 결과를 반환하고 다른 payload, stale·잠기지 않은 범위 또는 다른 작업·촬영자의 증거는 거부한다.
 - 업체만 이슈 하나를 기존 `change_request`에 연결된 `change_proposal_detail`로 전환한다. 제안의 기준 금액은 현재 확정 범위의 견적 또는 앞서 승인된 변경 제안 금액과 정확히 같아야 하며, 새 견적은 합계 불변식을 만족해야 한다.
 - 제안 전송은 기존 `change_requested.v1` event를 재사용한다. 고객 승인 시 변경 결과 범위를 만들고 업체·고객 approval과 잠금을 한 transaction에 기록하며 기존 `scope_locked.v1`을 재사용한다. 현장기사나 업체는 고객 결정을 대신할 수 없다.
@@ -149,11 +150,11 @@
 
 ## 완료와 감사 이력
 
-- 대표 현장기사만 현재 확정 배차의 체크인 뒤 `completion_submission`을 만든다. 현재 잠긴 leaf 범위, setup의 완료 checklist 전체, 배정 작업자 전원의 중복 없는 근무 구간, 작업 종료·현장 고객 확인 시각과 선택적 completion 미디어를 검증한다. 미디어가 있으면 해당 기사가 만든 `READY` 객체와 비어 있지 않은 generation만 받는다.
+- 대표 현장기사만 현재 확정 배차의 체크인 뒤 `completion_submission`을 만든다. 현재 잠긴 leaf 범위, setup의 완료 checklist 전체, 배정 작업자 전원의 중복 없는 근무 구간, 작업 종료·현장 고객 확인 시각과 선택적 completion 미디어를 검증한다. 미디어가 있으면 해당 기사가 upload complete를 마친 `UPLOADED|READY` 객체와 비어 있지 않은 generation만 받으며 고객의 최종 확인은 모든 첨부가 `READY`일 때만 처리한다.
 - `client_reference`와 정확한 제출 payload 재전송은 최초 불변 제출을 반환한다. 상충 재전송, 살아 있는 고객 요청 또는 이미 확인된 제출 뒤의 새 제출은 거부한다. 고객 문제 신고·요청 만료·철회 뒤에는 정정 제출을 허용한다.
 - 업체는 최신 제출에 대해 7일 유효한 `completion_request`를 만들거나 살아 있는 요청을 철회한다. 같은 `client_reference`와 정확한 payload만 멱등이며, 이전 제출·중복 활성 요청·이미 문제 신고된 같은 제출의 재요청은 거부한다.
 - 고객은 최신 살아 있는 요청 하나만 `confirm|report_issue`로 결정한다. 문제 신고는 `missing_work|damage|amount|other`와 설명을 별도 append-only row에 저장하며 원인·책임을 자동 판정하지 않는다. 확인은 고객·업체 `completion_confirmation`, 작업 `COMPLETED`, 감사·Outbox와 선택적 미디어 보존 intent를 한 transaction에서 기록한다.
-- `completion-summary`는 업체와 완료 요청을 받은 고객에게만 현재 제출·요청, 최종 견적·변경, 체크리스트·근무·선택적 generation-pinned preview, 문서 준비 상태와 보존기한을 제공한다. 고객은 요청 전 요약을 읽을 수 없고 업체만 문서 ZIP을 내려받는다.
+- `completion-summary`는 업체와 완료 요청을 받은 고객에게만 현재 제출·요청, 최종 견적·변경, 항목별 확인값이 포함된 체크리스트·근무·선택적 `UPLOADED|READY` generation-pinned preview, 문서 준비 상태와 보존기한을 제공한다. 고객은 요청 전 요약을 읽을 수 없고 업체만 문서 ZIP을 내려받는다.
 - 문서 archive는 준비된 견적과 완료 제출을 바탕으로 견적서, 변경 승인 기록, 작업 완료 기록, 완료 확인 기록 PDF와 schema v1 manifest를 결정적으로 생성한다. 문서 실패는 완료·결정 DB 사실을 되돌리지 않으며 필수 자료가 없으면 빈 ZIP 대신 `409`다.
 - 유효한 access link의 `last_used_at`이 처음 기록되는 인증 transaction은 `PARTICIPANT_CONNECTED` 감사 event를 정확히 한 번 함께 기록한다. 이후 같은 link 사용은 시각만 갱신한다.
 - `PARTICIPANT_CONNECTED`의 actor는 해당 참여자이며 payload는 문자열 `access_link_id`, 문자열 `participant_id`, 역할 `role`만 포함한다. bearer secret, token hash와 request 식별자는 넣지 않는다.

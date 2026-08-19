@@ -28,7 +28,7 @@ class InvitationCreate(ContractModel):
     model_config = ConfigDict(strict=False)
 
     role: ParticipantRole
-    display_name: Annotated[str, Field(min_length=1, max_length=100)]
+    display_name: Annotated[str, Field(min_length=1, max_length=100)] | None = None
 
     @field_validator("role")
     @classmethod

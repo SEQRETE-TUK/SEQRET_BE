@@ -376,6 +376,8 @@ async def revoke_access_link(
     session: AsyncSession,
     access_link: ParticipantAccessToken,
     actor_participant_id: UUID,
+    *,
+    operation: str | None = None,
 ) -> None:
     if access_link.revoked_at is not None:
         return
@@ -390,14 +392,17 @@ async def revoke_access_link(
     )
     if revoked_link_id is None:
         return
+    payload = {
+        "access_link_id": str(access_link.id),
+        "participant_id": str(access_link.participant.id),
+    }
+    if operation is not None:
+        payload["operation"] = operation
     add_audit_event(
         session,
         access_link.participant.job_id,
         AuditEventType.ACCESS_LINK_REVOKED,
         actor_participant_id=actor_participant_id,
-        payload={
-            "access_link_id": str(access_link.id),
-            "participant_id": str(access_link.participant.id),
-        },
+        payload=payload,
     )
     await session.flush()

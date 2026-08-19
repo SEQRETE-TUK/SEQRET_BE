@@ -310,7 +310,7 @@ async def _dispatch_and_check_in(
     return setup_view, cast(dict[str, Any], dispatch.json()), cast(dict[str, Any], check_in.json())
 
 
-async def _ready_completion_media(
+async def _uploaded_completion_media(
     client: AsyncClient,
     factory: async_sessionmaker[AsyncSession],
     created: dict[str, Any],
@@ -341,9 +341,9 @@ async def _ready_completion_media(
     async with factory.begin() as session:
         asset = await session.get(MediaAsset, UUID(media_id))
         assert asset is not None
-        asset.status = MediaAssetStatus.READY
+        asset.status = MediaAssetStatus.UPLOADED
         asset.actual_size_bytes = 14
-        asset.sha256_hex = "a" * 64
+        asset.sha256_hex = None
         asset.generation = "7"
         asset.uploaded_at = datetime.now(UTC)
     return media_id
@@ -358,7 +358,7 @@ async def _context(
     created = await _create_job(client)
     scope_id = await _confirmed_scope(client, created)
     setup, dispatch, check_in = await _dispatch_and_check_in(client, created, scope_id)
-    media_ids = [await _ready_completion_media(client, factory, created)] if with_media else []
+    media_ids = [await _uploaded_completion_media(client, factory, created)] if with_media else []
     checked_in_at = datetime.fromisoformat(check_in["checked_in_at"])
     completed_at = max(datetime.now(UTC), checked_in_at)
     payload = {
@@ -427,7 +427,14 @@ async def test_completion_happy_path_documents_notifications_and_retention(
     summary = provider_summary.json()
     assert summary["final_amount_krw"] == 550_000
     assert summary["completion_media_count"] == 1
-    assert summary["checklist"] == {"completed_count": 2, "total_count": 2}
+    assert summary["checklist"] == {
+        "completed_count": 2,
+        "total_count": 2,
+        "items": [
+            {"key": "tools_removed", "label": "작업 도구 회수", "confirmed": True},
+            {"key": "site_restored", "label": "현장 정리", "confirmed": True},
+        ],
+    }
     assert summary["archive_ready"] is True
     assert {item["status"] for item in summary["documents"]} == {"ready"}
     summary_with_change = CompletionSummaryView.model_validate(summary, strict=False).model_copy(
@@ -512,6 +519,21 @@ async def test_completion_happy_path_documents_notifications_and_retention(
         "decision": "confirm",
         "unrecorded_extra_charge": False,
     }
+    assert (
+        await client.post(
+            decision_url,
+            headers=_headers(created, "customer"),
+            json=decision_payload,
+        )
+    ).status_code == 409
+    async with factory.begin() as session:
+        asset = await session.get(
+            MediaAsset,
+            UUID(submission_payload["completion_media_asset_ids"][0]),
+        )
+        assert asset is not None
+        asset.status = MediaAssetStatus.READY
+        asset.sha256_hex = "a" * 64
     decided = await client.post(
         decision_url,
         headers=_headers(created, "customer"),
@@ -1195,12 +1217,12 @@ async def test_completion_rejects_missing_or_corrupt_dispatch_and_media_state(
         )
         assert asset is not None
         asset.status = MediaAssetStatus.UPLOADED
-    assert (
-        await client.get(
-            f"/api/v1/move-jobs/{stale_media_job_id}/completion-summary",
-            headers=_headers(stale_media, "company_manager"),
-        )
-    ).status_code == 409
+    uploaded_summary = await client.get(
+        f"/api/v1/move-jobs/{stale_media_job_id}/completion-summary",
+        headers=_headers(stale_media, "company_manager"),
+    )
+    assert uploaded_summary.status_code == 200
+    assert uploaded_summary.json()["completion_media_count"] == 1
 
 
 @pytest.mark.anyio
@@ -1500,6 +1522,21 @@ async def test_completion_defensive_invariants_reject_corrupt_relations(
             decision,
             retention_days=30,
             trace_id="0" * 32,
+        )
+
+    missing_asset_id = uuid4()
+    monkeypatch.setattr(
+        completion_service,
+        "_submission_evidence_ids",
+        AsyncMock(return_value=(missing_asset_id,)),
+    )
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: []))
+    with pytest.raises(completion_service.CompletionConflictError):
+        await completion_service._completion_media_previews(
+            session,
+            FakeObjectStorage(),
+            cast(Any, SimpleNamespace(locations=[])),
+            submission.id,
         )
 
     missing_zone_asset = SimpleNamespace(

@@ -36,6 +36,7 @@ from app.modules.completion.models import (
 )
 from app.modules.completion.schemas import (
     AuditEventResponse,
+    CompletionChecklistItem,
     CompletionChecklistSummary,
     CompletionConfirmationCreate,
     CompletionConfirmationResponse,
@@ -647,7 +648,7 @@ async def submit_completion(
                         CaptureSession.job_id == job_id,
                         CaptureSession.created_by_participant_id == participant_id,
                         MediaAsset.media_purpose == MediaPurpose.COMPLETION,
-                        MediaAsset.status == MediaAssetStatus.READY,
+                        MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
                         MediaAsset.generation.is_not(None),
                     )
                 )
@@ -1044,6 +1045,19 @@ async def decide_completion_request(
     )
     evidence_ids = await _submission_evidence_ids(session, submission.id)
     problem: CompletionProblemReport | None = None
+    confirmed_assets: tuple[MediaAsset, ...] = ()
+
+    if command.decision == "confirm":
+        confirmed_assets = tuple(
+            (await session.scalars(select(MediaAsset).where(MediaAsset.id.in_(evidence_ids)))).all()
+        )
+        if {asset.id for asset in confirmed_assets} != set(evidence_ids) or any(
+            asset.status is not MediaAssetStatus.READY
+            or not asset.generation
+            or asset.generation != asset.generation.strip()
+            for asset in confirmed_assets
+        ):
+            raise CompletionConflictError(submission.id)
 
     if command.decision == "report_issue":
         assert command.problem_type is not None
@@ -1104,12 +1118,7 @@ async def decide_completion_request(
                 "completion_request_id": str(request.id),
             },
         )
-        assets = tuple(
-            (await session.scalars(select(MediaAsset).where(MediaAsset.id.in_(evidence_ids)))).all()
-        )
-        if {asset.id for asset in assets} != set(evidence_ids):
-            raise CompletionConflictError(submission.id)
-        for asset in assets:
+        for asset in confirmed_assets:
             await create_retention_background_job(
                 session,
                 job_id,
@@ -1261,7 +1270,7 @@ async def _completion_media_previews(
                 select(MediaAsset)
                 .where(
                     MediaAsset.id.in_(evidence_ids),
-                    MediaAsset.status == MediaAssetStatus.READY,
+                    MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
                     MediaAsset.generation.is_not(None),
                 )
                 .order_by(MediaAsset.created_at, MediaAsset.id)
@@ -1397,6 +1406,14 @@ async def get_completion_summary(
         checklist=CompletionChecklistSummary(
             completed_count=sum(str(item["key"]) in completed_keys for item in completion_items),
             total_count=len(completion_items),
+            items=tuple(
+                CompletionChecklistItem(
+                    key=str(item["key"]),
+                    label=str(item["label"]),
+                    confirmed=str(item["key"]) in completed_keys,
+                )
+                for item in completion_items
+            ),
         ),
         onsite_confirmation_completed=(
             submission.onsite_customer_confirmed if submission is not None else False

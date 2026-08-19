@@ -461,7 +461,7 @@ async def create_change_proposal(
                 MediaAsset.id.in_(evidence_ids),
                 CaptureSession.job_id == job_id,
                 MediaAsset.media_purpose == MediaPurpose.CHANGE_EVIDENCE,
-                MediaAsset.status == MediaAssetStatus.READY,
+                MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
                 MediaAsset.generation.is_not(None),
             )
         )
@@ -570,7 +570,7 @@ async def _evidence_previews(
             .where(
                 MediaAsset.id.in_(evidence_ids[:MAX_EVIDENCE_MEDIA]),
                 CaptureSession.job_id == job_id,
-                MediaAsset.status == MediaAssetStatus.READY,
+                MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
                 MediaAsset.generation.is_not(None),
             )
             .order_by(MediaAsset.created_at, MediaAsset.id)
@@ -743,7 +743,7 @@ async def decide_change_proposal(
     """Record the customer's exact decision and lock an approved result scope."""
 
     await _require_participant(session, job_id, participant_id, ParticipantRole.CUSTOMER)
-    _, request, _ = await _load_proposal(session, job_id, proposal_id, lock=True)
+    detail, request, _ = await _load_proposal(session, job_id, proposal_id, lock=True)
     if request.status is not ChangeRequestStatus.PENDING:
         if _matches_decision_replay(request, command):
             return _decision_response(request)
@@ -765,6 +765,24 @@ async def decide_change_proposal(
         request.clarification_request = updated.clarification_request
         request.clarification_requested_at = updated.clarification_requested_at
         return _decision_response(request)
+
+    if command.decision == "approve":
+        evidence_statuses = tuple(
+            (
+                await session.scalars(
+                    select(MediaAsset.status)
+                    .join(
+                        FieldIssueEvidence,
+                        FieldIssueEvidence.media_asset_id == MediaAsset.id,
+                    )
+                    .where(FieldIssueEvidence.field_issue_id == detail.field_issue_id)
+                )
+            ).all()
+        )
+        if not evidence_statuses or any(
+            evidence_status is not MediaAssetStatus.READY for evidence_status in evidence_statuses
+        ):
+            raise FieldChangeConflictError(proposal_id)
 
     try:
         updated = await decide_change_request(

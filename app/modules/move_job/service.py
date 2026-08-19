@@ -7,10 +7,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.contracts.actor import ParticipantRole
-from app.modules.access.service import issue_access_link
+from app.contracts.primitives import utc_now
+from app.modules.access.models import (
+    InvitationStatus,
+    ParticipantAccessToken,
+    ParticipantInvitation,
+)
+from app.modules.access.service import issue_access_link, revoke_access_link
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
-from app.modules.move_job.models import JobParticipant, Location, MoveJob, RoomZone
+from app.modules.move_job.models import (
+    JobParticipant,
+    Location,
+    MoveJob,
+    MoveJobStatus,
+    RoomZone,
+)
 from app.modules.move_job.schemas import (
     CustomerMoveJobCreate,
     CustomerMoveJobCreatedResponse,
@@ -23,10 +35,15 @@ from app.modules.move_job.schemas import (
     ParticipantResponse,
     RoomZoneResponse,
 )
+from app.modules.scope_review.models import ScopeProposal
 
 
 class MoveJobNotFoundError(LookupError):
     """Raised when a move job does not exist."""
+
+
+class MoveJobConflictError(RuntimeError):
+    """Raised when a move job can no longer be canceled."""
 
 
 def _locations_from_command(locations: tuple[LocationCreate, ...]) -> list[Location]:
@@ -153,3 +170,64 @@ async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
     if job is None:
         raise MoveJobNotFoundError(job_id)
     return _to_response(job)
+
+
+async def cancel_move_job(
+    session: AsyncSession,
+    job_id: UUID,
+    actor_participant_id: UUID,
+) -> None:
+    """Cancel an unquoted job and revoke every capability without deleting history."""
+
+    job = await session.scalar(select(MoveJob).where(MoveJob.id == job_id).with_for_update())
+    if job is None:
+        raise MoveJobNotFoundError(job_id)
+    if job.status is MoveJobStatus.CANCELED:
+        return
+    if job.status is MoveJobStatus.COMPLETED:
+        raise MoveJobConflictError(job_id)
+    quote_id = await session.scalar(
+        select(ScopeProposal.id).where(ScopeProposal.job_id == job_id).limit(1)
+    )
+    if quote_id is not None:
+        raise MoveJobConflictError(job_id)
+
+    now = utc_now()
+    invitations = tuple(
+        (
+            await session.scalars(
+                select(ParticipantInvitation)
+                .where(ParticipantInvitation.job_id == job_id)
+                .order_by(ParticipantInvitation.created_at, ParticipantInvitation.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    for invitation in invitations:
+        invitation.status = InvitationStatus.REVOKED
+        invitation.resolved_at = now
+
+    active_links = tuple(
+        (
+            await session.scalars(
+                select(ParticipantAccessToken)
+                .join(JobParticipant)
+                .where(
+                    JobParticipant.job_id == job_id,
+                    ParticipantAccessToken.revoked_at.is_(None),
+                )
+                .options(selectinload(ParticipantAccessToken.participant))
+                .order_by(ParticipantAccessToken.created_at, ParticipantAccessToken.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    job.status = MoveJobStatus.CANCELED
+    for access_link in active_links:
+        await revoke_access_link(
+            session,
+            access_link,
+            actor_participant_id,
+            operation="job_canceled",
+        )
+    await session.flush()
