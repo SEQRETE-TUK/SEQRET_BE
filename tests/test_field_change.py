@@ -686,6 +686,16 @@ async def test_field_issue_evidence_read_url_is_private_reissuable_and_validated
             ParticipantRole.CUSTOMER,
         )
         assert customer_service_read.media_asset_id == UUID(media_id)
+        with pytest.raises(FieldChangeNotFoundError):
+            await field_change_service.create_field_issue_evidence_read_url(
+                session,
+                storage,
+                UUID(job_id),
+                UUID(issue["field_issue_id"]),
+                UUID(media_id),
+                _participant_id(created, "customer"),
+                cast(ParticipantRole, "unsupported"),
+            )
 
     openapi = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
     operation = openapi["paths"][
