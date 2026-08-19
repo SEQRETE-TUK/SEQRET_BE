@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -56,6 +56,9 @@ class DispatchConflictError(ValueError):
 
 class DispatchInvalidError(ValueError):
     """Raised when a candidate snapshot cannot satisfy its public contract."""
+
+
+FIELD_SERVICE_TIMEZONE = timezone(timedelta(hours=9), name="Asia/Seoul")
 
 
 def _aware(value: datetime) -> datetime:
@@ -873,7 +876,10 @@ async def check_in_field_worker(
         raise DispatchConflictError(job_id)
     checked_at = now or utc_now()
     start_at = _aware(setup.start_at)
-    if checked_at.astimezone(start_at.tzinfo).date() != start_at.date():
+    if (
+        _aware(checked_at).astimezone(FIELD_SERVICE_TIMEZONE).date()
+        != start_at.astimezone(FIELD_SERVICE_TIMEZONE).date()
+    ):
         raise DispatchConflictError(start_at)
     check_in = FieldCheckIn(
         job_id=job_id,

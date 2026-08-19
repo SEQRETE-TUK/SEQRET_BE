@@ -1,7 +1,7 @@
 """A-13 dispatch, field brief, and representative check-in tests."""
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -76,13 +76,17 @@ async def _create_job(
     *,
     scheduled_at: datetime | None = None,
 ) -> dict[str, Any]:
+    default_scheduled_at = (
+        datetime.now(UTC)
+        .astimezone(dispatch_service.FIELD_SERVICE_TIMEZONE)
+        .replace(hour=9, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
     response = await client.post(
         "/api/v1/move-jobs",
         json={
             "title": "A-13 합성 배차",
-            "scheduled_at": (
-                scheduled_at or datetime.now(UTC).replace(hour=8, minute=0, second=0)
-            ).isoformat(),
+            "scheduled_at": (scheduled_at or default_scheduled_at).isoformat(),
             "participants": [
                 {"role": "customer", "display_name": "합성 고객"},
                 {"role": "company_manager", "display_name": "합성 업체"},
@@ -752,7 +756,8 @@ async def test_dispatch_stale_scope_missing_state_and_scheduled_day_guards(
     )
     assert missing_brief.status_code == 409
 
-    fresh = await _create_job(client)
+    scheduled_at = datetime(2026, 8, 20, 0, 0, tzinfo=UTC)
+    fresh = await _create_job(client, scheduled_at=scheduled_at)
     fresh_setup, _ = await _setup(client, factory, fresh)
     fresh_job_id = fresh["job"]["id"]
     selection = _selection(fresh_setup)
@@ -773,8 +778,16 @@ async def test_dispatch_stale_scope_missing_state_and_scheduled_day_guards(
                 UUID(fresh_job_id),
                 _participant_id(fresh, "field_worker"),
                 command,
-                now=datetime.now(UTC) + timedelta(days=1),
+                now=datetime(2026, 8, 19, 14, 59, tzinfo=UTC),
             )
+        check_in = await check_in_field_worker(
+            session,
+            UUID(fresh_job_id),
+            _participant_id(fresh, "field_worker"),
+            command,
+            now=datetime(2026, 8, 19, 17, 30, tzinfo=UTC),
+        )
+        assert check_in.checked_in_at == datetime(2026, 8, 19, 17, 30, tzinfo=UTC)
         with pytest.raises(DispatchNotFoundError):
             await get_field_brief(session, uuid4(), worker_id)
         with pytest.raises(DispatchNotFoundError):
