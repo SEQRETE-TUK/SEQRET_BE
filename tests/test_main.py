@@ -81,6 +81,7 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("get", f"{job_path}/scope-versions"): {403},
         ("post", f"{job_path}/scope-versions/{{scope_version_id}}/approvals"): {403, 409},
         ("get", f"{job_path}/scope-review"): {403, 409, 503},
+        ("get", f"{job_path}/scope-review/history"): {403},
         ("post", f"{job_path}/scope-proposals"): {403, 409},
         ("post", f"{job_path}/scope-review/revision-request"): {403, 409},
         ("post", f"{job_path}/scope-review/confirm"): {403, 409},
@@ -103,6 +104,10 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         ("get", f"{job_path}/documents/archive"): {403, 409, 503},
         ("post", f"{job_path}/field-issues"): {403, 409},
         ("get", f"{job_path}/field-issues"): {403},
+        (
+            "get",
+            f"{job_path}/field-issues/{{field_issue_id}}/evidence/{{media_asset_id}}/read-url",
+        ): {403, 409, 503},
         ("post", f"{job_path}/change-proposals"): {403, 409},
         ("get", f"{job_path}/change-proposals/{{proposal_id}}"): {403, 409, 503},
         ("post", f"{job_path}/change-proposals/{{proposal_id}}/decision"): {

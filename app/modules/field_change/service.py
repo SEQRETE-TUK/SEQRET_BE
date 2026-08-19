@@ -32,6 +32,7 @@ from app.modules.field_change.schemas import (
     ChangeProposalResponse,
     ChangeProposalView,
     FieldIssueCreate,
+    FieldIssueEvidenceReadResponse,
     FieldIssueResponse,
     FieldIssueStatus,
 )
@@ -326,6 +327,61 @@ async def list_field_issues(
         )
     ).all()
     return tuple([await _field_issue_response(session, issue) for issue in issues])
+
+
+async def create_field_issue_evidence_read_url(
+    session: AsyncSession,
+    storage: StoragePort,
+    job_id: UUID,
+    field_issue_id: UUID,
+    media_asset_id: UUID,
+    participant_id: UUID,
+    role: ParticipantRole,
+) -> FieldIssueEvidenceReadResponse:
+    """Issue a private preview only to an authorized company or field participant."""
+
+    if role not in {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}:
+        raise FieldChangeNotFoundError(field_issue_id)
+    await _require_participant(session, job_id, participant_id, role)
+    asset = await session.scalar(
+        select(MediaAsset)
+        .join(
+            FieldIssueEvidence,
+            FieldIssueEvidence.media_asset_id == MediaAsset.id,
+        )
+        .join(FieldIssue, FieldIssue.id == FieldIssueEvidence.field_issue_id)
+        .join(CaptureSession, CaptureSession.id == MediaAsset.capture_session_id)
+        .where(
+            FieldIssue.id == field_issue_id,
+            FieldIssue.job_id == job_id,
+            MediaAsset.id == media_asset_id,
+            CaptureSession.job_id == job_id,
+            MediaAsset.media_purpose == MediaPurpose.CHANGE_EVIDENCE,
+        )
+    )
+    if asset is None:
+        raise FieldChangeNotFoundError(media_asset_id)
+    if (
+        asset.status is not MediaAssetStatus.READY
+        or not asset.generation
+        or asset.generation != asset.generation.strip()
+    ):
+        raise FieldChangeConflictError(media_asset_id)
+
+    expires_at = utc_now() + timedelta(seconds=READ_URL_TTL_SECONDS)
+    read_url = await storage.create_read_url(
+        object_key=asset.object_key,
+        generation=asset.generation,
+        expires_in_seconds=READ_URL_TTL_SECONDS,
+        timeout_seconds=STORAGE_TIMEOUT_SECONDS,
+    )
+    return FieldIssueEvidenceReadResponse(
+        media_asset_id=asset.id,
+        room_zone_id=asset.room_zone_id,
+        content_type=asset.content_type,
+        read_url=_validated_read_url(read_url),
+        expires_at=expires_at,
+    )
 
 
 async def _effective_total_amount(

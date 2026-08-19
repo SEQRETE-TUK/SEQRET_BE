@@ -94,6 +94,7 @@ async def list_move_jobs_endpoint(
     scheduled_from: datetime | None = None,
     scheduled_to: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
 ) -> MoveJobListResponse:
     account_id: UUID | None = None
     participant_id: UUID | None = None
@@ -128,6 +129,7 @@ async def list_move_jobs_endpoint(
             scheduled_from=scheduled_from,
             scheduled_to=scheduled_to,
             limit=limit,
+            cursor=cursor,
         )
     except ValueError as error:
         raise HTTPException(
@@ -148,14 +150,21 @@ async def get_move_job_endpoint(
     job_id: UUID,
     actor: CurrentActor,
     session: Session,
+    response: Response,
 ) -> MoveJobResponse:
     authorize_job_actor(actor, job_id)
     try:
-        return await get_move_job(session, job_id)
+        result = await get_move_job(
+            session,
+            job_id,
+            viewer_role=cast(ParticipantRole, actor.participant_role),
+        )
     except MoveJobNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="move job not found"
         ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.patch(

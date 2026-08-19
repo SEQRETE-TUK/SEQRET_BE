@@ -92,11 +92,13 @@ async def _create_job(
                 {
                     "kind": "origin",
                     "label": "서울 출발지(마스킹)",
+                    "detail_address": "101동 1203호",
                     "room_zones": [{"name": "거실", "sort_order": 0}],
                 },
                 {
                     "kind": "destination",
                     "label": "인천 도착지(마스킹)",
+                    "detail_address": "B동 502호",
                     "room_zones": [{"name": "거실", "sort_order": 0}],
                 },
             ],
@@ -546,6 +548,8 @@ async def test_dispatch_to_field_check_in_is_replay_safe_and_notifies_worker(
     assert brief_body["exclusions"] == ["에어컨 설치"]
     assert brief_body["masked_origin"] == "서울 출발지(마스킹)"
     assert brief_body["masked_destination"] == "인천 도착지(마스킹)"
+    assert brief_body["origin_detail_address"] == "101동 1203호"
+    assert brief_body["destination_detail_address"] == "B동 502호"
     assert brief_body["lead_worker_call_uri"] is None
     assert brief_body["company_chat_uri"] is None
     assert brief_body["navigation_uri"] is None

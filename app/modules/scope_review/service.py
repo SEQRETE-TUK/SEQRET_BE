@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -60,6 +60,9 @@ from app.modules.scope_review.schemas import (
     QuoteSnapshot,
     RoomScopeGroup,
     ScopeCollaborationStatus,
+    ScopeConfirmationHistoryEntry,
+    ScopeConfirmationHistoryView,
+    ScopeConfirmationRecord,
     ScopeConfirmResponse,
     ScopeMediaPreview,
     ScopeProposalCreate,
@@ -109,6 +112,17 @@ def _quote_from_proposal(proposal: ScopeProposal) -> QuoteSnapshot:
             "base_amount_krw": proposal.base_amount_krw,
             "adjustments": proposal.adjustments,
             "total_amount_krw": proposal.total_amount_krw,
+        },
+        strict=False,
+    )
+
+
+def _quote_from_change_detail(detail: ChangeProposalDetail) -> QuoteSnapshot:
+    return QuoteSnapshot.model_validate(
+        {
+            "base_amount_krw": detail.base_amount_krw,
+            "adjustments": detail.adjustments,
+            "total_amount_krw": detail.total_amount_krw,
         },
         strict=False,
     )
@@ -223,14 +237,7 @@ async def _approved_change_summaries(
                 reason=request.description,
                 base_scope_version_id=request.base_scope_version_id,
                 result_scope_version_id=cast(UUID, request.result_scope_version_id),
-                quote=QuoteSnapshot.model_validate(
-                    {
-                        "base_amount_krw": detail.base_amount_krw,
-                        "adjustments": detail.adjustments,
-                        "total_amount_krw": detail.total_amount_krw,
-                    },
-                    strict=False,
-                ),
+                quote=_quote_from_change_detail(detail),
                 evidence_media_asset_ids=tuple(evidence_by_request[request.id]),
                 approved_at=_aware(cast(datetime, request.decided_at)),
             )
@@ -266,6 +273,33 @@ async def _load_job(
     if job is None:
         raise ScopeReviewNotFoundError(job_id)
     return job
+
+
+def _job_header(
+    job: MoveJob,
+    viewer: JobParticipant,
+    company_participation: CompanyParticipationStatus,
+) -> ScopeReviewJobHeader:
+    participant_names = {
+        participant.role: participant.display_name for participant in job.participants
+    }
+    location_names = {location.kind: location.label for location in job.locations}
+    return ScopeReviewJobHeader(
+        job_id=job.id,
+        job_code=f"MOVE-{job.id.hex[:8].upper()}",
+        title=job.title,
+        scheduled_at=job.scheduled_at,
+        customer_display_name=participant_names.get(ParticipantRole.CUSTOMER),
+        company_display_name=(
+            participant_names.get(ParticipantRole.COMPANY_MANAGER)
+            if company_participation is CompanyParticipationStatus.JOINED
+            else None
+        ),
+        viewer_display_name=viewer.display_name,
+        viewer_role=viewer.role,
+        origin_summary=location_names.get(LocationKind.ORIGIN),
+        destination_summary=location_names.get(LocationKind.DESTINATION),
+    )
 
 
 async def _current_scope_version(
@@ -606,6 +640,161 @@ async def _media_previews(
     return tuple(previews)
 
 
+async def get_scope_confirmation_history(
+    session: AsyncSession,
+    job_id: UUID,
+    participant_id: UUID,
+    role: ParticipantRole,
+) -> ScopeConfirmationHistoryView:
+    """Return every immutable scope with its quote and role confirmation timeline."""
+
+    job = await _load_job(session, job_id)
+    viewer = next(
+        (
+            participant
+            for participant in job.participants
+            if participant.id == participant_id and participant.role is role
+        ),
+        None,
+    )
+    if viewer is None or role not in {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+    }:
+        raise ScopeReviewNotFoundError(job_id)
+
+    versions = (
+        await session.scalars(
+            select(ScopeVersion)
+            .where(ScopeVersion.job_id == job_id)
+            .order_by(ScopeVersion.sequence_number, ScopeVersion.id)
+        )
+    ).all()
+    version_ids = tuple(version.id for version in versions)
+    proposals = (
+        await session.scalars(
+            select(ScopeProposal)
+            .where(ScopeProposal.job_id == job_id)
+            .order_by(ScopeProposal.sent_at, ScopeProposal.id)
+        )
+    ).all()
+    proposal_by_result = {proposal.result_scope_version_id: proposal for proposal in proposals}
+    change_rows = (
+        (
+            await session.execute(
+                select(ChangeProposalDetail, ChangeRequest)
+                .join(
+                    ChangeRequest,
+                    ChangeRequest.id == ChangeProposalDetail.change_request_id,
+                )
+                .where(
+                    ChangeRequest.job_id == job_id,
+                    ChangeRequest.status == ChangeRequestStatus.APPROVED,
+                    ChangeRequest.result_scope_version_id.is_not(None),
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    change_by_result = {
+        cast(UUID, request.result_scope_version_id): (detail, request)
+        for detail, request in change_rows
+    }
+    approval_rows = (
+        (
+            await session.execute(
+                select(
+                    ScopeApproval.scope_version_id,
+                    ScopeApproval.participant_id,
+                    ScopeApproval.role,
+                    ScopeApproval.approved_at,
+                )
+                .where(ScopeApproval.scope_version_id.in_(version_ids))
+                .order_by(
+                    ScopeApproval.scope_version_id,
+                    ScopeApproval.approved_at,
+                    ScopeApproval.role,
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    confirmations_by_version: defaultdict[UUID, list[ScopeConfirmationRecord]] = defaultdict(list)
+    for scope_version_id, confirmed_participant_id, confirmed_role, confirmed_at in approval_rows:
+        confirmations_by_version[scope_version_id].append(
+            ScopeConfirmationRecord(
+                participant_id=confirmed_participant_id,
+                role=confirmed_role,
+                confirmed_at=_aware(confirmed_at),
+            )
+        )
+
+    agreement_by_version: dict[UUID, ScopeProposal | None] = {}
+    entries: list[ScopeConfirmationHistoryEntry] = []
+    for version in versions:
+        proposal = proposal_by_result.get(version.id)
+        change = change_by_result.get(version.id)
+        inherited_agreement = (
+            agreement_by_version.get(version.parent_version_id)
+            if version.parent_version_id is not None
+            else None
+        )
+        agreement = proposal if proposal is not None else inherited_agreement
+        agreement_by_version[version.id] = agreement
+
+        source: Literal["scope", "quote", "field_change"]
+        if change is not None:
+            detail, request = change
+            source = "field_change"
+            quote = _quote_from_change_detail(detail)
+            proposal_id = request.id
+            proposal_reason = request.description
+        elif proposal is not None:
+            source = "quote"
+            quote = _quote_from_proposal(proposal)
+            proposal_id = proposal.id
+            proposal_reason = proposal.reason
+        else:
+            source = "scope"
+            quote = None
+            proposal_id = None
+            proposal_reason = None
+
+        confirmations = tuple(confirmations_by_version[version.id])
+        confirmed_roles = {confirmation.role for confirmation in confirmations}
+        entries.append(
+            ScopeConfirmationHistoryEntry(
+                scope_version_id=version.id,
+                parent_scope_version_id=version.parent_version_id,
+                sequence_number=version.sequence_number,
+                version_label=f"v{version.sequence_number}",
+                source=source,
+                content=ScopeContent.model_validate(version.content, strict=False),
+                content_hash=version.content_hash,
+                quote=quote,
+                included_works=(tuple(agreement.included_works) if agreement is not None else ()),
+                exclusions=tuple(agreement.exclusions) if agreement is not None else (),
+                proposal_id=proposal_id,
+                proposal_reason=proposal_reason,
+                confirmations=confirmations,
+                bilaterally_confirmed={
+                    ParticipantRole.CUSTOMER,
+                    ParticipantRole.COMPANY_MANAGER,
+                }.issubset(confirmed_roles),
+                created_at=_aware(version.created_at),
+                locked_at=_aware(version.locked_at) if version.locked_at is not None else None,
+            )
+        )
+
+    company_participation = await _company_participation_status(session, job)
+    return ScopeConfirmationHistoryView(
+        job=_job_header(job, viewer, company_participation),
+        versions=tuple(entries),
+    )
+
+
 async def get_scope_review(
     session: AsyncSession,
     storage: StoragePort,
@@ -793,28 +982,9 @@ async def get_scope_review(
         )
     ).tuples()
     approval_times = {stored_role: _aware(at) for stored_role, at in approval_rows}
-    participant_names = {
-        participant.role: participant.display_name for participant in job.participants
-    }
-    location_names = {location.kind: location.label for location in job.locations}
     unique_media_ids = tuple(dict.fromkeys(media_ids))
     return ScopeReviewView(
-        job=ScopeReviewJobHeader(
-            job_id=job.id,
-            job_code=f"MOVE-{job.id.hex[:8].upper()}",
-            title=job.title,
-            scheduled_at=job.scheduled_at,
-            customer_display_name=participant_names.get(ParticipantRole.CUSTOMER),
-            company_display_name=(
-                participant_names.get(ParticipantRole.COMPANY_MANAGER)
-                if company_participation is CompanyParticipationStatus.JOINED
-                else None
-            ),
-            viewer_display_name=viewer.display_name,
-            viewer_role=viewer.role,
-            origin_summary=location_names.get(LocationKind.ORIGIN),
-            destination_summary=location_names.get(LocationKind.DESTINATION),
-        ),
+        job=_job_header(job, viewer, company_participation),
         scope=ScopeReviewScope(
             id=current.id,
             version_label=f"v{current.sequence_number}",

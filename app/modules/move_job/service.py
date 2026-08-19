@@ -1,5 +1,7 @@
 """Application commands for move job topology."""
 
+from base64 import b64decode, urlsafe_b64encode
+from binascii import Error as BinasciiError
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -18,6 +20,7 @@ from app.modules.access.models import (
     InvitationStatus,
     ParticipantAccessToken,
     ParticipantInvitation,
+    WorkspaceAccount,
     WorkspaceMembership,
 )
 from app.modules.access.service import issue_access_link, revoke_access_link
@@ -51,6 +54,8 @@ from app.modules.scope.schemas import ScopeContent, ScopeVersionCreate
 from app.modules.scope.service import ScopeVersionConflictError, create_scope_version
 from app.modules.scope_review.models import ScopeProposal, ScopeProposalStatus
 
+_MAX_LIST_CURSOR_OFFSET = 2**63 - 1
+
 
 class MoveJobNotFoundError(LookupError):
     """Raised when a move job does not exist."""
@@ -67,6 +72,7 @@ def _locations_from_command(locations: tuple[LocationCreate, ...]) -> list[Locat
         Location(
             kind=item.kind,
             label=item.label,
+            detail_address=item.detail_address,
             conditions=item.conditions.model_dump(mode="json"),
             room_zones=[
                 RoomZone(name=zone.name, sort_order=zone.sort_order) for zone in item.room_zones
@@ -100,7 +106,15 @@ async def _load_move_job(session: AsyncSession, job_id: UUID) -> MoveJob | None:
     return (await session.scalars(statement)).one_or_none()
 
 
-def _to_response(job: MoveJob) -> MoveJobResponse:
+def _to_response(
+    job: MoveJob,
+    *,
+    viewer_role: ParticipantRole,
+) -> MoveJobResponse:
+    expose_detail_address = viewer_role in {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+    }
     return MoveJobResponse(
         id=job.id,
         title=job.title,
@@ -121,6 +135,7 @@ def _to_response(job: MoveJob) -> MoveJobResponse:
                 id=location.id,
                 kind=location.kind,
                 label=location.label,
+                detail_address=(location.detail_address if expose_detail_address else None),
                 conditions=LocationConditions.model_validate(location.conditions, strict=False),
                 room_zones=tuple(
                     RoomZoneResponse(
@@ -151,7 +166,10 @@ async def create_move_job(session: AsyncSession, command: MoveJobCreate) -> Move
     access_links = tuple(
         [await issue_access_link(session, participant) for participant in job.participants]
     )
-    return MoveJobCreatedResponse(job=_to_response(job), access_links=access_links)
+    return MoveJobCreatedResponse(
+        job=_to_response(job, viewer_role=ParticipantRole.CUSTOMER),
+        access_links=access_links,
+    )
 
 
 async def create_customer_move_job(
@@ -172,22 +190,57 @@ async def create_customer_move_job(
     _record_job_created(session, job)
     access_link = await issue_access_link(session, customer)
     return CustomerMoveJobCreatedResponse(
-        job=_to_response(job),
+        job=_to_response(job, viewer_role=ParticipantRole.CUSTOMER),
         customer_access_link=access_link,
     )
 
 
-async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
+async def get_move_job(
+    session: AsyncSession,
+    job_id: UUID,
+    *,
+    viewer_role: ParticipantRole,
+) -> MoveJobResponse:
     """Return one complete topology without exposing ORM objects."""
 
     job = await _load_move_job(session, job_id)
     if job is None:
         raise MoveJobNotFoundError(job_id)
-    return _to_response(job)
+    return _to_response(job, viewer_role=viewer_role)
 
 
 def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _encode_list_cursor(offset: int) -> str:
+    """Encode the next offset without exposing implementation details to clients."""
+
+    payload = f"v1:{offset}".encode("ascii")
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_list_cursor(cursor: str) -> int:
+    """Validate and decode an opaque move-list cursor."""
+
+    if not cursor or len(cursor) > 256:
+        raise ValueError("cursor is invalid")
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = b64decode(
+            f"{cursor}{padding}".encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        ).decode("ascii")
+        version, offset_value = payload.split(":", maxsplit=1)
+        if version != "v1" or not offset_value.isascii() or not offset_value.isdecimal():
+            raise ValueError("cursor is invalid")
+        offset = int(offset_value)
+    except (BinasciiError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError("cursor is invalid") from error
+    if offset < 0 or offset > _MAX_LIST_CURSOR_OFFSET:
+        raise ValueError("cursor is invalid")
+    return offset
 
 
 async def _company_status(
@@ -245,6 +298,8 @@ def _scope_status(proposal: ScopeProposal | None) -> ScopeReviewStatus:
 async def _move_summary(
     session: AsyncSession,
     job: MoveJob,
+    *,
+    viewer_role: ParticipantRole,
 ) -> MoveJobSummaryResponse:
     scope_version = await session.scalar(
         select(ScopeVersion)
@@ -286,6 +341,7 @@ async def _move_summary(
         completion_status=completion_status,
         current_change=current_change,
         company_status=await _company_status(session, job),
+        viewer_role=viewer_role,
     )
 
 
@@ -297,6 +353,7 @@ def _move_summary_response(
     completion_status: CompletionRequestStatus | None,
     current_change: ChangeProposalDetail | None,
     company_status: CompanyParticipationStatus,
+    viewer_role: ParticipantRole,
 ) -> MoveJobSummaryResponse:
     quote = None
     adjustment_count = 0
@@ -324,7 +381,7 @@ def _move_summary_response(
     raw_items = content.get("items", [])
     item_count = len(raw_items) if isinstance(raw_items, list) else 0
     return MoveJobSummaryResponse(
-        job=_to_response(job),
+        job=_to_response(job, viewer_role=viewer_role),
         version_label=(
             f"V{scope_version.sequence_number}" if scope_version is not None else "초안"
         ),
@@ -347,6 +404,7 @@ async def list_move_jobs(
     scheduled_from: datetime | None = None,
     scheduled_to: datetime | None = None,
     limit: int = 50,
+    cursor: str | None = None,
 ) -> MoveJobListResponse:
     """List every job attached to one capability or durable workspace."""
 
@@ -360,6 +418,20 @@ async def list_move_jobs(
         raise ValueError("scheduled_from must not exceed scheduled_to")
     if search is not None and not search.strip():
         raise ValueError("q must contain a non-whitespace character")
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    cursor_offset = _decode_list_cursor(cursor) if cursor is not None else 0
+
+    if actor_participant_id is not None:
+        viewer_role = await session.scalar(
+            select(JobParticipant.role).where(JobParticipant.id == actor_participant_id)
+        )
+    else:
+        viewer_role = await session.scalar(
+            select(WorkspaceAccount.role).where(WorkspaceAccount.id == account_id)
+        )
+    if viewer_role is None:
+        raise ValueError("list identity is invalid")
 
     participant_job_ids = select(JobParticipant.job_id)
     if account_id is not None:
@@ -388,30 +460,36 @@ async def list_move_jobs(
         statement = statement.where(MoveJob.scheduled_at <= scheduled_to)
     if search:
         pattern = f"%{search.strip().lower()}%"
+        search_predicates = [
+            func.lower(MoveJob.title).like(pattern),
+            func.lower(Location.label).like(pattern),
+            func.lower(JobParticipant.display_name).like(pattern),
+        ]
+        if viewer_role is not ParticipantRole.FIELD_WORKER:
+            search_predicates.append(func.lower(Location.detail_address).like(pattern))
         matching_jobs = (
             select(MoveJob.id)
             .outerjoin(Location, Location.job_id == MoveJob.id)
             .outerjoin(JobParticipant, JobParticipant.job_id == MoveJob.id)
-            .where(
-                or_(
-                    func.lower(MoveJob.title).like(pattern),
-                    func.lower(Location.label).like(pattern),
-                    func.lower(JobParticipant.display_name).like(pattern),
-                )
-            )
+            .where(or_(*search_predicates))
         )
         statement = statement.where(MoveJob.id.in_(matching_jobs))
-    jobs = (
+    fetched_jobs = (
         (
             await session.scalars(
-                statement.order_by(MoveJob.created_at.desc(), MoveJob.id.desc()).limit(limit)
+                statement.order_by(MoveJob.created_at.desc(), MoveJob.id.desc())
+                .offset(cursor_offset)
+                .limit(limit + 1)
             )
         )
         .unique()
         .all()
     )
+    has_more = len(fetched_jobs) > limit
+    jobs = fetched_jobs[:limit]
     if not jobs:
-        return MoveJobListResponse(moves=())
+        return MoveJobListResponse(moves=(), next_cursor=None)
+    next_cursor = _encode_list_cursor(cursor_offset + len(jobs)) if has_more else None
 
     job_ids = tuple(job.id for job in jobs)
     scope_versions = (
@@ -506,9 +584,10 @@ async def list_move_jobs(
                     job,
                     invitation_by_job.get(job.id),
                 ),
+                viewer_role=viewer_role,
             )
         )
-    return MoveJobListResponse(moves=tuple(moves))
+    return MoveJobListResponse(moves=tuple(moves), next_cursor=next_cursor)
 
 
 async def patch_move_job(
@@ -569,6 +648,8 @@ async def patch_move_job(
                 raise MoveJobNotFoundError(job_id)
             if location_patch.label is not None:
                 location.label = location_patch.label
+            if "detail_address" in location_patch.model_fields_set:
+                location.detail_address = location_patch.detail_address
             if location_patch.conditions is not None:
                 location.conditions = location_patch.conditions.model_dump(mode="json")
             changed_fields.append(f"location:{location_patch.kind.value}")
@@ -599,7 +680,7 @@ async def patch_move_job(
         payload={"changed_fields": sorted(changed_fields)},
     )
     await session.flush()
-    return _to_response(job)
+    return _to_response(job, viewer_role=ParticipantRole.CUSTOMER)
 
 
 async def cancel_move_job(

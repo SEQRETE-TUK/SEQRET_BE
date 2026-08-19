@@ -64,6 +64,19 @@ class FieldIssueResponse(ContractModel):
     change_proposal_id: UUID | None
 
 
+class FieldIssueEvidenceReadResponse(ContractModel):
+    """One short-lived, generation-pinned field-issue evidence preview."""
+
+    media_asset_id: UUID
+    room_zone_id: UUID
+    content_type: str
+    read_url: Annotated[
+        str,
+        Field(min_length=1, repr=False, json_schema_extra={"format": "uri"}),
+    ]
+    expires_at: datetime
+
+
 class ChangeProposalCreate(FieldChangeRequestModel):
     field_issue_id: UUID
     base_scope_version_id: UUID

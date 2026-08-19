@@ -102,22 +102,27 @@ Authorization: Bearer <access-link-secret>
 | Query | 형식 | 의미 |
 | --- | --- | --- |
 | `status` | `draft|active|completed|canceled` | 작업 상태 |
-| `q` | 1~100자 | 제목·고객명·업체명·현장기사명·위치 표시명 부분 검색 |
+| `q` | 1~100자 | 제목·고객명·업체명·현장기사명·위치 기본·상세 주소 부분 검색; 기사는 상세 주소 제외 |
 | `scheduled_from` | timezone 포함 ISO 8601 | 예정시각 하한 |
 | `scheduled_to` | timezone 포함 ISO 8601 | 예정시각 상한 |
 | `limit` | 1~100, 기본 50 | 반환 상한 |
+| `cursor` | 이전 응답의 opaque string | 다음 페이지 시작 위치 |
 
-응답은 `{ "moves": MoveJobSummary[] }`이며 각 항목은 기존 FE `MockMoveSummary`와 같은
+응답은 `{ "moves": MoveJobSummary[], "next_cursor": string|null }`이며 각 항목은 기존 FE `MockMoveSummary`와 같은
 `job`, `version_label`, `scope_status`, `company_participation_status`,
 `completion_request_status`, `quote`, `item_count`, `adjustment_count`를 가진다. 최근 생성한
-작업부터 정렬한다.
+작업부터 정렬한다. 같은 검색·필터와 `limit`을 유지한 채 `next_cursor`가 null이 될 때까지 조회하면
+100건을 넘는 전체 기록을 순회할 수 있다. 검색·필터가 바뀌면 cursor를 폐기하고 첫 페이지부터
+다시 조회한다.
 
 ## 기본정보 수정 API
 
 `PATCH /api/v1/move-jobs/{job_id}`는 부분 수정이며 빈 body는 `422`다. `scheduled_at: null`은
-일정을 미정으로 되돌린다. 주소 원문은 받거나 저장하지 않고 화면 표시용 `label`과 구조화 조건만
-저장한다. v2 범위 초안이 있으면 조건 변경을 새 불변 자식 버전에 snapshot한다. 이미 양측 확인으로
+일정을 미정으로 되돌린다. 기본 주소 `label`과 선택적 상세 주소 `detail_address`를 분리해 저장하고,
+사다리차 사용 여부는 `conditions.ladder`에 `required|not_required|unknown`으로 저장한다. v2 범위
+초안이 있으면 조건 변경을 새 불변 자식 버전에 snapshot한다. 이미 양측 확인으로
 잠긴 범위의 조건 또는 견적·완료·취소 상태는 `409`이므로 최신 서버 값을 다시 조회해 안내한다.
+상세 주소는 고객·업체 작업 응답에만 포함하고, 기사는 배차 확정 뒤 전용 `field-brief`에서만 받는다.
 
 ```json
 {
@@ -127,11 +132,13 @@ Authorization: Bearer <access-link-secret>
     {
       "kind": "origin",
       "label": "서울 성동구 출발지",
+      "detail_address": "101동 1203호",
       "conditions": {
         "residence_type": "apartment",
         "floor": {"status": "known", "value": 7},
         "elevator": "available",
         "stairs": "not_required",
+        "ladder": "required",
         "parking_access": "restricted",
         "carry_distance": {"status": "known", "value_m": 20},
         "access_note": "지하주차장 진입 확인"
@@ -171,8 +178,8 @@ Authorization: Bearer <access-link-secret>
 Vercel origin과 현재 `sslip.io` API는 서로 다른 site다. 백엔드는 credential CORS와
 `SameSite=None; Secure`를 적용하지만 Safari 등 브라우저의 third-party cookie 정책에 따라 세션
 지속이 차단될 수 있다. 운영에서 확실한 새로고침 복원을 보장하려면
-`app.example.com`과 `api.example.com`처럼 같은 site의 custom domain을 사용한다. 프론트 Vercel
-환경은 `VITE_API_BASE_URL=https://<backend-origin>`, `VITE_MOCK_API=false`로 둔다.
+`app.example.com`과 `api.example.com`처럼 같은 site의 custom domain을 사용한다. 프론트 배포
+환경은 프론트 담당 범위이며 백엔드는 사용할 API origin과 credential CORS 조건만 전달한다.
 
 ## 외부 발송 활성화 경계
 

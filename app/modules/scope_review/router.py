@@ -16,6 +16,7 @@ from app.modules.scope.service import (
     ScopeVersionConflictError,
 )
 from app.modules.scope_review.schemas import (
+    ScopeConfirmationHistoryView,
     ScopeConfirmCreate,
     ScopeConfirmResponse,
     ScopeProposalCreate,
@@ -29,6 +30,7 @@ from app.modules.scope_review.service import (
     ScopeReviewNotFoundError,
     confirm_scope_proposal,
     create_scope_proposal,
+    get_scope_confirmation_history,
     get_scope_review,
     request_scope_revision,
 )
@@ -42,6 +44,7 @@ REVIEW_ROLES = frozenset(
         ParticipantRole.FIELD_WORKER,
     }
 )
+CONFIRMATION_HISTORY_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER})
 
 
 def _not_found(error: Exception) -> HTTPException:
@@ -93,6 +96,35 @@ async def get_scope_review_endpoint(
         raise storage_error(error) from error
     response.headers["Cache-Control"] = "no-store"
     return view
+
+
+@router.get(
+    "/{job_id}/scope-review/history",
+    response_model=ScopeConfirmationHistoryView,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ),
+    summary="버전별 범위·견적·공동확인 이력 조회",
+)
+async def get_scope_confirmation_history_endpoint(
+    job_id: UUID,
+    response: Response,
+    actor: CurrentActor,
+    session: Session,
+) -> ScopeConfirmationHistoryView:
+    authorize_job_actor(actor, job_id, CONFIRMATION_HISTORY_ROLES)
+    try:
+        result = await get_scope_confirmation_history(
+            session,
+            job_id,
+            cast(UUID, actor.participant_id),
+            cast(ParticipantRole, actor.participant_role),
+        )
+    except ScopeReviewNotFoundError as error:
+        raise _not_found(error) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post(

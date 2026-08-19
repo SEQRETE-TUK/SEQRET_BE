@@ -1,5 +1,7 @@
 """Fast migration graph and SQLite compatibility tests."""
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -18,7 +20,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_09_0001"
+ALEMBIC_HEAD = "int_12_0001"
+ALEMBIC_MOVE_CONTRACT_PREVIOUS = "int_09_0001"
 ALEMBIC_FRONTEND_PREVIOUS = "a_23_0001"
 ALEMBIC_AI_V2_HEAD = "b_08_0001"
 ALEMBIC_AI_V2_PREVIOUS = "a_19_0001"
@@ -97,6 +100,258 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_move_detail_migration_backfills_and_guards_history(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'move-detail.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+
+    try:
+        command.upgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
+        legacy = MetaData()
+        legacy.reflect(
+            engine,
+            only=(
+                "move_job",
+                "job_participant",
+                "location",
+                "scope_version",
+                "change_request",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        participant_id = uuid4().hex
+        location_id = uuid4().hex
+        scope_version_id = uuid4().hex
+        change_request_id = uuid4().hex
+        legacy_conditions = {
+            "residence_type": "unknown",
+            "floor": {"status": "unknown", "value": None},
+            "elevator": "unknown",
+            "stairs": "unknown",
+            "parking_access": "unknown",
+            "carry_distance": {"status": "unknown", "value_m": None},
+            "access_note": None,
+        }
+        legacy_scope_content = {
+            "schema_version": 2,
+            "items": [],
+            "location_conditions": [
+                {
+                    "location_id": location_id,
+                    "kind": "origin",
+                    "conditions": legacy_conditions,
+                }
+            ],
+        }
+        legacy_scope_hash = hashlib.sha256(
+            json.dumps(
+                legacy_scope_content,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        with engine.begin() as connection:
+            connection.execute(
+                legacy.tables["move_job"].insert(),
+                {
+                    "id": job_id,
+                    "title": "상세 주소 migration",
+                    "status": "DRAFT",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            connection.execute(
+                legacy.tables["job_participant"].insert(),
+                {
+                    "id": participant_id,
+                    "job_id": job_id,
+                    "role": "CUSTOMER",
+                    "display_name": "customer",
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                legacy.tables["location"].insert(),
+                {
+                    "id": location_id,
+                    "job_id": job_id,
+                    "kind": "ORIGIN",
+                    "label": "출발지",
+                    "conditions": legacy_conditions,
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                legacy.tables["scope_version"].insert(),
+                {
+                    "id": scope_version_id,
+                    "job_id": job_id,
+                    "sequence_number": 1,
+                    "content": legacy_scope_content,
+                    "content_hash": legacy_scope_hash,
+                    "created_by_participant_id": participant_id,
+                    "created_at": now,
+                },
+            )
+            connection.execute(
+                legacy.tables["change_request"].insert(),
+                {
+                    "id": change_request_id,
+                    "job_id": job_id,
+                    "base_scope_version_id": scope_version_id,
+                    "requested_by_participant_id": participant_id,
+                    "description": "사다리차 검토",
+                    "proposed_content": legacy_scope_content,
+                    "status": "PENDING",
+                    "created_at": now,
+                },
+            )
+
+        command.upgrade(configuration, "head")
+        assert "detail_address" in {
+            column["name"] for column in inspect(engine).get_columns("location")
+        }
+        migrated = Table("location", MetaData(), autoload_with=engine)
+        migrated_scope = Table("scope_version", MetaData(), autoload_with=engine)
+        migrated_change = Table("change_request", MetaData(), autoload_with=engine)
+        with engine.begin() as connection:
+            row = connection.execute(select(migrated)).mappings().one()
+            assert row["detail_address"] is None
+            assert row["conditions"]["ladder"] == "unknown"
+            scope_row = connection.execute(select(migrated_scope)).mappings().one()
+            scope_content = scope_row["content"]
+            assert scope_content["location_conditions"][0]["conditions"]["ladder"] == "unknown"
+            assert (
+                scope_row["content_hash"]
+                == hashlib.sha256(
+                    json.dumps(
+                        scope_content,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+            )
+            change_content = connection.execute(
+                select(migrated_change.c.proposed_content)
+            ).scalar_one()
+            assert change_content["location_conditions"][0]["conditions"]["ladder"] == "unknown"
+            updated_conditions = dict(row["conditions"])
+            updated_conditions["ladder"] = "required"
+            connection.execute(
+                migrated.update()
+                .where(migrated.c.id == location_id)
+                .values(
+                    detail_address="101동 1203호",
+                    conditions=updated_conditions,
+                )
+            )
+
+        with pytest.raises(RuntimeError, match="move detail rows exist"):
+            command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            safe_conditions = dict(updated_conditions)
+            safe_conditions["ladder"] = "unknown"
+            connection.execute(
+                migrated.update()
+                .where(migrated.c.id == location_id)
+                .values(detail_address=None, conditions=safe_conditions)
+            )
+            scope_content = connection.execute(select(migrated_scope.c.content)).scalar_one()
+            scope_content["location_conditions"][0]["conditions"]["ladder"] = "required"
+            connection.execute(
+                migrated_scope.update()
+                .where(migrated_scope.c.id == scope_version_id)
+                .values(
+                    content=scope_content,
+                    content_hash=hashlib.sha256(
+                        json.dumps(
+                            scope_content,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest(),
+                )
+            )
+        with pytest.raises(RuntimeError, match="move detail rows exist"):
+            command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            scope_content["location_conditions"][0]["conditions"]["ladder"] = "unknown"
+            connection.execute(
+                migrated_scope.update()
+                .where(migrated_scope.c.id == scope_version_id)
+                .values(
+                    content=scope_content,
+                    content_hash=hashlib.sha256(
+                        json.dumps(
+                            scope_content,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest(),
+                )
+            )
+            change_content = connection.execute(
+                select(migrated_change.c.proposed_content)
+            ).scalar_one()
+            change_content["location_conditions"][0]["conditions"]["ladder"] = "required"
+            connection.execute(
+                migrated_change.update()
+                .where(migrated_change.c.id == change_request_id)
+                .values(proposed_content=change_content)
+            )
+        with pytest.raises(RuntimeError, match="move detail rows exist"):
+            command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+
+        with engine.begin() as connection:
+            change_content["location_conditions"][0]["conditions"]["ladder"] = "unknown"
+            connection.execute(
+                migrated_change.update()
+                .where(migrated_change.c.id == change_request_id)
+                .values(proposed_content=change_content)
+            )
+        command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
+        assert "detail_address" not in {
+            column["name"] for column in inspect(engine).get_columns("location")
+        }
+        downgraded = Table("location", MetaData(), autoload_with=engine)
+        downgraded_scope = Table("scope_version", MetaData(), autoload_with=engine)
+        downgraded_change = Table("change_request", MetaData(), autoload_with=engine)
+        with engine.begin() as connection:
+            downgraded_conditions = connection.execute(select(downgraded.c.conditions)).scalar_one()
+            downgraded_scope_row = (
+                connection.execute(
+                    select(downgraded_scope.c.content, downgraded_scope.c.content_hash)
+                )
+                .mappings()
+                .one()
+            )
+            downgraded_change_content = connection.execute(
+                select(downgraded_change.c.proposed_content)
+            ).scalar_one()
+        assert "ladder" not in downgraded_conditions
+        assert (
+            "ladder" not in downgraded_scope_row["content"]["location_conditions"][0]["conditions"]
+        )
+        assert downgraded_scope_row["content_hash"] == legacy_scope_hash
+        assert "ladder" not in downgraded_change_content["location_conditions"][0]["conditions"]
+
+        command.upgrade(configuration, "head")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -196,7 +451,7 @@ def test_frontend_contract_migration_guards_new_history(
 
         with pytest.raises(RuntimeError, match=message):
             command.downgrade(configuration, ALEMBIC_FRONTEND_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_MOVE_CONTRACT_PREVIOUS
     finally:
         engine.dispose()
 
@@ -503,6 +758,7 @@ def test_location_conditions_migration_backfills_and_defaults_existing_clients(
             "floor": {"status": "unknown", "value": None},
             "elevator": "unknown",
             "stairs": "unknown",
+            "ladder": "unknown",
             "parking_access": "unknown",
             "carry_distance": {"status": "unknown", "value_m": None},
             "access_note": None,

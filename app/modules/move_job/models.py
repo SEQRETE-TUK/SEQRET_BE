@@ -125,7 +125,7 @@ class JobParticipant(Base):
 
 
 class Location(Base):
-    """Origin or destination with no raw postal address persisted."""
+    """Origin or destination with separately recoverable address fields."""
 
     __tablename__ = "location"
     __table_args__ = (
@@ -150,6 +150,7 @@ class Location(Base):
         nullable=False,
     )
     label: Mapped[str] = mapped_column(String(100), nullable=False)
+    detail_address: Mapped[str | None] = mapped_column(String(200))
     conditions: Mapped[dict[str, object]] = mapped_column(
         JSON,
         nullable=False,
@@ -158,6 +159,7 @@ class Location(Base):
             "floor": {"status": "unknown", "value": None},
             "elevator": "unknown",
             "stairs": "unknown",
+            "ladder": "unknown",
             "parking_access": "unknown",
             "carry_distance": {"status": "unknown", "value_m": None},
             "access_note": None,

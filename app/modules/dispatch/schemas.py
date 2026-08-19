@@ -217,6 +217,8 @@ class FieldBriefView(ContractModel):
     start_at: datetime
     masked_origin: str | None
     masked_destination: str | None
+    origin_detail_address: str | None
+    destination_detail_address: str | None
     lead_worker_name: str
     lead_worker_call_uri: None = None
     company_chat_uri: None = None

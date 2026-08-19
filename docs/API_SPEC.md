@@ -7,7 +7,7 @@
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `bcd898e41fe72e2d4cec9207dabecb9fffcad197`
+> `00e13331b37d7405e7118d89f3dfc953db3e8402`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,7 +21,7 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-19에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/bcd898e41fe72e2d4cec9207dabecb9fffcad197)는
+2026-08-19에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/00e13331b37d7405e7118d89f3dfc953db3e8402)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
@@ -38,15 +38,13 @@ query·mutation을 수행한다. `/`, `/provider`, `/provider/web`, `/crew`도 �
 뜻하지 않는다. frontend PRD 부록의 `/v1/jobs`,
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
-현재 일반 API client와 download helper는 `credentials: "omit"`이고 업체 다중 연결은 메모리,
-고객 기본정보 수정은 `sessionStorage`를 원본으로 사용한다. INT-09 backend 계약에 연결하려면 일반
-API를 `credentials: "include"`로 전환하고 세션·목록·PATCH를 사용해야 한다. signed GCS PUT은
-계속 credential을 보내지 않는다. 세부 변경은 [INT-09 FE 인계](INT_09_FRONTEND_HANDOFF.md)를
-따른다.
+frontend 구현은 계속 변경될 수 있으므로 backend 완료 여부는 OpenAPI·migration·서버 회귀로
+판단한다. FE가 INT-12 계약을 연결할 때는 [INT-12 FE 인계](INT_12_FRONTEND_HANDOFF.md)를 따르고,
+backend는 FE 코드나 배포 설정을 직접 변경하지 않는다.
 
-승인된 19개 화면 경로 중 `media-uploads` 단순화 adapter를 제외한 18개가 현재 OpenAPI에
-등록됐다. 업체 이슈 목록·변경 제안·설명, 완료 요청 철회와 소비자 onboarding·역할 초대도 화면
-복구·lifecycle을 위한 별도 실행 계약으로 등록됐다. 나머지 대안 경로는 제품 범위와 A 소유 업무
+승인된 기존 19개 화면 경로 중 `media-uploads` 단순화 adapter를 제외한 18개와 INT-12 추가 P0
+조회 2개가 현재 OpenAPI에 등록됐다. 업체 이슈 목록·변경 제안·설명, 완료 요청 철회와 소비자
+onboarding·역할 초대도 화면 복구·lifecycle을 위한 별도 실행 계약으로 등록됐다. 나머지 대안 경로는 제품 범위와 A 소유 업무
 계약을 확정한 뒤 계약 PR, 구현, 권한·중복 호출 test와 OpenAPI 반영을 마쳐야 frontend 실행
 계약이 된다.
 B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 영향을 별도로 조정한다.
@@ -60,8 +58,9 @@ B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 �
 4. 화면에 없는 운영·정합성·감사·background job API는 frontend contract에서 제외한다.
 5. 전화, 채팅과 길 안내는 외부 앱 URI로 처리하고 별도 backend API를 만들지 않는다.
 
-기존 8개 화면 17개와 승인된 완료 P0 화면 2개를 합친 목표 API는 **19개**다. 현재 18개가
-구현됐고, 기존 3단계 capture 계약을 보존할 화면용 `media-uploads` adapter만 조건부로 남는다.
+기존 8개 화면 17개, 승인된 완료 P0 화면 2개와 INT-12 추가 P0 조회 2개를 합친 목표 API는
+**21개**다. 현재 20개가 구현됐고, 기존 3단계 capture 계약을 보존할 화면용 `media-uploads`
+adapter만 조건부로 남는다.
 시스템 운영 endpoint 3개는 별도이며 frontend가 호출하지 않는다.
 
 ## 2. 공통 규약
@@ -132,8 +131,8 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 | `DELETE` | `/api/v1/session/contact-points/{channel}` | 연락처 철회와 미발송 delivery 중단 | cookie + CSRF | 구현 |
 
 요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
-`locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`,
-구조화된 `conditions`와 1~100개의 고유한 `room_zones`를 가진다. 조건을 생략한 기존 요청은
+`locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 기본 주소용 `label`,
+선택적 `detail_address`, 구조화된 `conditions`와 1~100개의 고유한 `room_zones`를 가진다. 조건을 생략한 기존 요청은
 각 값을 명시적인 `unknown`으로 저장한다. 응답은 `job`과 `customer_access_link`만 반환하며
 업체·현장기사 참여자나 secret을 미리 만들지 않는다. secret 응답은 `Cache-Control: no-store`다.
 초대 순서는 소비자→업체, 수락 업체→현장기사로 고정한다. 상태는
@@ -147,11 +146,18 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 `CANCELED`로 전이하고 모든 초대·활성 access link를 같은 transaction에서 철회한다. 견적 또는
 완료 이력이 있으면 `409`, 다른 역할은 `403`이다.
 
+`GET /move-jobs`의 `limit`은 1~100의 페이지 크기다. 응답은 `moves`와 `next_cursor`를 반환하며,
+client는 동일한 `status`, `q`, 예정일 범위와 `limit`을 유지한 채 `next_cursor`를 다음 요청의
+`cursor`로 보낸다. `next_cursor: null`이면 마지막 페이지다. 검색·필터를 바꾸면 cursor를
+재사용하지 않는다. `q`는 제목, 참여자 이름, 위치의 기본·상세 주소를 부분 검색한다. 다만
+현장기사의 목록 검색에서는 비공개 `detail_address`를 검색 조건에서 제외한다.
+
 ### 3.1 고객·업체 공통 범위
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 출·도착지 조건, 원본 사진과 양측 확인 상태 조회 | 고객, 업체, 현장기사 | 구현·범위 v1·v2 |
+| `GET` | `/api/v1/move-jobs/{job_id}/scope-review/history` | 버전별 범위·견적·포함/제외 작업과 역할별 확인 시각 조회 | 고객, 업체 | 구현·범위 v1·v2 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·차량·인원·사유를 고객에게 전송 | 업체 | 구현·범위 v1·v2 |
@@ -171,6 +177,12 @@ pending·거절·만료·철회된 초대의 표시명은 `company_display_name`
 bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업은 `company_joined`로 해석한다.
 현장기사는 확정되어 잠긴 현재 범위만 조회할 수 있으며, 업체 제안 전이나 고객 확인 대기 중인
 초안은 `404`로 감춘다. 제안·수정 요청·확인 command의 기존 역할 제한은 바뀌지 않는다.
+
+`scope-review/history`는 `sequence_number` 오름차순으로 모든 불변 범위를 반환한다. 각 항목은
+`source: scope|quote|field_change`, 전체 `content`와 `content_hash`, 해당 버전에 효력이 생긴
+`quote`, 조상 업체 합의에서 상속한 `included_works`·`exclusions`, 제안 ID·사유, 고객·업체의
+`participant_id`·`role`·`confirmed_at`, `bilaterally_confirmed`, 생성·잠금 시각을 포함한다. 아직
+범위가 없으면 `versions: []`이고, 현장기사는 전체 확인서 이력에 접근할 수 없다.
 
 ### 3.2 고객 사진·AI 검토
 
@@ -215,7 +227,14 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
 | `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 보고 | 업체, 현장기사 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 고객, 업체, 현장기사 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 변경안 작성 전 READY 현장 증거의 5분 열람 URL 발급 | 업체, 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/completion-submissions` | 완료 checklist, 실제 근무, 현장 확인과 선택적 완료 미디어 제출 | 대표 현장기사 | 구현 |
+
+현장 이슈 증거 URL은 작업 참여자 역할, 이슈 소속 작업, 이슈에 연결된 media와
+`change_evidence` 목적을 모두 확인한 뒤 READY generation에 고정해 발급한다. 응답은
+`media_asset_id`, `room_zone_id`, `content_type`, opaque HTTPS `read_url`, `expires_at`만 포함하고
+`Cache-Control: no-store`를 사용한다. 만료 뒤 같은 endpoint를 다시 호출해 새 URL을 발급받는다.
+준비 전은 `409`, storage 발급 실패는 `503`이며 object key와 generation은 노출하지 않는다.
 
 ## 4. 화면 조회 계약
 
@@ -361,6 +380,7 @@ Response `FieldBriefView`:
 - `job: JobHeader`
 - `dispatch_id`
 - `start_at`, `masked_origin`, `masked_destination`
+- 배차 확정 뒤 담당 기사에게만 공개되는 `origin_detail_address`, `destination_detail_address`
 - `lead_worker_name`, `lead_worker_call_uri`, `company_chat_uri`
 - 잠긴 `scope_version_id`, `scope_version_label`, `scope_content_hash`, `scope_locked_at`
 - 승인본 `scope_content`, 확정 `quote`, `included_works[]`, `exclusions[]`
@@ -798,12 +818,16 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 | `floor` | object | `{status: known, value: -10..200}` 또는 `{status: unknown, value: null}` |
 | `elevator` | enum | `available`, `unavailable`, `unknown` |
 | `stairs` | enum | `required`, `not_required`, `unknown` |
+| `ladder` | enum | `required`, `not_required`, `unknown` |
 | `parking_access` | enum | `available`, `restricted`, `unavailable`, `unknown` |
 | `carry_distance` | object | `{status: known, value_m: 0..100000}` 또는 `{status: unknown, value_m: null}` |
 | `access_note` | string/null | 주차·진입 등 추가 조건, 1..1000자 |
 
-원문 주소는 저장하지 않는다. 작업 생성 응답과 `GET /move-jobs/{job_id}`는 현재 조건을 반환하고,
-범위 v2와 `scope-review`는 합의 당시 조건 snapshot을 반환한다.
+`Location`은 기본 주소 `label`과 동·호수 등의 선택적 `detail_address`를 분리해 반환한다.
+`detail_address`는 로그·trace·error payload에 남기지 않는다. 고객·업체의 작업 조회와 목록에는
+현재 값을 반환하지만 현장기사의 일반 작업 조회·목록에서는 `null`이고 상세 주소 검색도 막는다.
+배차가 확정된 담당 현장기사만 `field-brief`의 전용 상세 주소 필드로 받는다. 범위 v2와
+`scope-review`에는 상세 주소가 아닌 합의 당시 구조화 조건 snapshot만 포함한다.
 
 ### 6.3 `QuoteSnapshot`
 
@@ -881,7 +905,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | 제외 항목 | 처리 방식 |
 | --- | --- |
 | 기존 세 역할 bootstrap과 운영용 자기 link 회전 | 일반 frontend는 onboarding·invitation 실행 계약을 사용한다. 기존 route는 신뢰 bootstrap·운영 호환 범위다. |
-| 일반 작업·scope·change·completion CRUD/list | 화면 단위 view와 command로 대체 |
+| 일반 작업·scope·change·completion CRUD/list | 현재 FE 연동에서는 화면 단위 view와 command를 우선하고 기존 호환·운영 API는 삭제하지 않음 |
 | notification 읽음·안 읽음 처리 | in-app event 이력 조회와 외부 전달 상태는 구현됐지만 read receipt는 제품 범위에서 제외 |
 | audit event 전체 조회 | 화면에 필요한 변경·완료 기록만 completion summary에 포함 |
 | background job·재처리·정합성·삭제 API | 내부 운영 기능. frontend에 노출하지 않음 |
@@ -889,17 +913,18 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | 결제·현금영수증 발행 | MVP 제외. 이미 생성된 문서만 표시·다운로드 |
 | 자체 전화·채팅·지도 API | 신뢰 provider 계약 전에는 관련 URI를 `null`로 유지 |
 | AI 실행 상태 polling·provider 세부 정보 | 화면에는 review-ready 결과만 제공 |
-| 미디어 asset별 read URL API | 화면 view에 만료 preview URL 포함 |
+| 범용 미디어 asset별 read URL API | 화면 view 또는 작업·이슈에 종속된 권한 검사 endpoint만 사용 |
 | AI 수정 중간 저장 API | client local state 후 완료 시 한 번 제출 |
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 57개 path와 70개 operation이 있다. `/api/v1` 업무 operation 67개와
+현재 OpenAPI에는 59개 path와 72개 operation이 있다. `/api/v1` 업무 operation 69개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
 배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
 실행 계약으로 등록됐다. 배차 setup, 업체 이슈 목록·변경 제안·설명 3개와 소비자 onboarding·역할
-초대 8개 operation과 견적 전 고객 작업 취소도 별도 실행 계약으로 등록됐다. 남은 단순화 제안 경로와 FE PRD 부록의 대안
+초대 8개 operation, 견적 전 고객 작업 취소, 현장 증거 열람과 확인서 전체 이력 조회도 별도 실행
+계약으로 등록됐다. 남은 단순화 제안 경로와 FE PRD 부록의 대안
 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
@@ -909,11 +934,11 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | session 생성·복원·종료, contact-point 조회·저장·삭제 6개 | 역할 link를 서버 작업공간에 연결하고 새로고침 복원·CSRF·명시적 외부 알림 동의를 제공한다. |
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
 | `GET /move-jobs`, `PATCH /move-jobs/{id}` | 역할별 다중 작업 목록·검색·필터와 고객의 견적 전 기본정보 서버 수정을 제공한다. v2 조건 변경은 새 범위 snapshot을 만들며 잠긴 범위는 거부한다. |
-| `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
+| `GET /move-jobs/{id}` | 현재 기본정보 원본과 호환 조회로 유지하고 화면 단위 view에는 필요한 header만 재사용 |
 | `DELETE /move-jobs/{id}` | 견적 전 고객 작업을 취소하고 모든 capability를 철회하는 frontend 실행 계약으로 유지 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | 최신 완료 분석의 v1/v2 구조화 품목·위치 조건 제안을 조회하고 고객 편집본을 불변 자식 scope version으로 한 번만 생성한다. FE는 v2 필드와 위치조건 검수 UI를 추가 연결해야 한다. |
-| scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1·v2 내용과 `schema_version`을 노출한다. |
+| scope review 현재 조회·이력·제안·수정요청·확인 5개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1·v2 내용과 버전별 견적·양측 확인 시각을 노출한다. |
 | dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |
 | scope version 생성·목록·approval | 신뢰 bootstrap·내부 호환 계약으로 남기고 일반 FE는 위 scope review 흐름을 사용한다. |
 | change request 생성·목록·증거 read URL·설명·결정 | 호환 경로로 유지한다. 일반 FE는 역할을 분리하고 증거 preview를 묶은 `field-issues`와 `change-proposals` 실행 계약을 사용한다. |
@@ -936,7 +961,7 @@ OpenAPI에 반영된 뒤 frontend가 이동한다.
 ## 10. 제안 승인·구현 완료 기준
 
 - 8개 화면의 모든 표시값이 해당 view response에 존재한다.
-- 최신 FE 27개 demo 중 실제 MVP에 포함할 화면과 보조 state를 먼저 고정하고, 제외 화면은 mock임을 표시한다.
+- 최신 FE 27개 demo 중 실제 MVP에 포함할 화면과 보조 state를 먼저 고정하고 서버 연동 대상만 OpenAPI 계약에 연결한다.
 - 역할은 backend의 `customer`, `company_manager`, `field_worker`를 유지하거나 전환 계약을 별도 승인한다.
 - base path는 `/api/v1`을 사용하며 FE PRD의 `/v1` 경로를 현재 계약처럼 호출하지 않는다.
 - 모든 CTA와 제출 행동이 정확히 하나의 command endpoint에 대응한다.

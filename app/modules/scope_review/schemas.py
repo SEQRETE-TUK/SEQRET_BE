@@ -210,3 +210,33 @@ class ScopeReviewView(ContractModel):
     company_confirmed_at: datetime | None
     customer_confirmed_at: datetime | None
     revision_request: ScopeRevisionRequestResponse | None
+
+
+class ScopeConfirmationRecord(ContractModel):
+    participant_id: UUID
+    role: ParticipantRole
+    confirmed_at: datetime
+
+
+class ScopeConfirmationHistoryEntry(ContractModel):
+    scope_version_id: UUID
+    parent_scope_version_id: UUID | None
+    sequence_number: int
+    version_label: str
+    source: Literal["scope", "quote", "field_change"]
+    content: ScopeContent
+    content_hash: str
+    quote: QuoteSnapshot | None
+    included_works: tuple[str, ...]
+    exclusions: tuple[str, ...]
+    proposal_id: UUID | None
+    proposal_reason: str | None
+    confirmations: tuple[ScopeConfirmationRecord, ...]
+    bilaterally_confirmed: bool
+    created_at: datetime
+    locked_at: datetime | None
+
+
+class ScopeConfirmationHistoryView(ContractModel):
+    job: ScopeReviewJobHeader
+    versions: tuple[ScopeConfirmationHistoryEntry, ...]
