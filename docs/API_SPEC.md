@@ -231,7 +231,7 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
 | `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 보고 | 업체, 현장기사 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 고객, 업체, 현장기사 | 구현 |
-| `GET` | `/api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 변경안 작성 전 READY 현장 증거의 5분 열람 URL 발급 | 업체, 현장기사 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 변경안 작성 전 READY 현장 증거의 5분 열람 URL 발급 | 고객, 업체, 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/completion-submissions` | 완료 checklist, 실제 근무, 현장 확인과 선택적 완료 미디어 제출 | 대표 현장기사 | 구현 |
 
 현장 이슈 증거 URL은 작업 참여자 역할, 이슈 소속 작업, 이슈에 연결된 media와

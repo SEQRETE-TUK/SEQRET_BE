@@ -618,7 +618,9 @@ async def test_field_issue_evidence_read_url_is_private_reissuable_and_validated
     assert (
         await client.get(read_url, headers=_headers(created, "field_worker"))
     ).status_code == 200
-    assert (await client.get(read_url, headers=_headers(created, "customer"))).status_code == 403
+    customer_read = await client.get(read_url, headers=_headers(created, "customer"))
+    assert customer_read.status_code == 200
+    assert customer_read.json()["media_asset_id"] == media_id
     assert (
         await client.get(
             read_url.replace(media_id, str(uuid4())),
@@ -674,16 +676,16 @@ async def test_field_issue_evidence_read_url_is_private_reissuable_and_validated
     monkeypatch.setattr(storage, "create_read_url", original_create_read_url)
 
     async with factory() as session:
-        with pytest.raises(FieldChangeNotFoundError):
-            await field_change_service.create_field_issue_evidence_read_url(
-                session,
-                storage,
-                UUID(job_id),
-                UUID(issue["field_issue_id"]),
-                UUID(media_id),
-                _participant_id(created, "customer"),
-                ParticipantRole.CUSTOMER,
-            )
+        customer_service_read = await field_change_service.create_field_issue_evidence_read_url(
+            session,
+            storage,
+            UUID(job_id),
+            UUID(issue["field_issue_id"]),
+            UUID(media_id),
+            _participant_id(created, "customer"),
+            ParticipantRole.CUSTOMER,
+        )
+        assert customer_service_read.media_asset_id == UUID(media_id)
 
     openapi = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
     operation = openapi["paths"][

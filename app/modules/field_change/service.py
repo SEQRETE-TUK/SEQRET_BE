@@ -338,9 +338,13 @@ async def create_field_issue_evidence_read_url(
     participant_id: UUID,
     role: ParticipantRole,
 ) -> FieldIssueEvidenceReadResponse:
-    """Issue a private preview only to an authorized company or field participant."""
+    """Issue a private preview to an authorized job participant."""
 
-    if role not in {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}:
+    if role not in {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+        ParticipantRole.FIELD_WORKER,
+    }:
         raise FieldChangeNotFoundError(field_issue_id)
     await _require_participant(session, job_id, participant_id, role)
     asset = await session.scalar(

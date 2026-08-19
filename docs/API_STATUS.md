@@ -107,7 +107,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 
 | 화면 | Method · Path | 용도 | 상태 | 안전 경계 |
 | --- | --- | --- | --- | --- |
-| 업체·기사 현장 이슈 | `GET /api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 변경안 작성 전 증거 사진 열람 | 구현 | 같은 작업 참여자·이슈·media·purpose와 READY generation을 검사하고 5분 HTTPS URL만 반환 |
+| 고객·업체·기사 현장 이슈 | `GET /api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 변경안 작성 전 증거 사진 열람 | 구현 | 같은 작업 참여자·이슈·media·purpose와 READY generation을 검사하고 5분 HTTPS URL만 반환 |
 | 고객·업체 확인서 이력 | `GET /api/v1/move-jobs/{job_id}/scope-review/history` | 버전별 범위·견적·포함/제외·양측 확인 역할과 시각 조회 | 구현 | 고객·업체만 허용하고 불변 version 오름차순으로 전체 이력을 반환; 기사는 `403` |
 
 두 조회는 기존 `FieldIssueResponse`, `/scope-versions`, 현재 `/scope-review` 응답을 교체하지 않는
@@ -177,8 +177,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 배정 기사에게 현재 범위·일정·현장 조건·checklist 제공 | 현장기사 상세 화면의 실행 계약; 신뢰 source 없는 연락 URI는 `null` |
 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 예정일 당일 checklist 전체 확인과 도착 기록 | 현장기사 체크인 CTA의 멱등 command |
 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 업체·현장기사가 잠긴 범위에 무가격 이슈·READY 증거 보고 | 현장 이슈 화면의 실행 계약 |
-| `GET /api/v1/move-jobs/{job_id}/field-issues` | 업체·현장기사의 이슈와 제안 처리 상태 조회 | 업체 후속 처리와 기사 상태 복구에 사용 |
-| `GET /api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 업체·기사의 READY 이슈 증거 열람 URL 발급 | 변경안 작성 전 5분 generation-pinned preview; 고객 제외 |
+| `GET /api/v1/move-jobs/{job_id}/field-issues` | 고객·업체·현장기사의 이슈와 제안 처리 상태 조회 | 역할별 현장 보고 상태와 증거 preview에 사용 |
+| `GET /api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url` | 고객·업체·기사의 READY 이슈 증거 열람 URL 발급 | 변경안 작성 전 5분 generation-pinned preview |
 | `POST /api/v1/move-jobs/{job_id}/change-proposals` | 업체가 이슈를 변경 범위·원화 견적 제안으로 전환 | 업체 현장 변경 command 실행 계약 |
 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 고객·업체 변경 사유·증거 preview·견적·결정 기록 조회 | 고객 현장 변경 화면의 실행 계약 |
 | `POST /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 고객 승인·거절·설명 요청 | 고객 CTA 실행 계약 |
