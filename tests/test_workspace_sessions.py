@@ -19,7 +19,7 @@ from app.config import AppEnvironment, Settings
 from app.contracts.actor import ParticipantRole
 from app.main import create_app
 from app.modules.access.auth import get_bearer_secret
-from app.modules.access.models import InvitationStatus
+from app.modules.access.models import InvitationStatus, NotificationContactChannel
 from app.modules.access.router import _workspace_cookie_security
 from app.modules.access.workspace import (
     InvalidWorkspaceSessionError,
@@ -29,6 +29,7 @@ from app.modules.access.workspace import (
     _load_session,
     authenticate_workspace_actor,
     create_or_extend_workspace_session,
+    delete_contact_point,
 )
 from app.modules.scope.service import ScopeVersionConflictError
 from app.platform.db import Base, create_session_factory
@@ -472,6 +473,19 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         headers={"X-SEQRET-CSRF": csrf_token},
     )
     assert missing.status_code == 404
+    restored_email = await workspace_client.put(
+        "/api/v1/session/contact-points/email",
+        json={"destination": "restored@example.com", "delivery_consent": True},
+        headers={"X-SEQRET-CSRF": csrf_token},
+    )
+    assert restored_email.status_code == 200
+    assert restored_email.json()["masked_destination"] == "re******@example.com"
+    assert (
+        await workspace_client.delete(
+            "/api/v1/session/contact-points/email",
+            headers={"X-SEQRET-CSRF": csrf_token},
+        )
+    ).status_code == 204
 
     canceled = await workspace_client.delete(
         f"/api/v1/move-jobs/{job_id}",
@@ -510,6 +524,32 @@ async def test_workspace_rejects_missing_or_invalid_cookie(workspace_client: Asy
             await workspace_client.get("/api/v1/session/contact-points", headers=headers)
         ).status_code == 401
         assert (await workspace_client.get("/api/v1/move-jobs", headers=headers)).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_contact_revoke_uses_runtime_update_privileges() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    contact = SimpleNamespace(
+        destination="owner@example.com",
+        enabled=True,
+        updated_at=datetime(2026, 8, 19, tzinfo=UTC),
+    )
+    session.scalar = AsyncMock(return_value=contact)
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+
+    await delete_contact_point(
+        session,
+        uuid4(),
+        NotificationContactChannel.EMAIL,
+    )
+
+    assert contact.destination == "revoked:email"
+    assert contact.enabled is False
+    assert contact.updated_at > datetime(2026, 8, 19, tzinfo=UTC)
+    session.delete.assert_not_awaited()
+    session.execute.assert_awaited_once()
+    session.flush.assert_awaited_once()
 
 
 @pytest.mark.anyio
