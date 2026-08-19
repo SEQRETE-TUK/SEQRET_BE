@@ -52,7 +52,11 @@ ISSUE_VIEW_ROLES = frozenset(
 )
 ISSUE_REPORT_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
 ISSUE_EVIDENCE_VIEW_ROLES = frozenset(
-    {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}
+    {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+        ParticipantRole.FIELD_WORKER,
+    }
 )
 
 
@@ -128,7 +132,7 @@ async def list_field_issues_endpoint(
         status.HTTP_409_CONFLICT,
         status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
-    summary="업체·현장기사 현장 이슈 증거 열람 URL 발급",
+    summary="고객·업체·현장기사 현장 이슈 증거 열람 URL 발급",
 )
 async def create_field_issue_evidence_read_url_endpoint(
     job_id: UUID,

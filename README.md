@@ -81,7 +81,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `GET /move-jobs/{job_id}/field-brief`: 배정 현장기사의 확정 범위·일정·현장 조건 조회
 - `POST /move-jobs/{job_id}/check-ins`: 배정 현장기사의 당일 checklist 확인과 체크인
 - `POST·GET /move-jobs/{job_id}/field-issues`: 현장기사·업체 이슈 보고와 고객 포함 참여자의 처리 상태 조회
-- `GET /move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url`: 업체·현장기사용 만료형 이슈 증거 열람 URL 발급
+- `GET /move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url`: 고객·업체·현장기사용 만료형 이슈 증거 열람 URL 발급
 - `POST /move-jobs/{job_id}/change-proposals`: 업체 변경 범위·원화 견적 제안
 - `GET /move-jobs/{job_id}/change-proposals/{proposal_id}`: 고객·업체용 변경 사유·증거·견적 화면 조회
 - `POST /move-jobs/{job_id}/change-proposals/{proposal_id}/decision`: 고객 승인·거절·설명 요청

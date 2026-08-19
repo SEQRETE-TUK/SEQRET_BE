@@ -77,12 +77,12 @@ cursor는 서버 내부 구현을 감춘 불투명 값이다. client가 offset�
 
 ## 4. 현장 이슈 증거 열람
 
-업체가 변경안을 작성하기 전, 이슈 목록의 `evidence_media_asset_ids` 각각에 다음 endpoint를
+현장 보고 상세나 업체 변경안 화면에서 이슈 목록의 `evidence_media_asset_ids` 각각에 다음 endpoint를
 호출한다.
 
 ```http
 GET /api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url
-Authorization: Bearer <company-or-field-worker-secret>
+Authorization: Bearer <customer-or-company-or-field-worker-secret>
 ```
 
 ```json
@@ -95,7 +95,7 @@ Authorization: Bearer <company-or-field-worker-secret>
 }
 ```
 
-- 업체와 현장기사만 호출할 수 있고 고객은 `403`이다.
+- 작업에 연결된 고객·업체·현장기사 모두 호출할 수 있다.
 - 서버는 참여자 역할, 작업, 이슈, 이슈에 연결된 media, `change_evidence` 목적과 READY generation을
   모두 확인한다.
 - 아직 READY가 아니면 `409`, storage 발급 실패는 `503`, 다른 작업·이슈·media는 `404`다.
