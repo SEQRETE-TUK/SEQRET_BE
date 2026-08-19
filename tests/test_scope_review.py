@@ -1271,6 +1271,21 @@ async def test_scope_review_returns_analysis_media_without_provider_details(
     assert "test-model" not in serialized
     assert "object_key" not in serialized
 
+    async with factory.begin() as session:
+        stored_media = await session.get(MediaAsset, media_id)
+        assert stored_media is not None
+        stored_media.status = MediaAssetStatus.UPLOADED
+    uploaded_source = await client.get(
+        f"/api/v1/move-jobs/{job_id}/scope-review",
+        headers=_headers(_secret(created, "customer")),
+    )
+    assert uploaded_source.status_code == 200
+    assert uploaded_source.json()["media_previews"] == []
+    async with factory.begin() as session:
+        stored_media = await session.get(MediaAsset, media_id)
+        assert stored_media is not None
+        stored_media.status = MediaAssetStatus.READY
+
     monkeypatch.setattr(
         storage,
         "create_read_url",
@@ -1281,3 +1296,168 @@ async def test_scope_review_returns_analysis_media_without_provider_details(
         headers=_headers(_secret(created, "customer")),
     )
     assert unavailable.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_scope_review_uses_job_conditions_for_frontend_manual_v1_scope(
+    scope_review_api: tuple[
+        AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FakeObjectStorage,
+    ],
+) -> None:
+    client, _, _ = scope_review_api
+    created = await _create_job(client, "프론트 수동 등록")
+    job_id = created["job"]["id"]
+    frontend_conditions = {
+        "residence_type": "apartment",
+        "floor": {"status": "known", "value": 3},
+        "elevator": "unavailable",
+        "stairs": "unknown",
+        "parking_access": "available",
+        "carry_distance": {"status": "unknown", "value_m": None},
+        "access_note": "상세 주소: 301호\n사다리차: 사용",
+    }
+    patched = await client.patch(
+        f"/api/v1/move-jobs/{job_id}",
+        headers=_headers(_secret(created, "customer")),
+        json={"locations": [{"kind": "origin", "conditions": frontend_conditions}]},
+    )
+    assert patched.status_code == 200
+    source = await _create_customer_scope(client, created)
+    review_url = f"/api/v1/move-jobs/{job_id}/scope-review"
+
+    draft = await client.get(
+        review_url,
+        headers=_headers(_secret(created, "company_manager")),
+    )
+    assert draft.status_code == 200
+    assert draft.json()["scope"]["schema_version"] == 1
+    origin = next(
+        item for item in draft.json()["scope"]["location_conditions"] if item["kind"] == "origin"
+    )
+    expected_origin_id = next(
+        item["id"] for item in created["job"]["locations"] if item["kind"] == "origin"
+    )
+    assert origin["location_id"] == expected_origin_id
+    assert origin["conditions"]["residence_type"] == "apartment"
+    assert origin["conditions"]["floor"] == {"status": "known", "value": 3}
+    assert origin["conditions"]["access_note"] == frontend_conditions["access_note"]
+
+    proposed = await client.post(
+        f"/api/v1/move-jobs/{job_id}/scope-proposals",
+        headers=_headers(_secret(created, "company_manager")),
+        json=_proposal_payload(created, source["id"]),
+    )
+    assert proposed.status_code == 201
+    quoted = await client.get(
+        review_url,
+        headers=_headers(_secret(created, "customer")),
+    )
+    assert quoted.status_code == 200
+    assert (
+        quoted.json()["scope"]["location_conditions"]
+        == draft.json()["scope"]["location_conditions"]
+    )
+
+
+@pytest.mark.anyio
+async def test_scope_review_includes_preproposal_field_evidence_for_frontend_company_view(
+    scope_review_api: tuple[
+        AsyncClient,
+        async_sessionmaker[AsyncSession],
+        FakeObjectStorage,
+    ],
+) -> None:
+    client, factory, _ = scope_review_api
+    created = await _create_job(client, "프론트 현장 증거")
+    job_id = created["job"]["id"]
+    source = await _create_customer_scope(client, created)
+    proposed = await client.post(
+        f"/api/v1/move-jobs/{job_id}/scope-proposals",
+        headers=_headers(_secret(created, "company_manager")),
+        json=_proposal_payload(created, source["id"]),
+    )
+    assert proposed.status_code == 201
+    scope_version_id = proposed.json()["result_scope_version_id"]
+    confirmed = await client.post(
+        f"/api/v1/move-jobs/{job_id}/scope-review/confirm",
+        headers=_headers(_secret(created, "customer")),
+        json={"scope_version_id": scope_version_id},
+    )
+    assert confirmed.status_code == 200
+
+    capture_id = uuid4()
+    media_id = uuid4()
+    zone_id = UUID(created["job"]["locations"][0]["room_zones"][0]["id"])
+    now = datetime.now(UTC)
+    async with factory.begin() as session:
+        session.add(
+            CaptureSession(
+                id=capture_id,
+                job_id=UUID(job_id),
+                created_by_participant_id=_participant_id(created, "field_worker"),
+                created_at=now,
+            )
+        )
+        session.add(
+            MediaAsset(
+                id=media_id,
+                capture_session_id=capture_id,
+                room_zone_id=zone_id,
+                media_purpose=MediaPurpose.CHANGE_EVIDENCE,
+                status=MediaAssetStatus.UPLOADED,
+                object_key=f"jobs/{job_id}/field-evidence.jpg",
+                content_type="image/jpeg",
+                expected_size_bytes=10,
+                actual_size_bytes=10,
+                sha256_hex=None,
+                generation="8",
+                created_at=now,
+                uploaded_at=now,
+            )
+        )
+
+    issue = await client.post(
+        f"/api/v1/move-jobs/{job_id}/field-issues",
+        headers=_headers(_secret(created, "field_worker")),
+        json={
+            "client_reference": str(uuid4()),
+            "base_scope_version_id": scope_version_id,
+            "issue_type": "site_blocker",
+            "title": "엘리베이터 운행 중단",
+            "description": "현장 엘리베이터가 운행하지 않습니다.",
+            "evidence_media_asset_ids": [str(media_id)],
+        },
+    )
+    assert issue.status_code == 201
+    review_url = f"/api/v1/move-jobs/{job_id}/scope-review"
+
+    company_view = await client.get(
+        review_url,
+        headers=_headers(_secret(created, "company_manager")),
+    )
+    assert company_view.status_code == 200
+    preview = next(
+        item
+        for item in company_view.json()["media_previews"]
+        if item["media_asset_id"] == str(media_id)
+    )
+    assert preview["read_url"].startswith(
+        f"https://storage.invalid/read/jobs/{job_id}/field-evidence.jpg"
+    )
+
+    worker_view = await client.get(
+        review_url,
+        headers=_headers(_secret(created, "field_worker")),
+    )
+    assert str(media_id) in {
+        item["media_asset_id"] for item in worker_view.json()["media_previews"]
+    }
+    customer_view = await client.get(
+        review_url,
+        headers=_headers(_secret(created, "customer")),
+    )
+    assert str(media_id) not in {
+        item["media_asset_id"] for item in customer_view.json()["media_previews"]
+    }

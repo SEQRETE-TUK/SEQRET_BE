@@ -23,7 +23,11 @@ from app.contracts.primitives import utc_now
 from app.modules.access.models import InvitationStatus, ParticipantInvitation
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
-from app.modules.field_change.models import ChangeProposalDetail
+from app.modules.field_change.models import (
+    ChangeProposalDetail,
+    FieldIssue,
+    FieldIssueEvidence,
+)
 from app.modules.move_job.models import (
     JobParticipant,
     Location,
@@ -44,6 +48,7 @@ from app.modules.scope.schemas import (
     ScopeItemReviewStatus,
     ScopeItemSource,
     ScopeItemV2,
+    ScopeLocationConditions,
     ScopeVersionCreate,
 )
 from app.modules.scope.service import approve_scope_version, create_scope_version
@@ -602,6 +607,7 @@ async def _media_previews(
     storage: StoragePort,
     job_id: UUID,
     media_ids: tuple[UUID, ...],
+    uploaded_media_ids: frozenset[UUID],
 ) -> tuple[ScopeMediaPreview, ...]:
     if not media_ids:
         return ()
@@ -612,7 +618,7 @@ async def _media_previews(
             .where(
                 CaptureSession.job_id == job_id,
                 MediaAsset.id.in_(media_ids[:MAX_MEDIA_PREVIEWS]),
-                MediaAsset.status == MediaAssetStatus.READY,
+                MediaAsset.status.in_({MediaAssetStatus.UPLOADED, MediaAssetStatus.READY}),
                 MediaAsset.generation.is_not(None),
             )
             .order_by(MediaAsset.created_at, MediaAsset.id)
@@ -621,6 +627,8 @@ async def _media_previews(
     expires_at = utc_now() + timedelta(seconds=READ_URL_TTL_SECONDS)
     previews: list[ScopeMediaPreview] = []
     for asset in assets:
+        if asset.status is MediaAssetStatus.UPLOADED and asset.id not in uploaded_media_ids:
+            continue
         assert asset.generation is not None
         read_url = await storage.create_read_url(
             object_key=asset.object_key,
@@ -638,6 +646,49 @@ async def _media_previews(
             )
         )
     return tuple(previews)
+
+
+async def _field_evidence_media_ids(
+    session: AsyncSession,
+    job_id: UUID,
+) -> tuple[UUID, ...]:
+    return tuple(
+        (
+            await session.scalars(
+                select(FieldIssueEvidence.media_asset_id)
+                .join(
+                    FieldIssue,
+                    FieldIssue.id == FieldIssueEvidence.field_issue_id,
+                )
+                .where(FieldIssue.job_id == job_id)
+                .order_by(
+                    FieldIssue.created_at,
+                    FieldIssue.id,
+                    FieldIssueEvidence.media_asset_id,
+                )
+                .limit(MAX_MEDIA_PREVIEWS)
+            )
+        ).all()
+    )
+
+
+def _current_location_conditions(
+    job: MoveJob,
+    content: ScopeContent,
+) -> tuple[ScopeLocationConditions, ...]:
+    if content.location_conditions:
+        return content.location_conditions
+    return tuple(
+        ScopeLocationConditions.model_validate(
+            {
+                "location_id": location.id,
+                "kind": location.kind,
+                "conditions": location.conditions,
+            },
+            strict=False,
+        )
+        for location in sorted(job.locations, key=lambda item: item.kind.value)
+    )
 
 
 async def get_scope_confirmation_history(
@@ -982,7 +1033,12 @@ async def get_scope_review(
         )
     ).tuples()
     approval_times = {stored_role: _aware(at) for stored_role, at in approval_rows}
-    unique_media_ids = tuple(dict.fromkeys(media_ids))
+    field_evidence_ids = (
+        await _field_evidence_media_ids(session, job_id)
+        if role in {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}
+        else ()
+    )
+    unique_media_ids = tuple(dict.fromkeys((*field_evidence_ids, *media_ids)))
     return ScopeReviewView(
         job=_job_header(job, viewer, company_participation),
         scope=ScopeReviewScope(
@@ -999,7 +1055,7 @@ async def get_scope_review(
                 item.review_required for group in room_groups for item in group.items
             ),
             room_groups=room_groups,
-            location_conditions=content.location_conditions,
+            location_conditions=_current_location_conditions(job, content),
             included_works=included_works,
             exclusions=exclusions,
         ),
@@ -1020,6 +1076,7 @@ async def get_scope_review(
             storage,
             job_id,
             unique_media_ids,
+            frozenset(field_evidence_ids),
         ),
         company_confirmed_at=approval_times.get(ParticipantRole.COMPANY_MANAGER),
         customer_confirmed_at=approval_times.get(ParticipantRole.CUSTOMER),
