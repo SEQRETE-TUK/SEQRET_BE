@@ -126,6 +126,15 @@ resource "google_secret_manager_secret_iam_member" "outbox_relay_database" {
   member    = "serviceAccount:${google_service_account.outbox_relay.email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "outbox_relay_notification" {
+  for_each = local.outbox_notification_secret_environment
+
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.outbox_relay.email}"
+}
+
 resource "google_cloud_run_v2_job" "outbox_relay" {
   project             = var.project_id
   name                = local.outbox_relay_name
@@ -158,6 +167,19 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
         env {
           name  = "SEQRET_PUBSUB_SUBSCRIPTION_ID"
           value = local.notification_subscription_name
+        }
+
+        dynamic "env" {
+          for_each = local.outbox_notification_secret_environment
+          content {
+            name = env.key
+            value_source {
+              secret_key_ref {
+                secret  = env.value
+                version = "latest"
+              }
+            }
+          }
         }
 
         env {
@@ -202,6 +224,7 @@ resource "google_cloud_run_v2_job" "outbox_relay" {
     google_pubsub_subscription_iam_member.outbox_relay_notification_viewer,
     google_pubsub_topic_iam_member.outbox_relay_publisher,
     google_secret_manager_secret_iam_member.outbox_relay_database,
+    google_secret_manager_secret_iam_member.outbox_relay_notification,
     google_cloud_tasks_queue_iam_member.outbox_relay_enqueuer,
     google_service_account_iam_member.outbox_relay_task_invoker_user,
     google_cloud_run_v2_service_iam_member.task_invoker_worker,

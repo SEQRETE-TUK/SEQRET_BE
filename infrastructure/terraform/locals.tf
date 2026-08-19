@@ -50,7 +50,22 @@ locals {
     SEQRET_STORAGE_SIGNING_SERVICE_ACCOUNT_EMAIL = google_service_account.api.email
   })
 
-  outbox_relay_environment = merge(local.observed_runtime_environment, {
+  outbox_notification_environment = var.notification_delivery_enabled ? {
+    SEQRET_FRONTEND_ORIGIN                       = var.frontend_origin
+    SEQRET_NOTIFICATION_DELIVERY_ENABLED         = "true"
+    SEQRET_NHN_NOTIFICATION_EMAIL_APP_KEY        = var.nhn_notification_email_app_key
+    SEQRET_NHN_NOTIFICATION_EMAIL_SENDER_ADDRESS = var.nhn_notification_email_sender_address
+    SEQRET_NHN_NOTIFICATION_EMAIL_SENDER_NAME    = var.nhn_notification_email_sender_name
+    SEQRET_NHN_NOTIFICATION_SMS_APP_KEY          = var.nhn_notification_sms_app_key
+    SEQRET_NHN_NOTIFICATION_SMS_SENDER_NUMBER    = var.nhn_notification_sms_sender_number
+    SEQRET_NHN_NOTIFICATION_KAKAO_APP_KEY        = var.nhn_notification_kakao_app_key
+    SEQRET_NHN_NOTIFICATION_KAKAO_SENDER_KEY     = var.nhn_notification_kakao_sender_key
+    SEQRET_NHN_NOTIFICATION_KAKAO_TEMPLATE_CODE  = var.nhn_notification_kakao_template_code
+    } : {
+    SEQRET_NOTIFICATION_DELIVERY_ENABLED = "false"
+  }
+
+  outbox_relay_environment = merge(local.observed_runtime_environment, local.outbox_notification_environment, {
     SEQRET_DATABASE_MAX_OVERFLOW              = "0"
     SEQRET_DATABASE_POOL_SIZE                 = "1"
     SEQRET_PUBSUB_PROJECT_ID                  = var.project_id
@@ -72,6 +87,31 @@ locals {
     { SEQRET_DATABASE_URL = var.api_database_url_secret_id },
     var.redis_url_secret_id == null ? {} : { SEQRET_REDIS_URL = var.redis_url_secret_id },
   )
+
+  outbox_notification_secret_environment = var.notification_delivery_enabled ? {
+    SEQRET_NHN_NOTIFICATION_EMAIL_SECRET_KEY = var.nhn_notification_email_secret_key_secret_id
+    SEQRET_NHN_NOTIFICATION_SMS_SECRET_KEY   = var.nhn_notification_sms_secret_key_secret_id
+    SEQRET_NHN_NOTIFICATION_KAKAO_SECRET_KEY = var.nhn_notification_kakao_secret_key_secret_id
+  } : {}
+}
+
+check "notification_delivery_configuration" {
+  assert {
+    condition = !var.notification_delivery_enabled || alltrue([
+      var.nhn_notification_email_app_key != null && try(length(trimspace(var.nhn_notification_email_app_key)) > 0, false),
+      var.nhn_notification_email_sender_address != null && try(length(trimspace(var.nhn_notification_email_sender_address)) > 0, false),
+      var.nhn_notification_email_sender_name != null && try(length(trimspace(var.nhn_notification_email_sender_name)) > 0, false),
+      var.nhn_notification_email_secret_key_secret_id != null && try(length(trimspace(var.nhn_notification_email_secret_key_secret_id)) > 0, false),
+      var.nhn_notification_sms_app_key != null && try(length(trimspace(var.nhn_notification_sms_app_key)) > 0, false),
+      var.nhn_notification_sms_sender_number != null && try(length(trimspace(var.nhn_notification_sms_sender_number)) > 0, false),
+      var.nhn_notification_sms_secret_key_secret_id != null && try(length(trimspace(var.nhn_notification_sms_secret_key_secret_id)) > 0, false),
+      var.nhn_notification_kakao_app_key != null && try(length(trimspace(var.nhn_notification_kakao_app_key)) > 0, false),
+      var.nhn_notification_kakao_sender_key != null && try(length(trimspace(var.nhn_notification_kakao_sender_key)) > 0, false),
+      var.nhn_notification_kakao_template_code != null && try(length(trimspace(var.nhn_notification_kakao_template_code)) > 0, false),
+      var.nhn_notification_kakao_secret_key_secret_id != null && try(length(trimspace(var.nhn_notification_kakao_secret_key_secret_id)) > 0, false),
+    ])
+    error_message = "Enabled notification delivery requires all NHN app, sender, template, and Secret Manager IDs."
+  }
 }
 
 check "database_secret_ids_are_distinct" {
@@ -83,6 +123,21 @@ check "database_secret_ids_are_distinct" {
       var.outbox_relay_database_url_secret_id,
     ])) == 4
     error_message = "Migration, API, worker, and Outbox relay database secret IDs must be distinct."
+  }
+}
+
+check "notification_secret_ids_are_distinct" {
+  assert {
+    condition = !var.notification_delivery_enabled || length(toset(compact([
+      var.migration_database_url_secret_id,
+      var.api_database_url_secret_id,
+      var.worker_database_url_secret_id,
+      var.outbox_relay_database_url_secret_id,
+      var.nhn_notification_email_secret_key_secret_id,
+      var.nhn_notification_sms_secret_key_secret_id,
+      var.nhn_notification_kakao_secret_key_secret_id,
+    ]))) == 7
+    error_message = "Database and enabled NHN notification Secret Manager IDs must be distinct."
   }
 }
 

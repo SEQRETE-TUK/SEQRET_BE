@@ -66,6 +66,10 @@ from app.modules.access.service import (
     revoke_access_link,
     rotate_access_link,
 )
+from app.modules.access.workspace import (
+    create_or_extend_workspace_session,
+    get_workspace_session,
+)
 from app.modules.analysis.models import AiAnalysisRun, AnalysisRunStatus, Detection
 from app.modules.analysis.service import (
     AnalysisRetryDecision,
@@ -163,7 +167,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_23_0001"
+ALEMBIC_HEAD = "int_09_0001"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -211,6 +215,10 @@ BUSINESS_TABLES = {
     "outbox_event",
     "event_consumption",
     "notification_delivery",
+    "workspace_account",
+    "workspace_membership",
+    "workspace_session",
+    "workspace_contact_point",
 }
 TEST_DATABASE_ENV = "SEQRET_TEST_DATABASE_URL"
 TEST_SCHEMA = "seqret_migration_test"
@@ -1698,6 +1706,91 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 ParticipantRole.CUSTOMER,
                 ParticipantRole.FIELD_WORKER,
             ]
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_workspace_relink_limits_new_session_to_proven_job_on_postgresql() -> None:
+    url = _test_database_url()
+    with _isolated_test_schema(url) as schema_url:
+        command.upgrade(_alembic_config(schema_url), "head")
+        settings = Settings(
+            database_url=SecretStr(schema_url.render_as_string(hide_password=False))
+        )
+        engine = create_database_engine(settings)
+        factory = create_session_factory(engine)
+        command_data = MoveJobCreate(
+            title="Workspace relink",
+            participants=(
+                ParticipantCreate(role=ParticipantRole.CUSTOMER, display_name="Customer"),
+                ParticipantCreate(
+                    role=ParticipantRole.COMPANY_MANAGER,
+                    display_name="Manager",
+                ),
+                ParticipantCreate(
+                    role=ParticipantRole.FIELD_WORKER,
+                    display_name="Worker",
+                ),
+            ),
+            locations=(
+                LocationCreate(
+                    kind=LocationKind.ORIGIN,
+                    label="Origin",
+                    room_zones=(RoomZoneCreate(name="Living room", sort_order=0),),
+                ),
+            ),
+        )
+
+        try:
+            async with transactional_session(factory) as session:
+                first = await create_move_job(session, command_data)
+                second = await create_move_job(session, command_data)
+            first_manager = next(
+                participant
+                for participant in first.job.participants
+                if participant.role is ParticipantRole.COMPANY_MANAGER
+            )
+            second_manager = next(
+                participant
+                for participant in second.job.participants
+                if participant.role is ParticipantRole.COMPANY_MANAGER
+            )
+
+            async with transactional_session(factory) as session:
+                original = await create_or_extend_workspace_session(
+                    session,
+                    first_manager.id,
+                    current_cookie_secret=None,
+                )
+            assert original.cookie_secret is not None
+            original_secret = original.cookie_secret
+
+            async with transactional_session(factory) as session:
+                attached = await create_or_extend_workspace_session(
+                    session,
+                    second_manager.id,
+                    current_cookie_secret=original_secret,
+                )
+            assert {member.job_id for member in attached.response.members} == {
+                first.job.id,
+                second.job.id,
+            }
+
+            async with transactional_session(factory) as session:
+                rebound = await create_or_extend_workspace_session(
+                    session,
+                    first_manager.id,
+                    current_cookie_secret=None,
+                )
+            assert rebound.cookie_secret is not None
+            assert [member.job_id for member in rebound.response.members] == [first.job.id]
+
+            async with transactional_session(factory) as session:
+                old_workspace = await get_workspace_session(session, original_secret)
+                new_workspace = await get_workspace_session(session, rebound.cookie_secret)
+            assert [member.job_id for member in old_workspace.members] == [second.job.id]
+            assert [member.job_id for member in new_workspace.members] == [first.job.id]
         finally:
             await engine.dispose()
 

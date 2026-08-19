@@ -42,7 +42,10 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
     job_path = "/api/v1/move-jobs/{job_id}"
     route_failures = {
         ("get", "/api/v1/me"): set(),
+        ("get", "/api/v1/move-jobs"): set(),
+        ("post", "/api/v1/sessions"): {409},
         ("get", job_path): set(),
+        ("patch", job_path): {403, 409},
         ("delete", job_path): {403, 409},
         ("post", f"{job_path}/invitations"): {403, 409},
         ("get", f"{job_path}/invitations"): {403},
@@ -144,13 +147,15 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
         }
         for path, path_item in schema["paths"].items()
         for method, operation in path_item.items()
-        if operation.get("security") == [{"HTTPBearer": []}]
+        if {"HTTPBearer": []} in operation.get("security", [])
     }
 
     expected_operations = {
         route: common_statuses | failures for route, failures in route_failures.items()
     }
     expected_operations[("get", "/api/v1/me")] = {401, 429}
+    expected_operations[("get", "/api/v1/move-jobs")] = {401, 429}
+    expected_operations[("post", "/api/v1/sessions")] = {401, 409, 429}
     assert protected_operations == expected_operations
     assert schema["components"]["schemas"]["HttpExceptionResponse"] == {
         "description": (
@@ -171,7 +176,7 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
     for method, path in route_failures:
         responses = schema["paths"][path][method]["responses"]
         expected_codes = common_statuses | route_failures[(method, path)]
-        if path == "/api/v1/me":
+        if path in {"/api/v1/me", "/api/v1/move-jobs", "/api/v1/sessions"}:
             expected_codes = expected_codes - {404}
         for code in expected_codes:
             assert responses[str(code)]["content"]["application/json"]["schema"] == {
@@ -222,7 +227,9 @@ def test_cors_allows_only_the_configured_browser_origin() -> None:
     assert delete_allowed.status_code == 200
     assert delete_allowed.headers["access-control-allow-origin"] == origin
     assert "DELETE" in delete_allowed.headers["access-control-allow-methods"]
-    assert allowed.headers.get("access-control-allow-credentials") != "true"
+    assert allowed.headers["access-control-allow-credentials"] == "true"
+    assert "PATCH" in allowed.headers["access-control-allow-methods"]
+    assert "x-seqret-csrf" in allowed.headers["access-control-allow-headers"].lower()
     assert rejected.status_code == 400
     assert "access-control-allow-origin" not in rejected.headers
 

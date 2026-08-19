@@ -22,6 +22,16 @@
 - 수락 시에만 `PARTICIPANT_CONNECTED` 감사 event를 기록한다. 초대 landing 조회는 참여 완료로 기록하지 않으며, 감사 payload에는 invitation·link·participant ID와 역할만 남기고 secret은 넣지 않는다.
 - `participant_invitation` 이력이 생긴 schema는 downgrade로 제거하지 않는다. rollback은 schema를 유지한 application revision 전환으로 수행한다.
 
+## 작업공간 세션과 다중 작업
+
+- 검증된 active 역할 link는 `POST /api/v1/sessions`에서 30일 서버 작업공간 계정과 세션에 연결한다. cookie 원문은 한 번만 발급하고 DB에는 SHA-256 hash만 저장한다.
+- 하나의 작업공간 계정은 한 역할만 가진다. 같은 역할의 여러 작업 participant를 연결할 수 있지만 다른 역할 또는 이미 다른 active 계정이 소유한 participant 연결은 `409`다.
+- 배포 cookie는 `HttpOnly; Secure; SameSite=None; Path=/api/v1`이다. `GET /api/v1/session`은 account와 active membership, 메모리 전용 CSRF token을 반환하며 cookie 원문은 반환하지 않는다.
+- cookie 기반 unsafe method는 `X-SEQRET-CSRF`를 필수로 검증한다. bearer가 있으면 기존 capability 인증이 우선하며 CSRF header를 요구하지 않는다.
+- `GET /api/v1/move-jobs`는 cookie account의 active membership 전체 또는 bearer participant 한 건만 조회한다. 목록은 상태·제목/표시명/위치 검색·예정일 구간·최대 100개 제한을 지원하고 secret이나 연락처를 포함하지 않는다.
+- `PATCH /api/v1/move-jobs/{job_id}`는 고객만 견적 생성 전 호출한다. 제목, timezone-aware 예정시각 또는 `null`, 기존 출·도착지의 표시 label·구조화 조건만 부분 갱신하며 주소 원문과 room-zone topology는 변경하지 않는다. v2 범위가 있으면 조건 변경을 새 불변 자식 version에 snapshot하며 이미 잠긴 범위의 조건, 완료·취소 또는 견적 이력이 있으면 `409`다.
+- 작업 기본정보 변경은 바뀐 필드 이름만 포함한 `JOB_BASIC_INFO_UPDATED` 감사 event를 append한다. 감사 row와 workspace 이력이 생긴 schema는 제거하지 않는다.
+
 ## Port 소유권과 동작
 
 | Port | adapter 소유자 | 입력·출력 | 멱등성 | timeout | 오류 계약 |
@@ -31,6 +41,7 @@
 | `AIProviderPort` | B | `AnalysisRequest`의 분석·촬영·미디어 ID, 비주소 위치·구역 context, object key, model/prompt/result version → `AnalysisResult` | 같은 key는 같은 입력에 같은 분석 결과를 반환한다 | 분석 호출에 초 단위 명시 | 결과는 초안이며 `scope_version`을 생성하거나 잠그지 않는다 |
 | `EventBusPort` | A | `DomainEvent` → 발행 완료 | event ID 기반 key로 중복 발행 효과를 막는다 | 발행 호출에 초 단위 명시 | Outbox 상태와 retry 정책은 A가 관리한다 |
 | `CachePort` | A | namespace가 포함된 key와 fixed-window 길이 → 원자적으로 증가한 count | 같은 window의 증가가 기존 TTL을 연장하지 않는다 | cache 호출에 초 단위 명시 | Redis 오류는 adapter 예외로 매핑하며 application은 DB 원본 제한을 계속 적용한다 |
+| `NotificationProviderPort` | 통합 INT-09 | 수신자별 정제된 `OutboundNotification` → provider request ID | delivery ID 기반 key를 전달한다. 알림톡은 provider가 10분 동안 중복 요청을 거부하고 Email·SMS grouping key는 추적용이다 | 개별 호출에 초 단위 명시 | provider HTTP·수신자 결과를 `ProviderError`와 재시도 가능 여부로 변환하며 secret·수신처를 로그에 남기지 않는다 |
 
 로컬 fake는 실제 adapter와 같은 Protocol을 만족하고 멱등 동작을 contract test로 검증한다.
 
@@ -186,6 +197,15 @@
 - Outbox 실패는 정제된 오류 분류와 시도 횟수만 저장하고 1초부터 최대 300초까지 지수 backoff로 다시 시도한다. payload나 provider 오류 원문은 운영 오류 필드에 복제하지 않는다.
 - `outbox_event`는 현재 지원하는 `schema_version = 1`과 JSON object payload만 저장한다. event별 정확한 payload shape 검증은 `DomainEvent` 계약이 담당한다.
 - Outbox·알림·소비 receipt가 하나라도 생성된 뒤에는 운영 이력을 지우는 schema downgrade를 금지한다. 장애 복구는 schema를 유지한 채 이전 application revision으로 되돌린다.
+
+## 외부 알림 전달
+
+- notification consumer는 기존 in-app intent를 항상 유지한다. event 생성 시점에 recipient의 active workspace membership과 명시적으로 동의한 연락처가 있으면 `email|sms|kakao` delivery를 채널별로 추가한다. 연락처 등록은 과거 event를 소급 발송하지 않는다.
+- 연락처 원문은 전달을 위해 DB에 저장하지만 API는 마스킹된 값만 반환한다. 이메일은 일반 이메일 형식, SMS·카카오는 한국 E.164 `+82...`만 허용하고 log·trace·error에는 원문을 기록하지 않는다.
+- 연락처를 교체·비활성·삭제하면 이전 destination의 아직 `PENDING`인 delivery를 `FAILED/consent_revoked`로 전이한다. 이미 `SENT`인 기록은 감사 목적상 보존한다.
+- relay는 provider 호출 직전에 한 건씩 lease하고 최대 10건을 동시에 처리한다. provider가 재시도 가능 오류를 반환하면 지수 backoff로 최대 5회까지 시도하고, 영구 오류 또는 마지막 시도는 정제된 error code와 함께 `FAILED`로 끝낸다.
+- 외부 발송은 at-least-once다. 알림톡은 NHN의 10분 idempotency key 계약을 사용하지만 Email·SMS grouping key는 중복 억제를 보장하지 않으므로 provider가 수신 후 응답을 잃은 timeout 재시도에서 중복이 생길 수 있다. 운영자는 provider request ID와 notification ID로 확인한다.
+- NHN Cloud 설정은 전체가 준비된 경우에만 `notification_delivery_enabled=true`를 허용한다. Email·SMS·알림톡 app/secret·등록 발신자, 알림톡 발신 프로필과 승인 템플릿, frontend origin 중 하나라도 없으면 시작을 거부한다.
 
 ## 오류와 호환성
 

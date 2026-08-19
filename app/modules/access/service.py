@@ -21,6 +21,7 @@ from app.modules.access.models import (
     ParticipantInvitation,
 )
 from app.modules.access.schemas import AccessLinkResponse
+from app.modules.access.workspace import revoke_workspace_memberships
 from app.modules.completion.models import AuditEventType
 from app.modules.completion.service import add_audit_event
 from app.modules.move_job.models import JobParticipant
@@ -392,6 +393,7 @@ async def revoke_access_link(
     )
     if revoked_link_id is None:
         return
+    await revoke_workspace_memberships(session, access_link.participant.id)
     payload = {
         "access_link_id": str(access_link.id),
         "participant_id": str(access_link.participant.id),

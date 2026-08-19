@@ -168,6 +168,84 @@ def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
     assert settings.notification_batch_size == 20
 
 
+def test_settings_accept_complete_external_notification_configuration() -> None:
+    settings = Settings(
+        notification_delivery_enabled=True,
+        notification_delivery_lease_seconds=30,
+        notification_delivery_timeout_seconds=5,
+        frontend_origin="https://seqret.example.com",
+        nhn_notification_email_app_key="email-app",
+        nhn_notification_email_secret_key=SecretStr("email-secret"),
+        nhn_notification_email_sender_address="notice@seqret.example.com",
+        nhn_notification_email_sender_name="SEQRET",
+        nhn_notification_sms_app_key="sms-app",
+        nhn_notification_sms_secret_key=SecretStr("sms-secret"),
+        nhn_notification_sms_sender_number="0212345678",
+        nhn_notification_kakao_app_key="kakao-app",
+        nhn_notification_kakao_secret_key=SecretStr("kakao-secret"),
+        nhn_notification_kakao_sender_key="a" * 40,
+        nhn_notification_kakao_template_code="SEQRET_NOTICE",
+    )
+
+    assert settings.notification_delivery_enabled
+    assert settings.notification_delivery_lease_seconds == 30
+    assert settings.nhn_notification_email_secret_key is not None
+    rendered = repr(settings)
+    assert "email-secret" not in rendered
+    assert "sms-secret" not in rendered
+    assert "kakao-secret" not in rendered
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"notification_delivery_enabled": True},
+        {
+            "notification_delivery_lease_seconds": 10,
+            "notification_delivery_timeout_seconds": 10,
+        },
+    ],
+)
+def test_settings_reject_incomplete_or_unsafe_notification_configuration(
+    values: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (
+            {"nhn_notification_email_secret_key": SecretStr("")},
+            "secret keys must not be empty",
+        ),
+        (
+            {"nhn_notification_email_sender_address": "not-an-email"},
+            "must be an email address",
+        ),
+        (
+            {"nhn_notification_email_sender_address": f"{'a' * 89}@example.com"},
+            "at most 100 characters",
+        ),
+        (
+            {"nhn_notification_sms_sender_number": "02-1234-5678"},
+            "must contain 8 to 13 digits",
+        ),
+        (
+            {"nhn_notification_kakao_sender_key": "!" * 40},
+            "must contain 40 alphanumerics",
+        ),
+    ],
+)
+def test_settings_reject_invalid_notification_provider_values(
+    values: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings.model_validate(values)
+
+
 def test_settings_accept_worker_storage_and_complete_task_dispatch_configuration() -> None:
     worker = Settings(media_bucket_name="seqret-stg-media")
     relay = Settings(

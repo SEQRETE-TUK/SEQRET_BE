@@ -4,11 +4,11 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.model import ContractModel
-from app.modules.access.models import InvitationStatus
+from app.modules.access.models import InvitationStatus, NotificationContactChannel
 
 
 class AccessLinkResponse(ContractModel):
@@ -72,3 +72,52 @@ class ActorSelfResponse(ContractModel):
     permissions: tuple[str, ...]
     expires_at: datetime
     invitation: InvitationResponse | None
+
+
+class WorkspaceMemberResponse(ContractModel):
+    """One job role restored from a server-owned workspace session."""
+
+    job_id: UUID
+    participant_id: UUID
+    role: ParticipantRole
+    display_name: str
+    invitation: InvitationResponse | None
+
+
+class WorkspaceSessionResponse(ContractModel):
+    """Durable workspace metadata; the HttpOnly cookie is never in the body."""
+
+    account_id: UUID
+    role: ParticipantRole
+    display_name: str
+    expires_at: datetime
+    csrf_token: Annotated[str, Field(min_length=40, max_length=100, repr=False)]
+    members: tuple[WorkspaceMemberResponse, ...]
+
+
+class WorkspaceContactPointUpsert(ContractModel):
+    """Explicit delivery consent for one external destination."""
+
+    model_config = ConfigDict(strict=False)
+
+    destination: Annotated[str, Field(min_length=3, max_length=320, repr=False)]
+    delivery_consent: bool
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def require_delivery_consent(self) -> "WorkspaceContactPointUpsert":
+        if not self.delivery_consent:
+            raise ValueError("delivery_consent must be true")
+        return self
+
+
+class WorkspaceContactPointResponse(ContractModel):
+    channel: NotificationContactChannel
+    masked_destination: str
+    enabled: bool
+    consented_at: datetime
+    updated_at: datetime
+
+
+class WorkspaceContactPointListResponse(ContractModel):
+    contacts: tuple[WorkspaceContactPointResponse, ...]

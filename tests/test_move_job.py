@@ -1,7 +1,7 @@
 """Move job API, validation, and conflict tests."""
 
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,9 +18,16 @@ from sqlalchemy.pool import NullPool
 from app.config import AppEnvironment, Settings
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.primitives import JobId, ParticipantId, RequestId
+from app.contracts.scope_review import CompanyParticipationStatus, ScopeReviewStatus
 from app.main import create_app
+from app.modules.access.models import InvitationStatus
+from app.modules.completion.models import CompletionRequestStatus
 from app.modules.move_job.models import LocationKind, MoveJobStatus
-from app.modules.move_job.router import cancel_move_job_endpoint, get_move_job_endpoint
+from app.modules.move_job.router import (
+    cancel_move_job_endpoint,
+    get_move_job_endpoint,
+    patch_move_job_endpoint,
+)
 from app.modules.move_job.schemas import (
     CarryDistanceCondition,
     CustomerMoveJobCreate,
@@ -29,15 +36,23 @@ from app.modules.move_job.schemas import (
     LocationConditions,
     LocationCreate,
     MoveJobCreate,
+    MoveJobPatch,
     ParticipantCreate,
     RoomZoneCreate,
 )
 from app.modules.move_job.service import (
     MoveJobConflictError,
     MoveJobNotFoundError,
+    _aware,
+    _company_status,
+    _move_summary,
+    _scope_status,
     cancel_move_job,
     get_move_job,
+    list_move_jobs,
+    patch_move_job,
 )
+from app.modules.scope_review.models import ScopeProposalStatus
 from app.platform.db import Base, create_session_factory
 
 
@@ -189,6 +204,18 @@ async def test_customer_onboarding_issues_only_the_customer_capability(
     )
     assert loaded.status_code == 200
     assert loaded.json()["participants"] == body["job"]["participants"]
+    listed = await move_job_client.get(
+        "/api/v1/move-jobs",
+        headers={"Authorization": f"Bearer {customer_link['secret']}"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["moves"][0]["company_participation_status"] == "company_not_invited"
+    missing_location = await move_job_client.patch(
+        f"/api/v1/move-jobs/{body['job']['id']}",
+        headers={"Authorization": f"Bearer {customer_link['secret']}"},
+        json={"locations": [{"kind": "destination", "label": "없는 도착지"}]},
+    )
+    assert missing_location.status_code == 404
     openapi = (await move_job_client.get("/openapi.json")).json()
     operation = openapi["paths"]["/api/v1/move-jobs/onboarding"]["post"]
     assert "security" not in operation
@@ -219,6 +246,13 @@ async def test_only_customer_can_cancel_and_quote_blocks_cancellation(
     delete_url = f"/api/v1/move-jobs/{job_id}"
 
     assert (await move_job_client.delete(delete_url, headers=manager_headers)).status_code == 403
+    assert (
+        await move_job_client.patch(
+            delete_url,
+            headers=manager_headers,
+            json={"title": "업체가 바꾼 제목"},
+        )
+    ).status_code == 403
     zone_id = created["job"]["locations"][0]["room_zones"][0]["id"]
     content = {
         "items": [
@@ -256,9 +290,23 @@ async def test_only_customer_can_cancel_and_quote_blocks_cancellation(
         },
     )
     assert proposal.status_code == 201
+    summary = await move_job_client.get("/api/v1/move-jobs", headers=manager_headers)
+    assert summary.status_code == 200
+    summary_item = summary.json()["moves"][0]
+    assert summary_item["version_label"] == "V2"
+    assert summary_item["scope_status"] == "customer_review"
+    assert summary_item["item_count"] == 1
+    assert summary_item["adjustment_count"] == 0
+    assert summary_item["quote"]["total_amount_krw"] == 500_000
 
     blocked = await move_job_client.delete(delete_url, headers=customer_headers)
     assert blocked.status_code == 409
+    blocked_patch = await move_job_client.patch(
+        delete_url,
+        headers=customer_headers,
+        json={"title": "견적 후 변경"},
+    )
+    assert blocked_patch.status_code == 409
     assert (await move_job_client.get(delete_url, headers=customer_headers)).status_code == 200
 
 
@@ -291,6 +339,36 @@ def test_customer_onboarding_contract_rejects_duplicate_locations_and_naive_time
     payload["scheduled_at"] = "2026-08-20T09:00:00"
     with pytest.raises(ValidationError, match="scheduled_at must include a timezone"):
         CustomerMoveJobCreate.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({}, "at least one field"),
+        ({"title": None}, "title cannot be null"),
+        ({"locations": None}, "locations cannot be null"),
+        ({"scheduled_at": "2026-08-20T09:00:00"}, "must include a timezone"),
+        (
+            {
+                "locations": [
+                    {"kind": "origin", "label": "첫 출발지"},
+                    {"kind": "origin", "label": "둘 출발지"},
+                ]
+            },
+            "location kinds must be unique",
+        ),
+        (
+            {"locations": [{"kind": "origin"}]},
+            "location patch requires label or conditions",
+        ),
+    ],
+)
+def test_move_job_patch_rejects_ambiguous_or_empty_updates(
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        MoveJobPatch.model_validate(payload)
 
 
 @pytest.mark.anyio
@@ -499,3 +577,132 @@ async def test_cancel_move_job_service_handles_terminal_states_and_existing_quot
     session.scalar = AsyncMock(side_effect=[SimpleNamespace(status=MoveJobStatus.DRAFT), uuid4()])
     with pytest.raises(MoveJobConflictError):
         await cancel_move_job(session, job_id, actor_id)
+
+
+@pytest.mark.anyio
+async def test_move_job_list_and_patch_service_edge_cases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock(spec=AsyncSession)
+    participant_id = uuid4()
+    account_id = uuid4()
+    with pytest.raises(ValueError, match="exactly one"):
+        await list_move_jobs(session)
+    with pytest.raises(ValueError, match="exactly one"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            account_id=account_id,
+        )
+    with pytest.raises(ValueError, match="scheduled_from"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            scheduled_from=datetime(2026, 8, 19),
+        )
+    with pytest.raises(ValueError, match="scheduled_to"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            scheduled_to=datetime(2026, 8, 19),
+        )
+
+    command = MoveJobPatch(title="수정")
+    job_id = uuid4()
+    session.scalar = AsyncMock(return_value=None)
+    with pytest.raises(MoveJobNotFoundError):
+        await patch_move_job(session, job_id, participant_id, command)
+    for terminal_status in (MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED):
+        session.scalar = AsyncMock(return_value=SimpleNamespace(status=terminal_status))
+        with pytest.raises(MoveJobConflictError):
+            await patch_move_job(session, job_id, participant_id, command)
+
+    actor = ActorContext(
+        actor_kind=ActorKind.PARTICIPANT,
+        participant_id=ParticipantId(participant_id),
+        participant_role=ParticipantRole.CUSTOMER,
+        job_id=JobId(job_id),
+        request_id=RequestId(uuid4()),
+        trace_id="a" * 32,
+    )
+
+    async def raise_patch_missing(*_args: object) -> None:
+        raise MoveJobNotFoundError(job_id)
+
+    monkeypatch.setattr("app.modules.move_job.router.patch_move_job", raise_patch_missing)
+    with pytest.raises(Exception) as missing_error:
+        await patch_move_job_endpoint(job_id, command, actor, session)
+    assert getattr(missing_error.value, "status_code", None) == 404
+
+
+@pytest.mark.anyio
+async def test_summary_status_helpers_cover_invitation_and_scope_lifecycles() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    job = SimpleNamespace(id=uuid4(), participants=[])
+    now = datetime.now(UTC)
+    pending_future = SimpleNamespace(
+        status=InvitationStatus.PENDING,
+        expires_at=now + timedelta(hours=1),
+    )
+    pending_past = SimpleNamespace(
+        status=InvitationStatus.PENDING,
+        expires_at=(now - timedelta(hours=1)).replace(tzinfo=None),
+    )
+    for invitation, expected in (
+        (pending_future, CompanyParticipationStatus.INVITED),
+        (pending_past, CompanyParticipationStatus.EXPIRED),
+        (
+            SimpleNamespace(status=InvitationStatus.ACCEPTED),
+            CompanyParticipationStatus.JOINED,
+        ),
+        (
+            SimpleNamespace(status=InvitationStatus.DECLINED),
+            CompanyParticipationStatus.DECLINED,
+        ),
+        (
+            SimpleNamespace(status=InvitationStatus.EXPIRED),
+            CompanyParticipationStatus.EXPIRED,
+        ),
+        (
+            SimpleNamespace(status=InvitationStatus.REVOKED),
+            CompanyParticipationStatus.REVOKED,
+        ),
+    ):
+        session.scalar = AsyncMock(return_value=invitation)
+        assert await _company_status(session, cast(Any, job)) is expected
+    assert _aware(now) is now
+
+    for status, scope_expected in (
+        (ScopeProposalStatus.REVISION_REQUESTED, ScopeReviewStatus.REVISION_REQUESTED),
+        (ScopeProposalStatus.CONFIRMED, ScopeReviewStatus.CONFIRMED),
+        (ScopeProposalStatus.SUPERSEDED, ScopeReviewStatus.COMPANY_REVIEW),
+    ):
+        assert _scope_status(cast(Any, SimpleNamespace(status=status))) is scope_expected
+
+    summary_job = SimpleNamespace(
+        id=uuid4(),
+        title="Summary edge",
+        status=MoveJobStatus.DRAFT,
+        scheduled_at=None,
+        created_at=now,
+        completed_at=None,
+        participants=[],
+        locations=[],
+    )
+    scope = SimpleNamespace(
+        id=uuid4(),
+        sequence_number=2,
+        content={"items": {"unexpected": True}},
+    )
+    session.scalar = AsyncMock(
+        side_effect=[scope, None, CompletionRequestStatus.REQUESTED, None, None]
+    )
+    summary = await _move_summary(session, cast(Any, summary_job))
+    assert summary.version_label == "V2"
+    assert summary.item_count == 0
+    assert summary.completion_request_status is CompletionRequestStatus.REQUESTED
+
+    session.scalar = AsyncMock(side_effect=[None, None, None, None])
+    draft_summary = await _move_summary(session, cast(Any, summary_job))
+    assert draft_summary.version_label == "초안"
+    assert draft_summary.completion_request_status is None

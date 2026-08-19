@@ -9,6 +9,7 @@ from pydantic import ConfigDict, Field, JsonValue, StringConstraints, model_vali
 from app.contracts.ai import AnalysisRequest, AnalysisResult
 from app.contracts.events import DomainEvent
 from app.contracts.model import ContractModel
+from app.contracts.notification import NotificationSendResult, OutboundNotification
 from app.contracts.primitives import IdempotencyKey
 
 StorageObjectGeneration = Annotated[
@@ -166,6 +167,19 @@ class EventBusPort(Protocol):
         idempotency_key: IdempotencyKey,
         timeout_seconds: float,
     ) -> None: ...
+
+
+@runtime_checkable
+class NotificationProviderPort(Protocol):
+    """External delivery boundary with a stable provider correlation key."""
+
+    async def send(
+        self,
+        *,
+        message: OutboundNotification,
+        idempotency_key: IdempotencyKey,
+        timeout_seconds: float,
+    ) -> NotificationSendResult: ...
 
 
 @runtime_checkable

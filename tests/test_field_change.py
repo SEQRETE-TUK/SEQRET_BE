@@ -509,6 +509,15 @@ async def test_field_issue_change_proposal_clarification_and_approval(
             "approved_at": approved.json()["decided_at"],
         }
     ]
+    move_list = await client.get(
+        "/api/v1/move-jobs",
+        headers=_headers(created, "company_manager"),
+    )
+    assert move_list.status_code == 200
+    move_summary = move_list.json()["moves"][0]
+    assert move_summary["version_label"] == "V3"
+    assert move_summary["quote"] == proposal_command["quote"]
+    assert move_summary["adjustment_count"] == len(proposal_command["quote"]["adjustments"])
     async with factory() as session:
         result = await session.get(ScopeVersion, UUID(result_id))
         assert result is not None

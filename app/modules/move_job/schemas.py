@@ -9,7 +9,13 @@ from pydantic import ConfigDict, Field, model_validator
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.model import ContractModel
+from app.contracts.scope_review import (
+    CompanyParticipationStatus,
+    QuoteSnapshot,
+    ScopeReviewStatus,
+)
 from app.modules.access.schemas import AccessLinkResponse
+from app.modules.completion.models import CompletionRequestStatus
 from app.modules.move_job.models import LocationKind, MoveJobStatus
 
 
@@ -198,6 +204,63 @@ class MoveJobResponse(ContractModel):
     completed_at: datetime | None
     participants: tuple[ParticipantResponse, ...]
     locations: tuple[LocationResponse, ...]
+
+
+class MoveJobLocationPatch(RequestModel):
+    """Mutable quote-impacting fields for one existing endpoint."""
+
+    kind: LocationKind
+    label: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    conditions: LocationConditions | None = None
+
+    @model_validator(mode="after")
+    def require_one_mutable_field(self) -> "MoveJobLocationPatch":
+        if self.label is None and self.conditions is None:
+            raise ValueError("location patch requires label or conditions")
+        return self
+
+
+class MoveJobPatch(RequestModel):
+    """Partial basic-information update before a company quote exists."""
+
+    title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    scheduled_at: datetime | None = None
+    locations: (
+        Annotated[tuple[MoveJobLocationPatch, ...], Field(min_length=1, max_length=2)] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def require_fields_and_aware_schedule(self) -> "MoveJobPatch":
+        if not self.model_fields_set:
+            raise ValueError("move job patch requires at least one field")
+        if "title" in self.model_fields_set and self.title is None:
+            raise ValueError("title cannot be null")
+        if "locations" in self.model_fields_set and self.locations is None:
+            raise ValueError("locations cannot be null")
+        if self.scheduled_at is not None and self.scheduled_at.utcoffset() is None:
+            raise ValueError("scheduled_at must include a timezone")
+        if self.locations is not None:
+            kinds = [location.kind for location in self.locations]
+            if len(kinds) != len(set(kinds)):
+                raise ValueError("location kinds must be unique")
+        return self
+
+
+class MoveJobSummaryResponse(ContractModel):
+    """Role-neutral list item matching the frontend move summary contract."""
+
+    job: MoveJobResponse
+    version_label: str
+    scope_status: ScopeReviewStatus
+    company_participation_status: CompanyParticipationStatus
+    completion_request_status: CompletionRequestStatus | None
+    quote: QuoteSnapshot | None
+    item_count: int
+    adjustment_count: int
+
+
+class MoveJobListResponse(ContractModel):
+    moves: tuple[MoveJobSummaryResponse, ...]
 
 
 class MoveJobCreatedResponse(ContractModel):

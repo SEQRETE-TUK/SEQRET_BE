@@ -1,16 +1,18 @@
 """Access-link rotation and revocation API."""
 
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
 from app.api.errors import protected_error_responses
+from app.config import AppEnvironment
 from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import (
     BearerSecret,
     CurrentActor,
     InvitationActor,
+    WorkspaceCookieSecret,
     authorize_job_actor,
 )
 from app.modules.access.invitations import (
@@ -27,6 +29,7 @@ from app.modules.access.invitations import (
     revoke_access_link_tree,
     revoke_invitation,
 )
+from app.modules.access.models import NotificationContactChannel
 from app.modules.access.schemas import (
     AccessLinkResponse,
     ActorSelfResponse,
@@ -34,6 +37,10 @@ from app.modules.access.schemas import (
     InvitationIssuedResponse,
     InvitationListResponse,
     InvitationResponse,
+    WorkspaceContactPointListResponse,
+    WorkspaceContactPointResponse,
+    WorkspaceContactPointUpsert,
+    WorkspaceSessionResponse,
 )
 from app.modules.access.service import (
     InvalidAccessTokenError,
@@ -41,10 +48,209 @@ from app.modules.access.service import (
     load_participant,
     rotate_access_link,
 )
+from app.modules.access.workspace import (
+    WORKSPACE_SESSION_COOKIE,
+    InvalidWorkspaceSessionError,
+    WorkspaceConflictError,
+    WorkspaceContactNotFoundError,
+    WorkspacePrincipal,
+    authenticate_workspace_account,
+    create_or_extend_workspace_session,
+    delete_contact_point,
+    get_workspace_session,
+    list_contact_points,
+    revoke_workspace_session,
+    upsert_contact_point,
+)
 from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["access"])
 identity_router = APIRouter(tags=["access"])
+
+
+def _workspace_cookie_security(request: Request) -> tuple[bool, Literal["lax", "none"]]:
+    environment = request.app.state.runtime_context.settings.environment
+    deployed = environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
+    return deployed, "none" if deployed else "lax"
+
+
+async def _workspace_principal(
+    cookie_secret: str | None,
+    session: Session,
+    *,
+    csrf_token: str | None = None,
+) -> WorkspacePrincipal:
+    if cookie_secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid workspace session"
+        )
+    try:
+        return await authenticate_workspace_account(
+            session,
+            cookie_secret,
+            csrf_token=csrf_token,
+        )
+    except InvalidWorkspaceSessionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid workspace session",
+        ) from error
+
+
+@identity_router.post(
+    "/sessions",
+    response_model=WorkspaceSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(status.HTTP_409_CONFLICT),
+    summary="검증된 역할 링크를 안전한 작업공간 세션에 연결",
+)
+async def create_workspace_session_endpoint(
+    request: Request,
+    response: Response,
+    actor: CurrentActor,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+) -> WorkspaceSessionResponse:
+    try:
+        issued = await create_or_extend_workspace_session(
+            session,
+            cast(UUID, actor.participant_id),
+            current_cookie_secret=cookie_secret,
+        )
+    except WorkspaceConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    if issued.cookie_secret is not None:
+        secure, same_site = _workspace_cookie_security(request)
+        response.set_cookie(
+            WORKSPACE_SESSION_COOKIE,
+            issued.cookie_secret,
+            max_age=30 * 24 * 60 * 60,
+            path="/api/v1",
+            secure=secure,
+            httponly=True,
+            samesite=same_site,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return issued.response
+
+
+@identity_router.get(
+    "/session",
+    response_model=WorkspaceSessionResponse,
+    responses=protected_error_responses(),
+    summary="새로고침 후 작업공간 세션 복원",
+)
+async def get_workspace_session_endpoint(
+    request: Request,
+    response: Response,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+) -> WorkspaceSessionResponse:
+    if cookie_secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid workspace session"
+        )
+    try:
+        result = await get_workspace_session(session, cookie_secret)
+    except InvalidWorkspaceSessionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid workspace session",
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@identity_router.delete(
+    "/session",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=protected_error_responses(),
+    summary="현재 작업공간 세션 종료",
+)
+async def delete_workspace_session_endpoint(
+    request: Request,
+    response: Response,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+    csrf_token: str = Header(alias="X-SEQRET-CSRF"),
+) -> None:
+    await _workspace_principal(cookie_secret, session, csrf_token=csrf_token)
+    assert cookie_secret is not None
+    await revoke_workspace_session(session, cookie_secret)
+    secure, same_site = _workspace_cookie_security(request)
+    response.delete_cookie(
+        WORKSPACE_SESSION_COOKIE,
+        path="/api/v1",
+        secure=secure,
+        httponly=True,
+        samesite=same_site,
+    )
+
+
+@identity_router.get(
+    "/session/contact-points",
+    response_model=WorkspaceContactPointListResponse,
+    responses=protected_error_responses(),
+    summary="외부 알림 연락처 목록 조회",
+)
+async def list_workspace_contact_points_endpoint(
+    request: Request,
+    response: Response,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+) -> WorkspaceContactPointListResponse:
+    principal = await _workspace_principal(cookie_secret, session)
+    response.headers["Cache-Control"] = "no-store"
+    return await list_contact_points(session, principal.account_id)
+
+
+@identity_router.put(
+    "/session/contact-points/{channel}",
+    response_model=WorkspaceContactPointResponse,
+    responses=protected_error_responses(),
+    summary="외부 알림 연락처와 명시적 수신 동의 저장",
+)
+async def upsert_workspace_contact_point_endpoint(
+    channel: NotificationContactChannel,
+    command: WorkspaceContactPointUpsert,
+    request: Request,
+    response: Response,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+    csrf_token: str = Header(alias="X-SEQRET-CSRF"),
+) -> WorkspaceContactPointResponse:
+    principal = await _workspace_principal(cookie_secret, session, csrf_token=csrf_token)
+    try:
+        result = await upsert_contact_point(session, principal.account_id, channel, command)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@identity_router.delete(
+    "/session/contact-points/{channel}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=protected_error_responses(status.HTTP_404_NOT_FOUND),
+    summary="외부 알림 연락처 삭제",
+)
+async def delete_workspace_contact_point_endpoint(
+    channel: NotificationContactChannel,
+    request: Request,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+    csrf_token: str = Header(alias="X-SEQRET-CSRF"),
+) -> None:
+    principal = await _workspace_principal(cookie_secret, session, csrf_token=csrf_token)
+    try:
+        await delete_contact_point(session, principal.account_id, channel)
+    except WorkspaceContactNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="contact point not found",
+        ) from error
 
 
 @identity_router.get(

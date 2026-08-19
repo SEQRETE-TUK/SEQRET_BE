@@ -6,11 +6,11 @@ Terraform defines five isolated Cloud Run execution units:
 - a private worker owned by the media-integration track
 - a completion-oriented media job owned by the media-integration track
 - a migration job with database access and no automatic retries
-- an A-owned scheduled Outbox relay/event-pump job that publishes committed events and commits in-app intents before ack
+- a scheduled Outbox relay/event-pump job that publishes committed events, commits in-app intents, delivers consented NHN Email·SMS·Kakao notifications, and dispatches background work
 
 The API, private media worker, migration job, and Outbox relay/event pump are always provisioned from the same immutable application image. The media Job remains optional through `job_runtime`. Terraform refuses to destroy a configured runtime implicitly. API, worker, migration, and relay runtimes export OpenTelemetry traces.
 
-The Outbox relay/event pump runs once per minute with one task and no platform retries. It publishes a bounded Outbox batch, consumes a bounded notification batch, and dispatches a bounded background-job batch to Cloud Tasks. Database leases, event receipts, and deterministic task names make overlapping scheduler deliveries safe. Cloud Tasks authenticates with a dedicated OIDC caller to the internal-only worker, attempts each task up to five times, alerts on failed attempts, and raises a warning when tasks remain queued for fifteen minutes. The Pub/Sub topic and source subscription retain messages for 31 days, while Pub/Sub native retry and the retained DLQ cover failures. After the first subscription deployment, run the protected one-time replay workflow described in [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](../docs/NOTIFICATION_CONSUMER_RUNBOOK.md); known bootstrap states are a consume no-op until that guarded seek completes.
+The Outbox relay/event pump runs once per minute with one task and no platform retries. It publishes a bounded Outbox batch, consumes a bounded notification batch, sends a bounded external-notification batch with at most ten concurrent provider calls, and dispatches a bounded background-job batch to Cloud Tasks. Database leases, event receipts, and deterministic task names make overlapping scheduler deliveries safe. Cloud Tasks authenticates with a dedicated OIDC caller to the internal-only worker, attempts each task up to five times, alerts on failed attempts, and raises a warning when tasks remain queued for fifteen minutes. The Pub/Sub topic and source subscription retain messages for 31 days, while Pub/Sub native retry and the retained DLQ cover failures. After the first subscription deployment, run the protected one-time replay workflow described in [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](../docs/NOTIFICATION_CONSUMER_RUNBOOK.md); known bootstrap states are a consume no-op until that guarded seek completes.
 
 ## Security invariants
 
@@ -18,7 +18,7 @@ The Outbox relay/event pump runs once per minute with one task and no platform r
 - Published containers are non-root and deployed by immutable Artifact Registry digest.
 - The API accepts load-balancer ingress only; the worker remains internal-only.
 - Cloud Armor applies managed SQL injection and XSS rules, limits public move-job bootstrap to 10 requests per minute per client IP, limits all `/api/v1/` traffic to 600 requests per minute per client IP, and rate-limits database readiness probes.
-- Database and optional Redis URLs come from existing Secret Manager secrets.
+- Database, optional Redis URL, and enabled NHN provider secret keys come from existing Secret Manager secrets.
 - Runtime service accounts are distinct and receive only their required secret, trace, storage, and provider roles. The private worker alone receives `roles/aiplatform.user` for Gemini calls.
 - Terraform state uses a pre-created private, versioned GCS bucket.
 - Every deployed migration must remain compatible with the previous ready revision. Destructive schema contraction is deployed only after that revision is no longer a rollback target.
@@ -53,6 +53,26 @@ Create the role-specific database secrets and at least one Cloud Monitoring noti
 | `REDIS_VPC_NETWORK` | Optional existing VPC network for API Direct VPC egress; configure with `REDIS_VPC_SUBNETWORK` |
 | `REDIS_VPC_SUBNETWORK` | Optional existing subnet in `GCP_REGION`; configure with `REDIS_VPC_NETWORK` |
 | `MONITORING_NOTIFICATION_CHANNELS` | Comma-separated full notification-channel names |
+| `NOTIFICATION_DELIVERY_ENABLED` | `false` by default; set `true` only after every NHN resource and secret below is ready |
+| `NHN_NOTIFICATION_EMAIL_APP_KEY` | NHN Cloud Email app key |
+| `NHN_NOTIFICATION_EMAIL_SECRET_KEY_SECRET_ID` | Existing Secret Manager ID containing the Email secret key |
+| `NHN_NOTIFICATION_EMAIL_SENDER_ADDRESS` | NHN-registered sender email address |
+| `NHN_NOTIFICATION_EMAIL_SENDER_NAME` | Transactional email sender display name |
+| `NHN_NOTIFICATION_SMS_APP_KEY` | NHN Cloud SMS app key |
+| `NHN_NOTIFICATION_SMS_SECRET_KEY_SECRET_ID` | Existing Secret Manager ID containing the SMS secret key |
+| `NHN_NOTIFICATION_SMS_SENDER_NUMBER` | NHN-registered domestic sender number, 8 to 13 digits |
+| `NHN_NOTIFICATION_KAKAO_APP_KEY` | NHN Cloud Kakao Alimtalk app key |
+| `NHN_NOTIFICATION_KAKAO_SECRET_KEY_SECRET_ID` | Existing Secret Manager ID containing the Kakao secret key |
+| `NHN_NOTIFICATION_KAKAO_SENDER_KEY` | Registered 40-character alphanumeric Kakao sender profile key |
+| `NHN_NOTIFICATION_KAKAO_TEMPLATE_CODE` | Approved template code using `#{message}` and `#{deepLink}` |
+
+Deploy `int_09_0001` with `NOTIFICATION_DELIVERY_ENABLED=false` first. Verify migration, workspace
+session/contact APIs, relay execution, and ordinary readiness without granting provider access. Then create the
+three Secret Manager secrets, register the Email/SMS senders and Kakao profile/template, populate all staging
+variables, and enable delivery in a separate rollout. The workflow and Terraform both reject partial settings,
+malformed sender values, duplicate Secret IDs, and missing secrets. After activation, use consented test contacts
+to prove one in-app row, one external row, a provider request ID, and one actual receipt per selected channel.
+Do not treat a successful Terraform plan or mocked provider test as delivery evidence.
 
 The deployment identity must manage the resources in `infrastructure/terraform`, enable their APIs, access the state prefix, update IAM on `MEDIA_BUCKET_NAME`, and have `iam.serviceAccounts.actAs` plus permission to update IAM on the API, worker, migration, Outbox relay, task-caller, and relay scheduler-caller service accounts. It needs Cloud Tasks queue/IAM, Pub/Sub topic/subscription/IAM, Cloud Scheduler job management, permission to grant the private worker `roles/aiplatform.user`, and `roles/containeranalysis.occurrences.viewer` to evaluate the published digest before migration or rollout. The Google-managed Scheduler service agent must retain `roles/cloudscheduler.serviceAgent`; Terraform explicitly preserves `roles/cloudtasks.serviceAgent` for the Cloud Tasks service agent and grants it `iam.serviceAccounts.actAs` on the dedicated task caller. Terraform grants the API service account self-scoped Token Creator for signed URLs; the deployment identity does not need Token Creator itself. The protected replay workflow additionally requires `pubsub.subscriptions.get`, `pubsub.subscriptions.update`, `pubsub.subscriptions.consume`, `run.jobs.get`, `run.jobs.run`, and `run.executions.get`; Terraform does not grant permissions to this external identity. Enable the Cloud Resource Manager API before the first run because the Terraform provider requires it before Terraform can manage project APIs. Terraform enables the Vertex AI API and passes the deployment region to the worker as `SEQRET_ANALYSIS_LOCATION`; the configured Gemini model must support that region.
 
