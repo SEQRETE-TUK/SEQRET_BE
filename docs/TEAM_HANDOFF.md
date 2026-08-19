@@ -52,10 +52,10 @@
 ## FE 현재 상태와 blocker
 
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
-- 현재 배포 API는 canonical FE origin `https://seqret.vercel.app`의 credential CORS를 허용한다. GCS bucket CORS는 signed PUT canary에서 별도로 검증한다.
-- GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
-- 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 최신 확인 기준은 `00e13331b37d7405e7118d89f3dfc953db3e8402`다. 일반 API·download helper가 아직 `credentials: "omit"`이고 업체 다중 연결은 메모리, 고객 기본정보 수정은 `sessionStorage` 원본이므로 [INT-12 FE 인계](INT_12_FRONTEND_HANDOFF.md)에 따라 전환해야 한다. signed GCS PUT만 `omit`을 유지한다.
+- 현재 배포 API는 canonical FE origin `https://seqret.vercel.app`의 credential CORS를 허용한다. 배포 workflow도 같은 `FRONTEND_ORIGIN` 하나로 GCS bucket CORS를 재조정하고 read-back 불일치를 차단한다.
+- GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 배포 후 실제 브라우저에서 preflight, create-only signed PUT, upload 완료까지 함께 검증한다.
+- 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. bucket 자체와 배포 계정의 bucket update 권한은 외부 선행조건으로 유지한다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 최신 확인 기준은 `77f60a4c867c2d0cfaf0925e48a77a6220ee5272`다. signed GCS PUT만 `credentials: "omit"`을 유지한다.
 - FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. 현재 `/`, `/provider`, `/provider/web`, `/crew`도 onboarding·초대·범위·변경·배차·체크인·완료·문서 API를 실제 query·mutation으로 사용한다. secret은 React 메모리에만 보관한다.
 - FE [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)은 화면 단위 dynamic import로 초기 JS를 224.60 kB까지 줄이고 500 kB 경고를 제거했다. production preview에서 7개 진입 경로와 전용 chunk 로드를 검증했다.
 - FE [#8](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/8)은 역할별 실행 계약 Playwright와 CI를 추가했고, FE [#9](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/9)는 pending 업체·현장기사의 보호 API 선호출과 인증 초기화를 차단했다. INT-12 session·cursor 다중 목록·구조화 기본정보 PATCH 계약에 대한 FE test는 별도로 추가해야 한다.
@@ -72,7 +72,7 @@
 ## 외부 활성화 전 확인
 
 - **NHN 알림:** 코드·Terraform·workflow는 Email·SMS·알림톡 발송을 지원하지만 실제 app key·secret, 등록 발신자, 40자 알림톡 sender key와 `#{message}`·`#{deepLink}` 승인 템플릿은 저장소 밖에서 준비해야 한다. 기본 `NOTIFICATION_DELIVERY_ENABLED=false`로 먼저 배포하고, Secret Manager ID와 GitHub staging 변수를 모두 검증한 별도 rollout에서 활성화한 뒤 채널별 실제 수신 canary를 수행한다. 로컬 fake 성공은 운영 발송 증거가 아니다.
-- **GCS:** staging private bucket `seqret-stg-20260813-media`, `MEDIA_BUCKET_NAME`과 runtime IAM이 준비됐다. 시간 제한 Vercel canary 뒤 bucket CORS는 API와 함께 `https://34-160-87-130.sslip.io`로 원복했다. 실제 FE origin을 확정하면 둘을 함께 교체하고 브라우저 preflight와 create-only upload를 다시 검증한다.
+- **GCS:** staging private bucket `seqret-stg-20260813-media`, `MEDIA_BUCKET_NAME`과 runtime IAM이 준비됐다. canonical FE origin은 `https://seqret.vercel.app`이며 배포 workflow가 API 설정과 같은 origin으로 bucket CORS를 재조정한다. 실브라우저에서 preflight, signed PUT, upload 완료를 검증한다.
 - **Redis:** [#109](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/109)에서 `seqret-stg-cache`(Basic 1 GiB, Redis 7.2, AUTH, persistence 없음, `allkeys-lru`)와 `seqret-redis-url`을 활성화했다. API만 `default` network·regional subnet의 Direct VPC `private-ranges-only` egress를 사용하고 worker는 Redis Secret과 VPC attachment를 받지 않는다. 서울 Basic M1 단가는 2026-08-16 Catalog 기준 USD 0.065/GiB-hour, 730시간 약 USD 47.45다. 정상 canary는 Memorystore `eval`·`incr` metric으로 연결을 증명했고, 통제된 장애 canary는 PostgreSQL 원본 제한으로 `200`을 유지하며 `access_rate_limit_cache_fallback` WARNING을 남겼다.
 - **DB 역할:** [#110](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/110)에서 migration/API/worker/relay/recovery 역할과 Secret을 분리해 staging cutover를 완료했다. 35개 application table은 `seqret_migration`이 소유하고 세 runtime은 `SELECT`·`INSERT`·`UPDATE`만, recovery는 `SELECT`와 session read-only만 가진다. 두 번의 rollout으로 stable·rollback revision까지 전용 Secret으로 교체한 뒤 legacy credential을 회전하고 기존 Secret version을 비활성화했다. runtime DDL·audit 변경·recovery write 차단, 실제 worker import·relay 발행과 전용 recovery credential PITR를 검증했다.
 - **DB 연결 경보:** staging PostgreSQL은 `max_connections=25`, 예약 3개, 일반 실행 최대 10개, rollout 중 보수적 최대 18개로 확정했다. [#108](https://github.com/SEQRETE-TUK/SEQRET_BE/pull/108)의 live policy `12968443928509467547`가 모든 database의 `num_backends` 합계 18 초과가 2분 지속되면 실제 notification channel로 WARNING을 보낸다.

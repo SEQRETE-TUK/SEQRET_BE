@@ -614,6 +614,14 @@ jobs:
           -auto-approve
           "${RUNNER_TEMP}/staging.tfplan"
 
+      - name: Reconcile media bucket browser CORS
+        shell: bash
+        run: >-
+          bash scripts/reconcile_media_bucket_cors.sh
+          "${GCP_PROJECT_ID}"
+          "${MEDIA_BUCKET_NAME}"
+          "${FRONTEND_ORIGIN}"
+
       - name: Verify the scheduled Outbox relay
         shell: bash
         timeout-minutes: 8
