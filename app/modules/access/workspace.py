@@ -44,6 +44,7 @@ WORKSPACE_SESSION_TTL = timedelta(days=30)
 WORKSPACE_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PHONE_PATTERN = re.compile(r"^\+[1-9][0-9]{7,14}$")
+REVOKED_CONTACT_DESTINATION_PREFIX = "revoked:"
 
 
 class InvalidWorkspaceSessionError(PermissionError):
@@ -440,6 +441,7 @@ async def _cancel_pending_contact_deliveries(
             NotificationDelivery.status == NotificationStatus.PENDING,
         )
         .values(
+            destination=f"{REVOKED_CONTACT_DESTINATION_PREFIX}{channel.value}",
             status=NotificationStatus.FAILED,
             last_error_code="consent_revoked",
             next_attempt_at=None,
@@ -493,7 +495,10 @@ async def list_contact_points(
     contacts = (
         await session.scalars(
             select(WorkspaceContactPoint)
-            .where(WorkspaceContactPoint.account_id == account_id)
+            .where(
+                WorkspaceContactPoint.account_id == account_id,
+                WorkspaceContactPoint.enabled.is_(True),
+            )
             .order_by(WorkspaceContactPoint.channel, WorkspaceContactPoint.id)
         )
     ).all()
@@ -508,13 +513,17 @@ async def delete_contact_point(
     channel: NotificationContactChannel,
 ) -> None:
     contact = await session.scalar(
-        select(WorkspaceContactPoint).where(
+        select(WorkspaceContactPoint)
+        .where(
             WorkspaceContactPoint.account_id == account_id,
             WorkspaceContactPoint.channel == channel,
         )
+        .with_for_update()
     )
-    if contact is None:
+    if contact is None or not contact.enabled:
         raise WorkspaceContactNotFoundError(channel)
     await _cancel_pending_contact_deliveries(session, account_id, channel)
-    await session.delete(contact)
+    contact.destination = f"{REVOKED_CONTACT_DESTINATION_PREFIX}{channel.value}"
+    contact.enabled = False
+    contact.updated_at = utc_now()
     await session.flush()

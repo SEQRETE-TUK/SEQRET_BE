@@ -450,6 +450,7 @@ async def test_event_consumption_snapshots_contacts_and_revocation_cancels_pendi
         assert external is not None
         assert external.status is NotificationStatus.FAILED
         assert external.last_error_code == "consent_revoked"
+        assert external.destination == "revoked:email"
 
     second_event = event.model_copy(update={"event_id": EventId(uuid4())})
     async with notification_database.begin() as session:
