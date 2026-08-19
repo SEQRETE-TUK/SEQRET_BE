@@ -8,19 +8,19 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 57개 path에 70개다: `/api/v1` 업무 operation 67개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 기존 역할별 E2E 흐름에 더해 서버 작업공간 계정·세션, 고객·업체·기사 다중 작업 목록·검색·필터, 고객 기본정보 수정, 명시적 연락처 동의와 Email·SMS·카카오 외부 delivery를 제공한다.
+- OpenAPI operation은 59개 path에 72개다: `/api/v1` 업무 operation 69개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 기존 역할별 E2E 흐름에 더해 서버 작업공간 계정·세션, cursor 다중 작업 목록, 구조화 상세주소·사다리차, 권한 검사된 현장 증거 열람과 버전별 확인서 이력을 제공한다.
 - Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump, 최대 10개 동시 외부 알림 delivery와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI v1·v2 분석 실행·구조화 초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `int_09_0001`다. workspace account·membership·session·contact point와 외부 notification delivery snapshot을 추가한다. workspace row, 기본정보 수정 감사 또는 외부 delivery 이력이 있으면 INT-09 downgrade를 차단하며 기존 migration guard도 유지하므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `int_12_0001`다. INT-12는 `location.detail_address`와 사다리차 조건을 추가하고 location·scope version·change proposal snapshot을 `unknown`으로 backfill하며 scope hash를 재계산한다. 의미 있는 새 값이 있으면 downgrade를 차단하며 기존 migration guard도 유지하므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
 - 업무 prefix는 `/api/v1`이다. 최초 연결은 `Authorization: Bearer <access-link-secret>`, 재접속·다중 목록은 30일 HttpOnly workspace cookie를 사용한다.
 - 역할값은 `customer`, `company_manager`, `field_worker`다. access link는 개인 신원을 증명하는 로그인 계정이 아니라 한 작업과 역할에 묶인 capability다.
 - active 역할 link는 `POST /sessions`로 서버 계정에 연결한다. 같은 역할의 다른 작업 link를 cookie와 함께 다시 연결할 수 있고 `GET /session`이 멤버십과 메모리 전용 CSRF를 복원한다. cookie mutation에는 `X-SEQRET-CSRF`가 필요하다.
-- `GET /move-jobs`는 cookie account의 다중 작업 또는 bearer의 한 작업 요약을 반환하고 검색·상태·예정일 필터를 지원한다. 고객은 견적·완료·취소 전 `PATCH /move-jobs/{job_id}`로 제목·일정·표시 위치·구조화 조건을 수정한다.
-- workspace contact API는 명시적 `delivery_consent: true`를 요구하고 destination 원문을 응답하지 않는다. future event부터 in-app과 선택한 외부 delivery를 생성하며 실제 NHN 발송은 배포 설정을 별도 활성화해야 한다.
+- `GET /move-jobs`는 cookie account의 다중 작업 또는 bearer의 한 작업 요약을 반환하고 검색·상태·예정일 필터와 opaque cursor 전체 순회를 지원한다. 고객은 견적·완료·취소 전 `PATCH /move-jobs/{job_id}`로 제목·일정·기본·상세 주소와 사다리차를 포함한 구조화 조건을 수정한다. 견적이 한 번이라도 생성되면 모든 기본정보 수정은 `409`다. 상세주소는 고객·업체 작업 응답에만 포함하고 기사 일반 조회·목록·검색에서는 숨기며, 배차 확정된 담당 기사에게만 `field-brief`로 공개한다.
+- workspace contact API와 외부 delivery는 기능 플래그·운영 기능으로 유지한다. 현재 FE에 설정 화면이 없으므로 추가 연동 범위로 잡지 않는다.
 - `POST /move-jobs/onboarding`은 공개 소비자 생성 route다. 고객 참여자와 고객 access secret 하나만 반환하며 업체·현장기사 capability를 미리 발급하지 않는다.
 - 고객은 견적 생성 전 `DELETE /move-jobs/{job_id}`로 작업을 취소할 수 있다. 서버는 이력을 물리 삭제하지 않고 `CANCELED`로 전이하며 모든 초대와 access link를 철회한다. 견적·완료 작업은 `409`, 다른 역할은 `403`이다.
 - `POST·GET /move-jobs/{job_id}/invitations`와 action route는 소비자→업체, 수락한 업체→현장기사 순서만 허용한다. pending link는 `/me`와 수락·거절에만 쓸 수 있고, 상위 초대 폐기·재발급 또는 발급자 access-link 직접 철회는 하위 초대를 함께 철회한다. frontend는 secret을 URL query, storage, log나 analytics에 넣지 않고 자체 route의 fragment 또는 메모리 전달만 사용한다.
@@ -37,9 +37,11 @@
 - `GET /move-jobs/{job_id}/analysis-review`는 고객이 가장 최근에 제출한 분석이 `completed`일 때만 공간별 전체·READY·FAILED media 수, v1/v2 편집 품목, 현재 위치조건과 AI 조건 제안을 반환한다. AI 항목·조건에는 신뢰도·검토 필요·source media ID를 제공하지만 model·prompt·provider 정보는 노출하지 않는다.
 - `POST /move-jobs/{job_id}/analysis-review/complete`는 응답의 `source_scope_version_id`, 최종 항목과 선택적 전체 `location_conditions`를 받아 고객 편집본을 불변 자식 scope version으로 생성한다. v2는 이름·수량·단위·작업 메모를 지원하며 AI 위치 제안은 이 command를 거쳐야만 새 범위에 확정된다. 같은 내용의 재전송은 같은 결과를 반환하고 stale 원본, 상충 재전송, 다른 참여자가 만든 자식 version은 `409`다.
 - `GET /move-jobs/{job_id}/scope-review`는 고객과 업체에게 현재 불변 범위, 원화 견적, 포함·제외 작업, 수정요청, 양측 확인 시각과 AI 출처 media preview를 한 번에 반환한다. preview는 READY 객체의 generation-pinned 5분 read URL이며 object key·generation·model·prompt·provider 값은 노출하지 않는다.
+- `GET /move-jobs/{job_id}/scope-review/history`는 고객·업체에게 모든 불변 version의 전체 범위, 당시 견적, 포함·제외 작업, 제안 출처·사유, 역할별 확인자·시각과 양측 확인 여부를 오름차순으로 반환한다. 현장기사의 전체 이력 접근은 `403`이다.
 - `POST /move-jobs/{job_id}/scope-proposals`는 업체만 호출한다. 고객 작성 현재 version 또는 고객 수정요청이 열린 제안 version을 source로 새 불변 자식과 견적, 차량 수·규격, 작업자 수·예상시간 실행계획 snapshot을 만들고 업체 확인을 함께 기록한다. 정확히 같은 payload 재전송만 기존 제안을 반환하며 stale·다른 payload는 `409`다. A-23 이전 제안의 조회 실행계획은 `null`이다.
 - `POST /move-jobs/{job_id}/scope-review/revision-request`와 `/confirm`은 고객 전용이다. 현재 고객 확인 대기 제안만 수정 요청하거나 확인할 수 있고, 확인은 기존 업체 approval과 합쳐 현재 scope를 잠그고 기존 `scope_locked.v1` event를 기록한다.
 - 업체 또는 현장기사는 잠긴 현재 범위와 자신이 업로드 완료한 `UPLOADED|READY` `change_evidence`를 기준으로 `POST /move-jobs/{job_id}/field-issues`를 호출한다. `client_reference`와 정확한 payload 재전송은 같은 결과를 반환한다. 금액 제안은 업체만, 최종 결정은 고객만 수행한다. 업체 변경 제안 전에는 모든 증거의 validation이 `READY`여야 한다.
+- 업체와 현장기사는 변경안 작성 전에 `GET /move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url`로 같은 작업의 READY 증거를 5분 동안 열람한다. 응답은 `no-store`이고 object key·generation은 노출하지 않으며 만료 뒤 재발급한다.
 - 업체의 `POST /move-jobs/{job_id}/change-proposals`는 이슈 하나를 현재 확정 금액을 기준으로 한 불변 변경 범위·견적 제안으로 전환한다. 고객과 업체는 generation-pinned 증거 preview가 포함된 `GET /change-proposals/{proposal_id}`를 사용한다. 고객만 승인·거절·설명 요청을 결정하고 업체는 설명 요청 상태에서 `/explanation`을 제출한다. 승인 시 기존 범위 승인·잠금과 `scope_locked.v1`, 기존 `change_requested.v1` 계약을 재사용한다.
 - 업체 연동은 `POST /move-jobs/{job_id}/dispatch/setup`으로 현재 잠긴 leaf 범위와 작업 일정에 묶인 요구사항·차량·인력 후보 snapshot을 한 번 등록한다. 업체는 `GET /dispatch`로 충돌을 확인하고 `PUT /dispatch`로 용량·인원·기술·자격·대표 기사 조건을 원자적으로 검증해 확정한다. 정확 replay만 허용하며 `dispatch_confirmed.v1`은 현장기사 notification intent를 만든다.
 - 배정 현장기사만 `GET /field-brief`에서 현재 범위·마스킹 위치·일정·현장 조건·체크인·완료 checklist와 배정 작업자 ID를 조회하고 예정일 당일 `POST /check-ins`로 체크인 checklist 전체를 확인한다. A-24부터 현장 변경 승인본은 해당 변경안의 누적 견적을 사용하고 포함·제외 작업은 조상 업체 확정안에서 상속한다. 모호하거나 손상된 출처는 `409`로 차단한다. 연락처·채팅·지도 source가 없으므로 관련 URI는 현재 `null`이다.
@@ -50,15 +52,15 @@
 ## FE 현재 상태와 blocker
 
 - BE는 배포 환경의 `FRONTEND_ORIGIN` 하나만 API CORS로 허용한다. Vercel에서 직접 호출하기 전에 실제 canonical HTTPS origin을 설정하며 wildcard, port와 path는 허용하지 않는다.
-- staging은 아직 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 현재 canonical FE origin은 `https://seqret.vercel.app`이므로 다음 backend 배포에서 GitHub environment 변수와 bucket CORS를 함께 교체한다.
+- 현재 배포 API는 canonical FE origin `https://seqret.vercel.app`의 credential CORS를 허용한다. GCS bucket CORS는 signed PUT canary에서 별도로 검증한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 최신 `origin/main`은 `bcd898e41fe72e2d4cec9207dabecb9fffcad197`다. 일반 API·download helper가 아직 `credentials: "omit"`이고 업체 다중 연결은 메모리, 고객 기본정보 수정은 `sessionStorage` 원본이므로 [INT-09 FE 인계](INT_09_FRONTEND_HANDOFF.md)에 따라 전환해야 한다. signed GCS PUT만 `omit`을 유지한다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 최신 확인 기준은 `00e13331b37d7405e7118d89f3dfc953db3e8402`다. 일반 API·download helper가 아직 `credentials: "omit"`이고 업체 다중 연결은 메모리, 고객 기본정보 수정은 `sessionStorage` 원본이므로 [INT-12 FE 인계](INT_12_FRONTEND_HANDOFF.md)에 따라 전환해야 한다. signed GCS PUT만 `omit`을 유지한다.
 - FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. 현재 `/`, `/provider`, `/provider/web`, `/crew`도 onboarding·초대·범위·변경·배차·체크인·완료·문서 API를 실제 query·mutation으로 사용한다. secret은 React 메모리에만 보관한다.
 - FE [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)은 화면 단위 dynamic import로 초기 JS를 224.60 kB까지 줄이고 500 kB 경고를 제거했다. production preview에서 7개 진입 경로와 전용 chunk 로드를 검증했다.
-- FE [#8](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/8)은 역할별 실행 계약 Playwright와 CI를 추가했고, FE [#9](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/9)는 pending 업체·현장기사의 보호 API 선호출과 인증 초기화를 차단했다. INT-09 session·다중 목록·PATCH 계약에 대한 FE test는 별도로 추가해야 한다.
+- FE [#8](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/8)은 역할별 실행 계약 Playwright와 CI를 추가했고, FE [#9](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/9)는 pending 업체·현장기사의 보호 API 선호출과 인증 초기화를 차단했다. INT-12 session·cursor 다중 목록·구조화 기본정보 PATCH 계약에 대한 FE test는 별도로 추가해야 한다.
 - FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
-- 프론트 운영 설정은 프론트 담당자가 `VITE_API_BASE_URL=https://<backend-origin>`, `VITE_MOCK_API=false`로 적용한다. 백엔드는 canonical FE origin을 API·GCS CORS에 정확히 맞추고 credential preflight를 검증한다. Vercel과 현재 `sslip.io`는 cross-site이므로 브라우저 cookie 정책까지 고려하면 같은 site의 custom FE/API domain이 안전하다.
+- 프론트 배포 설정은 프론트 담당 범위다. 백엔드는 사용할 API origin과 계약 변경만 전달하고 FE 코드·Vercel 설정을 수정하지 않는다. canonical FE origin을 API·GCS CORS에 정확히 맞추고 credential preflight를 검증하며, cross-site cookie 정책까지 고려하면 같은 site의 custom FE/API domain이 안전하다.
 - 최신 FE와 로컬 backend를 직접 연결한 브라우저 검증은 고객 onboarding `201` → 기본명 `이사업체 담당자` 초대 `201` → 이사 취소 `204` → 기존 고객 token `401`까지 통과했다. 확인서 탭 재진입 때 FE가 pending 초대를 다시 생성해 `409`와 비활성 공유 버튼을 표시하는 잔여 문제가 있으므로, FE가 invitation 조회 결과에 따라 최초 발급과 재발급을 구분해야 한다.
 
 ## B 트랙 인계

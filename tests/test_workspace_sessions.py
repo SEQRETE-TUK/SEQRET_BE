@@ -1,5 +1,6 @@
 """Durable workspace, multi-job list, contact consent, and cookie auth tests."""
 
+from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -65,6 +66,7 @@ def _job_payload(title: str, scheduled_at: str) -> dict[str, object]:
             {
                 "kind": "origin",
                 "label": f"{title} 출발지",
+                "detail_address": f"{title} 상세주소",
                 "room_zones": [{"name": "거실", "sort_order": 0}],
             },
             {
@@ -152,13 +154,60 @@ async def test_workspace_restores_and_searches_multiple_jobs(
     assert all(
         move["company_participation_status"] == "company_joined" for move in listed.json()["moves"]
     )
+    assert all(
+        next(location for location in move["job"]["locations"] if location["kind"] == "origin")[
+            "detail_address"
+        ]
+        is not None
+        for move in listed.json()["moves"]
+    )
+    assert listed.json()["next_cursor"] is None
+
+    first_page = await workspace_client.get("/api/v1/move-jobs", params={"limit": 1})
+    assert first_page.status_code == 200
+    assert len(first_page.json()["moves"]) == 1
+    assert first_page.json()["next_cursor"]
+    second_page = await workspace_client.get(
+        "/api/v1/move-jobs",
+        params={"limit": 1, "cursor": first_page.json()["next_cursor"]},
+    )
+    assert second_page.status_code == 200
+    assert len(second_page.json()["moves"]) == 1
+    assert second_page.json()["next_cursor"] is None
+    assert {
+        first_page.json()["moves"][0]["job"]["id"],
+        second_page.json()["moves"][0]["job"]["id"],
+    } == {first["job"]["id"], second["job"]["id"]}
 
     searched = await workspace_client.get("/api/v1/move-jobs", params={"q": "둘째"})
     assert searched.status_code == 200
     assert [move["job"]["id"] for move in searched.json()["moves"]] == [second["job"]["id"]]
+    detail_searched = await workspace_client.get(
+        "/api/v1/move-jobs",
+        params={"q": "둘째 이사 상세주소"},
+    )
+    assert detail_searched.status_code == 200
+    assert [move["job"]["id"] for move in detail_searched.json()["moves"]] == [second["job"]["id"]]
     no_matches = await workspace_client.get("/api/v1/move-jobs", params={"q": "없는 작업"})
     assert no_matches.status_code == 200
-    assert no_matches.json() == {"moves": []}
+    assert no_matches.json() == {"moves": [], "next_cursor": None}
+    invalid_cursor = await workspace_client.get(
+        "/api/v1/move-jobs",
+        params={"cursor": "not-a-valid-cursor"},
+    )
+    assert invalid_cursor.status_code == 422
+    wrong_version_cursor = urlsafe_b64encode(b"v2:0").decode().rstrip("=")
+    wrong_version = await workspace_client.get(
+        "/api/v1/move-jobs",
+        params={"cursor": wrong_version_cursor},
+    )
+    assert wrong_version.status_code == 422
+    oversized_offset_cursor = urlsafe_b64encode(f"v1:{2**63}".encode()).decode().rstrip("=")
+    oversized_cursor = await workspace_client.get(
+        "/api/v1/move-jobs",
+        params={"cursor": oversized_offset_cursor},
+    )
+    assert oversized_cursor.status_code == 422
     scheduled = await workspace_client.get(
         "/api/v1/move-jobs",
         params={
@@ -269,6 +318,7 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         "floor": {"status": "known", "value": 7},
         "elevator": "available",
         "stairs": "not_required",
+        "ladder": "required",
         "parking_access": "restricted",
         "carry_distance": {"status": "known", "value_m": 20},
         "access_note": "지하주차장 진입 확인",
@@ -280,6 +330,7 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
             {
                 "kind": "origin",
                 "label": "수정된 출발지",
+                "detail_address": "101동 1203호",
                 "conditions": origin_conditions,
             }
         ],
@@ -301,7 +352,9 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
     assert updated.json()["title"] == "수정된 이사"
     origin = next(item for item in updated.json()["locations"] if item["kind"] == "origin")
     assert origin["label"] == "수정된 출발지"
+    assert origin["detail_address"] == "101동 1203호"
     assert origin["conditions"]["floor"] == {"status": "known", "value": 7}
+    assert origin["conditions"]["ladder"] == "required"
     scopes_after_first_patch = await workspace_client.get(
         f"/api/v1/move-jobs/{job_id}/scope-versions",
         headers={"Authorization": f"Bearer {customer_secret}"},
@@ -314,6 +367,7 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         if item["kind"] == "origin"
     )
     assert origin_snapshot["conditions"]["floor"] == {"status": "known", "value": 7}
+    assert origin_snapshot["conditions"]["ladder"] == "required"
 
     company_view = await workspace_client.get(
         f"/api/v1/move-jobs/{job_id}",
@@ -333,6 +387,7 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
                         "floor": {"status": "unknown", "value": None},
                         "elevator": "unknown",
                         "stairs": "unknown",
+                        "ladder": "not_required",
                         "parking_access": "unknown",
                         "carry_distance": {"status": "unknown", "value_m": None},
                     },
@@ -354,6 +409,7 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         if item["kind"] == "destination"
     )
     assert destination_snapshot["conditions"]["residence_type"] == "villa"
+    assert destination_snapshot["conditions"]["ladder"] == "not_required"
 
     async def raise_scope_conflict(*_args: object, **_kwargs: object) -> None:
         raise ScopeVersionConflictError(job_id)
@@ -403,10 +459,22 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
     assert locked_patch.status_code == 409
     label_only = await workspace_client.patch(
         f"/api/v1/move-jobs/{job_id}",
-        json={"locations": [{"kind": "destination", "label": "수정된 도착지"}]},
+        json={
+            "locations": [
+                {
+                    "kind": "destination",
+                    "label": "수정된 도착지",
+                    "detail_address": None,
+                }
+            ]
+        },
         headers={"X-SEQRET-CSRF": csrf_token},
     )
     assert label_only.status_code == 200
+    destination = next(
+        item for item in label_only.json()["locations"] if item["kind"] == "destination"
+    )
+    assert destination["detail_address"] is None
     unscheduled = await workspace_client.patch(
         f"/api/v1/move-jobs/{job_id}",
         json={"scheduled_at": None},

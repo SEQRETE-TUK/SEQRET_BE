@@ -32,7 +32,21 @@ uv run alembic downgrade -1
 
 `SEQRET_DATABASE_URL`이 없으면 실제 upgrade와 downgrade는 거부된다. 이미 main에 병합된 revision은 수정하거나 삭제하지 않는다.
 
-현재 단일 head는 `int_09_0001`이다. `location.conditions`는 출·도착지 조건을 값 또는 `unknown`으로 보존하고 `capture_session`은 미디어 동의 정책 버전·확인 여부·보관기간·동의 시각 snapshot을 보존한다. B-08은 기존 v1 detection을 안전하게 backfill하고 AI v2 품목·위치 조건 제안을 추가하며 A-23은 신규 업체 견적의 차량·인원 실행계획을 `scope_proposal.execution_plan`에 고정한다. INT-09는 작업공간 계정·멤버십·세션·연락처를 추가하고 감사 유형과 notification delivery를 외부 채널까지 확장한다. workspace row, 기본정보 수정 감사 또는 외부 delivery 이력이 있으면 `int_09_0001` downgrade를 거부한다. 기존 실행계획, v2 결과 이력, 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인, 촬영 분석 제출 또는 참여자 초대 이력도 하위 migration guard가 계속 보호한다. 이 경우 schema를 유지하고 이전 application revision으로 traffic만 전환한다.
+현재 단일 head는 `int_12_0001`이다. `location`은 기본 주소 `label`과 선택적
+`detail_address`를 분리하고 `location.conditions`는 사다리차를 포함한 출·도착지 조건을 값 또는
+`unknown`으로 보존한다. 기존 `scope_version.content`와 `change_request.proposed_content`의 위치조건도
+`ladder: unknown`으로 backfill하고 변경된 scope의 `content_hash`를 같은 canonical JSON 규칙으로
+다시 계산한다. `capture_session`은 미디어 동의 정책 버전·확인 여부·보관기간·동의 시각
+snapshot을 보존한다. B-08은 기존 v1 detection을 안전하게 backfill하고 AI v2 품목·위치 조건
+제안을 추가하며 A-23은 신규 업체 견적의 차량·인원 실행계획을
+`scope_proposal.execution_plan`에 고정한다. INT-09는 작업공간 계정·멤버십·세션·연락처를
+추가하고 감사 유형과 notification delivery를 외부 채널까지 확장한다. INT-12의 상세 주소 또는
+명시적 사다리차 값이 있으면 해당 migration downgrade를 거부한다. workspace row, 기본정보 수정
+감사 또는 외부 delivery 이력이 있으면 `int_09_0001` downgrade를 거부한다. 기존 실행계획, v2
+결과 이력, 완료 제출·요청·문제·새 완료 event 또는 사용자 지정 완료 checklist, 배차·체크인·
+`dispatch_confirmed.v1` 전달 이력, 현장 이슈·변경 제안, 범위 제안·수정요청, 감사·완료 확인,
+촬영 분석 제출 또는 참여자 초대 이력도 하위 migration guard가 계속 보호한다. 이 경우 schema를
+유지하고 이전 application revision으로 traffic만 전환한다.
 
 첫 baseline revision은 업무 table을 만들지 않고 향후 domain migration이 연결될 단일 head만 고정한다.
 

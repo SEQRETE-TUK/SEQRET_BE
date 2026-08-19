@@ -50,6 +50,7 @@ from app.modules.scope_review.service import (
     _company_participation_status,
     _validated_read_url,
     create_scope_proposal,
+    get_scope_confirmation_history,
     get_scope_review,
     request_scope_revision,
 )
@@ -212,6 +213,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
         async_sessionmaker[AsyncSession],
         FakeObjectStorage,
     ],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, factory, _ = scope_review_api
     created = await _create_job(client)
@@ -219,6 +221,11 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     customer_secret = _secret(created, "customer")
     manager_secret = _secret(created, "company_manager")
     worker_secret = _secret(created, "field_worker")
+    history_url = f"/api/v1/move-jobs/{job_id}/scope-review/history"
+    empty_history = await client.get(history_url, headers=_headers(customer_secret))
+    assert empty_history.status_code == 200
+    assert empty_history.headers["cache-control"] == "no-store"
+    assert empty_history.json()["versions"] == []
     source = await _create_customer_scope(client, created)
     review_url = f"/api/v1/move-jobs/{job_id}/scope-review"
     proposals_url = f"/api/v1/move-jobs/{job_id}/scope-proposals"
@@ -391,6 +398,63 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert final_view.json()["scope"]["locked_at"] is not None
     assert final_view.json()["customer_confirmed_at"] == confirmed.json()["confirmed_at"]
     assert final_view.json()["revision_request"] is None
+
+    history = await client.get(history_url, headers=_headers(customer_secret))
+    assert history.status_code == 200
+    assert history.headers["cache-control"] == "no-store"
+    assert history.json()["job"]["viewer_role"] == "customer"
+    history_versions = history.json()["versions"]
+    assert [version["version_label"] for version in history_versions] == ["v1", "v2", "v3"]
+    assert history_versions[0]["source"] == "scope"
+    assert history_versions[0]["quote"] is None
+    assert history_versions[0]["confirmations"] == []
+    assert history_versions[1]["source"] == "quote"
+    assert history_versions[1]["quote"] == payload["quote"]
+    assert history_versions[1]["included_works"] == payload["included_works"]
+    assert history_versions[1]["exclusions"] == payload["exclusions"]
+    assert [item["role"] for item in history_versions[1]["confirmations"]] == ["company_manager"]
+    assert history_versions[1]["bilaterally_confirmed"] is False
+    assert history_versions[2]["source"] == "quote"
+    assert history_versions[2]["quote"] == revision_payload["quote"]
+    assert history_versions[2]["content"]["items"] == revision_payload["content"]["items"]
+    assert history_versions[2]["included_works"] == revision_payload["included_works"]
+    assert history_versions[2]["exclusions"] == revision_payload["exclusions"]
+    assert [item["role"] for item in history_versions[2]["confirmations"]] == [
+        "company_manager",
+        "customer",
+    ]
+    assert (
+        history_versions[2]["confirmations"][1]["confirmed_at"] == confirmed.json()["confirmed_at"]
+    )
+    assert history_versions[2]["bilaterally_confirmed"] is True
+    assert history_versions[2]["locked_at"] is not None
+    manager_history = await client.get(history_url, headers=_headers(manager_secret))
+    assert manager_history.status_code == 200
+    assert manager_history.json()["job"]["viewer_role"] == "company_manager"
+    assert (await client.get(history_url, headers=_headers(worker_secret))).status_code == 403
+
+    async with factory() as session:
+        with pytest.raises(ScopeReviewNotFoundError):
+            await get_scope_confirmation_history(
+                session,
+                UUID(job_id),
+                _participant_id(created, "field_worker"),
+                ParticipantRole.FIELD_WORKER,
+            )
+        with pytest.raises(ScopeReviewNotFoundError):
+            await get_scope_confirmation_history(
+                session,
+                UUID(job_id),
+                uuid4(),
+                ParticipantRole.CUSTOMER,
+            )
+
+    openapi = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
+    history_operation = openapi["paths"]["/api/v1/move-jobs/{job_id}/scope-review/history"]["get"]
+    history_ref = history_operation["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ]
+    assert history_ref.endswith("/ScopeConfirmationHistoryView")
     worker_view = await client.get(review_url, headers=_headers(worker_secret))
     assert worker_view.status_code == 200
     assert worker_view.json()["job"]["viewer_role"] == "field_worker"
@@ -449,6 +513,19 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
         "customer",
         "company_manager",
     }
+
+    async def missing_history(*_args: object, **_kwargs: object) -> None:
+        raise ScopeReviewNotFoundError(job_id)
+
+    monkeypatch.setattr(
+        "app.modules.scope_review.router.get_scope_confirmation_history",
+        missing_history,
+    )
+    missing_history_response = await client.get(
+        history_url,
+        headers=_headers(customer_secret),
+    )
+    assert missing_history_response.status_code == 404
 
 
 @pytest.mark.anyio

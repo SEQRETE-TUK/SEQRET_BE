@@ -509,6 +509,24 @@ async def test_field_issue_change_proposal_clarification_and_approval(
             "approved_at": approved.json()["decided_at"],
         }
     ]
+    history = await client.get(
+        f"/api/v1/move-jobs/{job_id}/scope-review/history",
+        headers=_headers(created, "customer"),
+    )
+    assert history.status_code == 200
+    change_version = history.json()["versions"][-1]
+    assert change_version["scope_version_id"] == result_id
+    assert change_version["source"] == "field_change"
+    assert change_version["proposal_id"] == proposal_id
+    assert change_version["proposal_reason"] == proposal_command["reason"]
+    assert change_version["quote"] == proposal_command["quote"]
+    assert change_version["included_works"] == ["포장", "운반"]
+    assert change_version["exclusions"] == ["에어컨 이전"]
+    assert {item["role"] for item in change_version["confirmations"]} == {
+        "customer",
+        "company_manager",
+    }
+    assert change_version["bilaterally_confirmed"] is True
     move_list = await client.get(
         "/api/v1/move-jobs",
         headers=_headers(created, "company_manager"),
@@ -550,6 +568,132 @@ async def test_field_issue_change_proposal_clarification_and_approval(
         payload=second_payload,
     )
     assert second["quote"]["base_amount_krw"] == 1_430_000
+
+
+@pytest.mark.anyio
+async def test_field_issue_evidence_read_url_is_private_reissuable_and_validated(
+    field_change_api: FieldChangeApi,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, factory, storage = field_change_api
+    created = await _create_job(client, "현장 증거 열람")
+    base = await _confirmed_scope(client, created)
+    media_id = await _ready_evidence(client, factory, created)
+    issue, _ = await _report_issue(
+        client,
+        created,
+        base["result_scope_version_id"],
+        media_id,
+    )
+    job_id = created["job"]["id"]
+    read_url = (
+        f"/api/v1/move-jobs/{job_id}/field-issues/{issue['field_issue_id']}"
+        f"/evidence/{media_id}/read-url"
+    )
+
+    issued_urls = iter(
+        (
+            "https://storage.invalid/read/field-issue?generation=7&token=first",
+            "https://storage.invalid/read/field-issue?generation=7&token=second",
+        )
+    )
+
+    async def issue_new_url(**_: object) -> str:
+        return next(issued_urls)
+
+    original_create_read_url = storage.create_read_url
+    monkeypatch.setattr(storage, "create_read_url", issue_new_url)
+    first = await client.get(read_url, headers=_headers(created, "company_manager"))
+    second = await client.get(read_url, headers=_headers(created, "company_manager"))
+    assert first.status_code == second.status_code == 200
+    assert first.headers["cache-control"] == second.headers["cache-control"] == "no-store"
+    assert first.json()["media_asset_id"] == media_id
+    assert first.json()["content_type"] == "image/jpeg"
+    assert first.json()["read_url"] != second.json()["read_url"]
+    assert first.json()["expires_at"]
+    assert "object_key" not in first.text
+    assert "generation" not in first.json()
+    monkeypatch.setattr(storage, "create_read_url", original_create_read_url)
+
+    assert (
+        await client.get(read_url, headers=_headers(created, "field_worker"))
+    ).status_code == 200
+    assert (await client.get(read_url, headers=_headers(created, "customer"))).status_code == 403
+    assert (
+        await client.get(
+            read_url.replace(media_id, str(uuid4())),
+            headers=_headers(created, "company_manager"),
+        )
+    ).status_code == 404
+    assert (
+        await client.get(
+            read_url.replace(issue["field_issue_id"], str(uuid4())),
+            headers=_headers(created, "company_manager"),
+        )
+    ).status_code == 404
+
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.UPLOADED
+    assert (
+        await client.get(read_url, headers=_headers(created, "company_manager"))
+    ).status_code == 409
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.status = MediaAssetStatus.READY
+        asset.generation = " 7"
+    assert (
+        await client.get(read_url, headers=_headers(created, "company_manager"))
+    ).status_code == 409
+    async with factory.begin() as session:
+        asset = await session.get(MediaAsset, UUID(media_id))
+        assert asset is not None
+        asset.generation = "7"
+
+    async def unavailable_read_url(**_: object) -> str:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            "synthetic read failure",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(storage, "create_read_url", unavailable_read_url)
+    assert (
+        await client.get(read_url, headers=_headers(created, "company_manager"))
+    ).status_code == 503
+    monkeypatch.setattr(
+        storage,
+        "create_read_url",
+        AsyncMock(return_value="http://storage.invalid/read/field-issue"),
+    )
+    assert (
+        await client.get(read_url, headers=_headers(created, "company_manager"))
+    ).status_code == 503
+    monkeypatch.setattr(storage, "create_read_url", original_create_read_url)
+
+    async with factory() as session:
+        with pytest.raises(FieldChangeNotFoundError):
+            await field_change_service.create_field_issue_evidence_read_url(
+                session,
+                storage,
+                UUID(job_id),
+                UUID(issue["field_issue_id"]),
+                UUID(media_id),
+                _participant_id(created, "customer"),
+                ParticipantRole.CUSTOMER,
+            )
+
+    openapi = create_app(Settings(environment=AppEnvironment.TEST)).openapi()
+    operation = openapi["paths"][
+        "/api/v1/move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/"
+        "{media_asset_id}/read-url"
+    ]["get"]
+    response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert response_ref.endswith("/FieldIssueEvidenceReadResponse")
+    response_schema = openapi["components"]["schemas"]["FieldIssueEvidenceReadResponse"]
+    assert response_schema["properties"]["read_url"]["format"] == "uri"
 
 
 @pytest.mark.anyio

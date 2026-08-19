@@ -40,6 +40,7 @@
 - [공통 타입·Port·event 계약](docs/CONTRACTS.md)
 - [현재 main 팀·FE 인계](docs/TEAM_HANDOFF.md)
 - [INT-09 프론트엔드 연동 인계](docs/INT_09_FRONTEND_HANDOFF.md)
+- [INT-12 목록·기본정보 연동 인계](docs/INT_12_FRONTEND_HANDOFF.md)
 - [AI 작업 지침](AGENTS.md)
 
 ## 상태
@@ -55,9 +56,9 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `POST·GET /move-jobs/{job_id}/invitations`: 다음 역할 초대 발급·목록 조회 (`display_name` 생략 시 역할 기본값 사용)
 - `POST /move-jobs/{job_id}/invitations/{invitation_id}/{accept|decline|revoke|reissue}`: 초대 수락·거절·폐기·재발급
 - `POST /move-jobs`: 신뢰 bootstrap용 작업·세 역할·위치·구역 생성
-- `GET /move-jobs`: 작업공간의 고객·업체·기사 다중 작업 목록과 검색·상태·예정일 필터
+- `GET /move-jobs`: 작업공간의 고객·업체·기사 다중 작업 목록과 검색·상태·예정일 필터·cursor 페이지 순회
 - `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
-- `PATCH /move-jobs/{job_id}`: 고객의 견적 전 일정·표시 위치·현장 조건 수정
+- `PATCH /move-jobs/{job_id}`: 고객의 견적 전 일정·기본·상세 주소와 현장 조건 수정
 - `DELETE /move-jobs/{job_id}`: 고객의 견적 전 작업 취소와 모든 작업 capability 철회
 - `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
@@ -71,6 +72,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `GET /move-jobs/{job_id}/scope-versions`: 작업범위 버전 이력 조회
 - `POST /move-jobs/{job_id}/scope-versions/{scope_version_id}/approvals`: 작업범위 버전 확인
 - `GET /move-jobs/{job_id}/scope-review`: 고객·업체의 현재 범위 검토 및 현장기사의 잠긴 범위 조회
+- `GET /move-jobs/{job_id}/scope-review/history`: 고객·업체의 버전별 범위·견적·양측 확인 이력 조회
 - `POST /move-jobs/{job_id}/scope-proposals`: 업체 범위·원화 견적 제안
 - `POST /move-jobs/{job_id}/scope-review/revision-request`: 고객 범위 수정 요청
 - `POST /move-jobs/{job_id}/scope-review/confirm`: 고객 현재 제안 확인과 범위 잠금
@@ -79,6 +81,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `GET /move-jobs/{job_id}/field-brief`: 배정 현장기사의 확정 범위·일정·현장 조건 조회
 - `POST /move-jobs/{job_id}/check-ins`: 배정 현장기사의 당일 checklist 확인과 체크인
 - `POST·GET /move-jobs/{job_id}/field-issues`: 현장기사·업체 이슈 보고와 고객 포함 참여자의 처리 상태 조회
+- `GET /move-jobs/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url`: 업체·현장기사용 만료형 이슈 증거 열람 URL 발급
 - `POST /move-jobs/{job_id}/change-proposals`: 업체 변경 범위·원화 견적 제안
 - `GET /move-jobs/{job_id}/change-proposals/{proposal_id}`: 고객·업체용 변경 사유·증거·견적 화면 조회
 - `POST /move-jobs/{job_id}/change-proposals/{proposal_id}/decision`: 고객 승인·거절·설명 요청
@@ -100,11 +103,15 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 - `GET /move-jobs/{job_id}/audit-events`: 작업 감사 이력 조회
 - `GET /move-jobs/{job_id}/notifications`: 현재 참여자의 알림 전달 상태 조회
 
-위치에는 주소 원문 대신 화면 표시용 label만 저장합니다.
+위치는 기본 주소를 화면 표시용 `label`, 동·호수 등의 상세 주소를 선택적 `detail_address`로
+분리해 저장합니다. 고객·업체 작업 응답에는 상세 주소를 반환하지만 현장기사의 일반 작업 조회·
+목록과 상세 주소 검색에서는 숨깁니다. 배차가 확정된 담당 현장기사만 `field-brief`에서 상세 주소를
+받습니다. 상세 주소는 로그·trace·error payload에는 남기지 않습니다. 사다리차 사용 여부는
+`conditions.ladder`로 구조화합니다.
 
 소비자 self-service 생성은 `POST /move-jobs/onboarding`을 사용합니다. 요청의 `customer_display_name`은 고객 participant 표시명과 이후 업무 화면 header의 고객명 원본으로 저장합니다. 이 응답은 최초 발급부터 7일 동안 유효한 소비자 비밀값 하나만 한 번 반환하며, 업체나 현장기사 capability를 미리 만들지 않습니다. 소비자만 업체 담당자를 초대하고 수락한 업체 담당자만 현장기사를 초대할 수 있습니다. 고객은 견적이 생성되기 전 `DELETE /move-jobs/{job_id}`로 작업을 취소할 수 있습니다. 서버는 업무·감사 이력을 물리 삭제하지 않고 작업을 `CANCELED`로 전이하며 모든 초대와 access link를 철회합니다. 초대가 `pending`인 링크는 `/me`와 수락·거절 외 업무 API를 열 수 없으며, 폐기·재발급은 기존 secret과 그 하위 초대를 즉시 무효화합니다. 하위 링크의 만료는 발급자 링크 만료를 넘지 않습니다. 기존 `POST /move-jobs`는 정확히 세 역할을 한 번에 준비하는 신뢰 bootstrap 계약으로 남아 일반 frontend 생성 흐름에서 사용하지 않습니다. bearer 링크 자체는 개인 신원을 증명하지 않습니다. 비밀값은 `Authorization: Bearer <secret>`으로 전달하며 데이터베이스에는 SHA-256 hash만 저장합니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
 
-검증된 역할 링크는 `POST /sessions`로 서버 소유 작업공간에 한 번 연결할 수 있습니다. 응답 cookie는 30일 `HttpOnly`이고 DB에는 원문 대신 hash만 저장합니다. 같은 역할의 다른 작업 링크를 현재 cookie와 함께 다시 연결하면 `GET /move-jobs`가 여러 작업을 복원하며, bearer로 목록을 조회하면 해당 링크의 한 작업만 반환합니다. 유효한 cookie 없이 bearer 하나만 다시 제시하면 그 작업만 새 작업공간으로 재연결해 다른 작업·계정 연락처로 권한이 확대되지 않습니다. cookie 기반 mutation은 응답의 메모리 전용 `csrf_token`을 `X-SEQRET-CSRF`로 보내야 합니다. 견적 전 고객은 `PATCH /move-jobs/{job_id}`로 제목·일정·표시 위치·구조화 현장 조건을 수정할 수 있고 변경은 `JOB_BASIC_INFO_UPDATED` 감사 이력으로 남습니다. 정확한 FE 전환 순서는 [`docs/INT_09_FRONTEND_HANDOFF.md`](docs/INT_09_FRONTEND_HANDOFF.md)를 따릅니다.
+검증된 역할 링크는 `POST /sessions`로 서버 소유 작업공간에 한 번 연결할 수 있습니다. 응답 cookie는 30일 `HttpOnly`이고 DB에는 원문 대신 hash만 저장합니다. 같은 역할의 다른 작업 링크를 현재 cookie와 함께 다시 연결하면 `GET /move-jobs`가 여러 작업을 복원하며, bearer로 목록을 조회하면 해당 링크의 한 작업만 반환합니다. `limit`은 페이지 크기이고 응답의 `next_cursor`가 null이 될 때까지 같은 검색 조건으로 조회하면 100건을 넘는 전체 이력을 순회할 수 있습니다. 유효한 cookie 없이 bearer 하나만 다시 제시하면 그 작업만 새 작업공간으로 재연결해 다른 작업·계정 연락처로 권한이 확대되지 않습니다. cookie 기반 mutation은 응답의 메모리 전용 `csrf_token`을 `X-SEQRET-CSRF`로 보내야 합니다. 견적 전 고객은 `PATCH /move-jobs/{job_id}`로 제목·일정·기본·상세 주소·구조화 현장 조건을 수정할 수 있고 변경은 `JOB_BASIC_INFO_UPDATED` 감사 이력으로 남습니다. 견적이 한 번이라도 생성되면 모든 기본정보 수정은 `409`로 막습니다. 정확한 FE 전환 순서는 [`docs/INT_12_FRONTEND_HANDOFF.md`](docs/INT_12_FRONTEND_HANDOFF.md)를 따릅니다.
 
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 로컬에서 storage 설정을 생략하면 업로드 API는 `503`을 반환하고, 배포 API는 storage 설정 없이는 시작하지 않습니다.
 

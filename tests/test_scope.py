@@ -377,6 +377,7 @@ async def test_scope_api_validates_and_preserves_supplied_location_conditions(
         "floor": {"status": "known", "value": 3},
         "elevator": "unavailable",
         "stairs": "required",
+        "ladder": "required",
         "parking_access": "restricted",
         "carry_distance": {"status": "known", "value_m": 80},
         "access_note": "골목 진입 확인",

@@ -18,6 +18,7 @@ from app.modules.field_change.schemas import (
     ChangeProposalResponse,
     ChangeProposalView,
     FieldIssueCreate,
+    FieldIssueEvidenceReadResponse,
     FieldIssueResponse,
 )
 from app.modules.field_change.service import (
@@ -26,6 +27,7 @@ from app.modules.field_change.service import (
     FieldChangeNotFoundError,
     create_change_proposal,
     create_field_issue,
+    create_field_issue_evidence_read_url,
     decide_change_proposal,
     explain_change_proposal,
     get_change_proposal,
@@ -49,6 +51,9 @@ ISSUE_VIEW_ROLES = frozenset(
     }
 )
 ISSUE_REPORT_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
+ISSUE_EVIDENCE_VIEW_ROLES = frozenset(
+    {ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER}
+)
 
 
 def _not_found(error: Exception) -> HTTPException:
@@ -112,6 +117,47 @@ async def list_field_issues_endpoint(
 ) -> tuple[FieldIssueResponse, ...]:
     authorize_job_actor(actor, job_id, ISSUE_VIEW_ROLES)
     return await list_field_issues(session, job_id)
+
+
+@router.get(
+    "/{job_id}/field-issues/{field_issue_id}/evidence/{media_asset_id}/read-url",
+    response_model=FieldIssueEvidenceReadResponse,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
+    summary="업체·현장기사 현장 이슈 증거 열람 URL 발급",
+)
+async def create_field_issue_evidence_read_url_endpoint(
+    job_id: UUID,
+    field_issue_id: UUID,
+    media_asset_id: UUID,
+    response: Response,
+    actor: CurrentActor,
+    session: Session,
+    storage: Storage,
+) -> FieldIssueEvidenceReadResponse:
+    authorize_job_actor(actor, job_id, ISSUE_EVIDENCE_VIEW_ROLES)
+    try:
+        result = await create_field_issue_evidence_read_url(
+            session,
+            storage,
+            job_id,
+            field_issue_id,
+            media_asset_id,
+            cast(UUID, actor.participant_id),
+            cast(ParticipantRole, actor.participant_role),
+        )
+    except FieldChangeNotFoundError as error:
+        raise _not_found(error) from error
+    except FieldChangeConflictError as error:
+        raise _conflict(error) from error
+    except ProviderError as error:
+        raise storage_error(error) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post(

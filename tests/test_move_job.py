@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from fastapi import Response
 from httpx2 import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -33,6 +34,7 @@ from app.modules.move_job.schemas import (
     CustomerMoveJobCreate,
     FloorCondition,
     KnowledgeStatus,
+    LadderTruckUsage,
     LocationConditions,
     LocationCreate,
     MoveJobCreate,
@@ -84,11 +86,13 @@ def _move_job_payload() -> dict[str, object]:
             {
                 "kind": "origin",
                 "label": "출발지",
+                "detail_address": "301호",
                 "conditions": {
                     "residence_type": "apartment",
                     "floor": {"status": "known", "value": 12},
                     "elevator": "available",
                     "stairs": "not_required",
+                    "ladder": "required",
                     "parking_access": "restricted",
                     "carry_distance": {"status": "known", "value_m": 35},
                     "access_note": "지하 주차장 높이 확인 필요",
@@ -140,10 +144,14 @@ async def test_move_job_api_creates_initial_participants_and_reads_job(
         "floor": {"status": "unknown", "value": None},
         "elevator": "unknown",
         "stairs": "unknown",
+        "ladder": "unknown",
         "parking_access": "unknown",
         "carry_distance": {"status": "unknown", "value_m": None},
         "access_note": None,
     }
+    assert job["locations"][0]["detail_address"] is None
+    assert job["locations"][1]["detail_address"] == "301호"
+    assert job["locations"][1]["conditions"]["ladder"] == "required"
     assert job["locations"][1]["conditions"]["floor"] == {
         "status": "known",
         "value": 12,
@@ -156,7 +164,31 @@ async def test_move_job_api_creates_initial_participants_and_reads_job(
     job_id = job["id"]
     loaded = await move_job_client.get(f"/api/v1/move-jobs/{job_id}", headers=headers)
     assert loaded.status_code == 200
+    assert loaded.headers["cache-control"] == "no-store"
     assert loaded.json() == job
+    worker_headers = {"Authorization": f"Bearer {_secret(created_body, 'field_worker')}"}
+    worker_view = await move_job_client.get(
+        f"/api/v1/move-jobs/{job_id}",
+        headers=worker_headers,
+    )
+    assert worker_view.status_code == 200
+    assert all(location["detail_address"] is None for location in worker_view.json()["locations"])
+    worker_list = await move_job_client.get(
+        "/api/v1/move-jobs",
+        headers=worker_headers,
+    )
+    assert worker_list.status_code == 200
+    assert all(
+        location["detail_address"] is None
+        for location in worker_list.json()["moves"][0]["job"]["locations"]
+    )
+    hidden_detail_search = await move_job_client.get(
+        "/api/v1/move-jobs",
+        params={"q": "301호"},
+        headers=worker_headers,
+    )
+    assert hidden_detail_search.status_code == 200
+    assert hidden_detail_search.json()["moves"] == []
     assert [participant["role"] for participant in job["participants"]] == [
         "company_manager",
         "customer",
@@ -228,6 +260,10 @@ async def test_customer_onboarding_issues_only_the_customer_capability(
         "customer_display_name",
         "locations",
     }
+    location_schema = openapi["components"]["schemas"]["LocationCreate"]
+    assert "detail_address" in location_schema["properties"]
+    conditions_schema = openapi["components"]["schemas"]["LocationConditions"]
+    assert "ladder" in conditions_schema["properties"]
 
 
 @pytest.mark.anyio
@@ -304,9 +340,20 @@ async def test_only_customer_can_cancel_and_quote_blocks_cancellation(
     blocked_patch = await move_job_client.patch(
         delete_url,
         headers=customer_headers,
-        json={"title": "견적 후 변경"},
+        json={
+            "locations": [
+                {
+                    "kind": "origin",
+                    "detail_address": "견적 후 변경",
+                    "conditions": {"ladder": "not_required"},
+                }
+            ]
+        },
     )
     assert blocked_patch.status_code == 409
+    assert blocked_patch.json()["detail"] == (
+        "confirmed-scope, quoted, completed, or canceled move job cannot be edited"
+    )
     assert (await move_job_client.get(delete_url, headers=customer_headers)).status_code == 200
 
 
@@ -359,7 +406,7 @@ def test_customer_onboarding_contract_rejects_duplicate_locations_and_naive_time
         ),
         (
             {"locations": [{"kind": "origin"}]},
-            "location patch requires label or conditions",
+            "location patch requires label, detail_address, or conditions",
         ),
     ],
 )
@@ -495,6 +542,7 @@ def test_location_limits_room_zone_expansion() -> None:
 
 def test_location_conditions_require_explicit_numeric_knowledge_state() -> None:
     assert LocationConditions().floor.status is KnowledgeStatus.UNKNOWN
+    assert LocationConditions().ladder is LadderTruckUsage.UNKNOWN
     assert FloorCondition(status=KnowledgeStatus.KNOWN, value=0).value == 0
     assert CarryDistanceCondition(status=KnowledgeStatus.KNOWN, value_m=0).value_m == 0
     with pytest.raises(ValidationError, match="known floor requires a value"):
@@ -528,14 +576,14 @@ async def test_move_job_service_and_endpoints_map_disappeared_job(
 
     monkeypatch.setattr("app.modules.move_job.service._load_move_job", load_missing)
     with pytest.raises(MoveJobNotFoundError):
-        await get_move_job(session, job_id)
+        await get_move_job(session, job_id, viewer_role=ParticipantRole.CUSTOMER)
 
-    async def raise_missing(*_args: object) -> None:
+    async def raise_missing(*_args: object, **_kwargs: object) -> None:
         raise MoveJobNotFoundError(job_id)
 
     monkeypatch.setattr("app.modules.move_job.router.get_move_job", raise_missing)
     with pytest.raises(Exception) as get_error:
-        await get_move_job_endpoint(job_id, actor, session)
+        await get_move_job_endpoint(job_id, actor, session, Response())
     assert getattr(get_error.value, "status_code", None) == 404
 
     cancel_session = AsyncMock(spec=AsyncSession)
@@ -605,6 +653,30 @@ async def test_move_job_list_and_patch_service_edge_cases(
             session,
             actor_participant_id=participant_id,
             scheduled_to=datetime(2026, 8, 19),
+        )
+    with pytest.raises(ValueError, match="limit"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            limit=101,
+        )
+    with pytest.raises(ValueError, match="cursor"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            cursor="not-a-valid-cursor",
+        )
+    with pytest.raises(ValueError, match="cursor"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
+            cursor="",
+        )
+    session.scalar = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="list identity"):
+        await list_move_jobs(
+            session,
+            actor_participant_id=participant_id,
         )
 
     command = MoveJobPatch(title="수정")
@@ -697,12 +769,20 @@ async def test_summary_status_helpers_cover_invitation_and_scope_lifecycles() ->
     session.scalar = AsyncMock(
         side_effect=[scope, None, CompletionRequestStatus.REQUESTED, None, None]
     )
-    summary = await _move_summary(session, cast(Any, summary_job))
+    summary = await _move_summary(
+        session,
+        cast(Any, summary_job),
+        viewer_role=ParticipantRole.COMPANY_MANAGER,
+    )
     assert summary.version_label == "V2"
     assert summary.item_count == 0
     assert summary.completion_request_status is CompletionRequestStatus.REQUESTED
 
     session.scalar = AsyncMock(side_effect=[None, None, None, None])
-    draft_summary = await _move_summary(session, cast(Any, summary_job))
+    draft_summary = await _move_summary(
+        session,
+        cast(Any, summary_job),
+        viewer_role=ParticipantRole.COMPANY_MANAGER,
+    )
     assert draft_summary.version_label == "초안"
     assert draft_summary.completion_request_status is None

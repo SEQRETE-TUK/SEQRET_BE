@@ -167,7 +167,7 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_09_0001"
+ALEMBIC_HEAD = "int_12_0001"
 ALEMBIC_INVITATION_PREVIOUS = "int_01_0001"
 ALEMBIC_CAPTURE_ANALYSIS_PREVIOUS = "int_03_0001"
 ALEMBIC_AUDIT_PREVIOUS = "a_09_0003"
@@ -1698,7 +1698,11 @@ async def test_move_job_commands_round_trip_on_postgresql() -> None:
                 created = await create_move_job(session, command_data)
 
             async with transactional_session(factory) as session:
-                loaded = await get_move_job(session, created.job.id)
+                loaded = await get_move_job(
+                    session,
+                    created.job.id,
+                    viewer_role=ParticipantRole.CUSTOMER,
+                )
 
             assert created.job == loaded
             assert [participant.role for participant in loaded.participants] == [
@@ -1935,7 +1939,11 @@ async def test_completion_confirmations_serialize_and_complete_once_on_postgresq
                     created.job.id,
                 )
                 events = await list_audit_events(session, created.job.id)
-                loaded = await get_move_job(session, created.job.id)
+                loaded = await get_move_job(
+                    session,
+                    created.job.id,
+                    viewer_role=ParticipantRole.CUSTOMER,
+                )
                 retention_jobs = (
                     await session.scalars(
                         select(BackgroundJob).where(
@@ -2941,7 +2949,11 @@ async def test_change_request_creation_and_scope_decision_avoid_deadlock_on_post
             async with transactional_session(factory) as session:
                 stored_requests = await list_change_requests(session, created.job.id)
                 versions = await list_scope_versions(session, created.job.id)
-                loaded = await get_move_job(session, created.job.id)
+                loaded = await get_move_job(
+                    session,
+                    created.job.id,
+                    viewer_role=ParticipantRole.CUSTOMER,
+                )
 
             assert tuple(outcomes) == ("approved", "conflict")
             assert loaded.status is MoveJobStatus.DRAFT

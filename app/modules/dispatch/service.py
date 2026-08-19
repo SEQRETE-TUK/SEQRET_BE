@@ -746,7 +746,9 @@ async def get_field_brief(
         if completion_submission is not None
         else set()
     )
-    locations = {location.kind: location.label for location in job.locations}
+    locations = {location.kind: location for location in job.locations}
+    origin = locations.get(LocationKind.ORIGIN)
+    destination = locations.get(LocationKind.DESTINATION)
     items = tuple(
         FieldBriefCheckItem(
             key=str(item["key"]),
@@ -788,8 +790,12 @@ async def get_field_brief(
         ),
         exclusions=(tuple(agreement_proposal.exclusions) if agreement_proposal is not None else ()),
         start_at=_aware(setup.start_at),
-        masked_origin=locations.get(LocationKind.ORIGIN),
-        masked_destination=locations.get(LocationKind.DESTINATION),
+        masked_origin=origin.label if origin is not None else None,
+        masked_destination=destination.label if destination is not None else None,
+        origin_detail_address=(origin.detail_address if origin is not None else None),
+        destination_detail_address=(
+            destination.detail_address if destination is not None else None
+        ),
         lead_worker_name=lead.display_name,
         origin_conditions=tuple(setup.origin_conditions),
         field_check_required_count=sum(not item.confirmed for item in items),

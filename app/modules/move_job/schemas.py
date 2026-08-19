@@ -68,6 +68,14 @@ class StairUsage(StrEnum):
     UNKNOWN = "unknown"
 
 
+class LadderTruckUsage(StrEnum):
+    """Whether a ladder truck is planned for one endpoint."""
+
+    REQUIRED = "required"
+    NOT_REQUIRED = "not_required"
+    UNKNOWN = "unknown"
+
+
 class ParkingAccess(StrEnum):
     AVAILABLE = "available"
     RESTRICTED = "restricted"
@@ -100,22 +108,24 @@ class CarryDistanceCondition(RequestModel):
 
 
 class LocationConditions(RequestModel):
-    """Structured quote-impacting conditions without a raw address."""
+    """Structured quote-impacting conditions for one endpoint."""
 
     residence_type: ResidenceType = ResidenceType.UNKNOWN
     floor: FloorCondition = Field(default_factory=FloorCondition)
     elevator: ElevatorAvailability = ElevatorAvailability.UNKNOWN
     stairs: StairUsage = StairUsage.UNKNOWN
+    ladder: LadderTruckUsage = LadderTruckUsage.UNKNOWN
     parking_access: ParkingAccess = ParkingAccess.UNKNOWN
     carry_distance: CarryDistanceCondition = Field(default_factory=CarryDistanceCondition)
     access_note: Annotated[str, Field(min_length=1, max_length=1000)] | None = None
 
 
 class LocationCreate(RequestModel):
-    """Origin or destination without a raw address."""
+    """Origin or destination with separately recoverable address fields."""
 
     kind: LocationKind
     label: Annotated[str, Field(min_length=1, max_length=100)]
+    detail_address: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     conditions: LocationConditions = Field(default_factory=LocationConditions)
     room_zones: Annotated[
         tuple[RoomZoneCreate, ...],
@@ -191,6 +201,7 @@ class LocationResponse(ContractModel):
     id: UUID
     kind: LocationKind
     label: str
+    detail_address: str | None
     conditions: LocationConditions
     room_zones: tuple[RoomZoneResponse, ...]
 
@@ -211,12 +222,17 @@ class MoveJobLocationPatch(RequestModel):
 
     kind: LocationKind
     label: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    detail_address: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     conditions: LocationConditions | None = None
 
     @model_validator(mode="after")
     def require_one_mutable_field(self) -> "MoveJobLocationPatch":
-        if self.label is None and self.conditions is None:
-            raise ValueError("location patch requires label or conditions")
+        if (
+            self.label is None
+            and "detail_address" not in self.model_fields_set
+            and self.conditions is None
+        ):
+            raise ValueError("location patch requires label, detail_address, or conditions")
         return self
 
 
@@ -261,6 +277,7 @@ class MoveJobSummaryResponse(ContractModel):
 
 class MoveJobListResponse(ContractModel):
     moves: tuple[MoveJobSummaryResponse, ...]
+    next_cursor: str | None = None
 
 
 class MoveJobCreatedResponse(ContractModel):
