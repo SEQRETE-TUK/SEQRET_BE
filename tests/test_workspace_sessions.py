@@ -27,6 +27,7 @@ from app.modules.access.workspace import (
     WorkspacePrincipal,
     _invitation_response,
     _load_session,
+    _normalized_destination,
     authenticate_workspace_actor,
     create_or_extend_workspace_session,
     delete_contact_point,
@@ -420,6 +421,10 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         headers={"X-SEQRET-CSRF": csrf_token},
     )
     assert no_consent.status_code == 422
+    assert "owner@example.com" not in no_consent.text
+    validation_detail = no_consent.json()["detail"]
+    assert validation_detail
+    assert all(set(item) == {"type", "loc", "msg"} for item in validation_detail)
     invalid_phone = await workspace_client.put(
         "/api/v1/session/contact-points/sms",
         json={"destination": "010-1234-5678", "delivery_consent": True},
@@ -438,6 +443,14 @@ async def test_cookie_csrf_updates_job_and_manages_masked_contacts(
         headers={"X-SEQRET-CSRF": csrf_token},
     )
     assert invalid_email.status_code == 422
+    oversized_destination = f"private+{'x' * 301}@example.com"
+    oversized_email = await workspace_client.put(
+        "/api/v1/session/contact-points/email",
+        json={"destination": oversized_destination, "delivery_consent": True},
+        headers={"X-SEQRET-CSRF": csrf_token},
+    )
+    assert oversized_email.status_code == 422
+    assert oversized_destination not in oversized_email.text
     email = await workspace_client.put(
         "/api/v1/session/contact-points/email",
         json={"destination": "Owner@Example.com", "delivery_consent": True},
@@ -673,6 +686,33 @@ def test_workspace_response_helpers_cover_pending_invitation_and_deployed_cookie
     )
     request = Request({"type": "http", "app": application})
     assert _workspace_cookie_security(request) == (True, "none")
+
+
+def test_contact_destination_normalization_is_linear_and_preserves_contract() -> None:
+    assert (
+        _normalized_destination(
+            NotificationContactChannel.EMAIL,
+            " Owner.Tag+Alerts@Sub.Example.com ",
+        )
+        == "owner.tag+alerts@sub.example.com"
+    )
+    adversarial = "!@!." + "!." * 10_000
+    with pytest.raises(ValueError, match="email destination is invalid"):
+        _normalized_destination(NotificationContactChannel.EMAIL, adversarial)
+    for invalid in (
+        "owner@example",
+        "owner@@example.com",
+        ".owner@example.com",
+        "owner.@example.com",
+        "owner..tag@example.com",
+        "owner@.example.com",
+        "owner@example..com",
+        "owner@example.com.",
+        "owner@exa mple.com",
+        "owner@\x00example.com",
+    ):
+        with pytest.raises(ValueError, match="email destination is invalid"):
+            _normalized_destination(NotificationContactChannel.EMAIL, invalid)
 
 
 @pytest.mark.anyio

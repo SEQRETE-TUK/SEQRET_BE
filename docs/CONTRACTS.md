@@ -209,4 +209,6 @@
 
 ## 오류와 호환성
 
+공개 API의 `422` 요청 검증 오류는 OpenAPI에 정의된 `type`, `loc`, `msg`만 반환한다. Pydantic의 원문 `input`, 내부 `ctx`, 문서 `url`은 응답에 포함하지 않는다.
+
 공통 fake는 누락된 object key 같은 결정적 오류를 `ProviderError`로 재현한다. `not_found`, `conflict`, `invalid_input`, `unavailable`, `deadline_exceeded`, `permission_denied` 분류와 `retryable` 여부는 provider SDK 타입을 application 계층에 노출하지 않는다. 기존 version 1 필드를 제거하거나 의미를 바꾸지 않으며 optional 필드 추가 또는 새 schema version으로 확장한다.

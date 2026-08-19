@@ -1,8 +1,10 @@
-"""OpenAPI definitions for protected HTTP error responses."""
+"""Public HTTP error responses and privacy-safe exception handlers."""
 
-from typing import Any
+from typing import Any, cast
 
-from fastapi import status
+from fastapi import Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 
@@ -13,6 +15,8 @@ class HttpExceptionResponse(BaseModel):
 
 
 ResponseDefinition = dict[str, Any]
+
+_PUBLIC_VALIDATION_ERROR_FIELDS = ("type", "loc", "msg")
 
 _PROTECTED_ERROR_RESPONSES: dict[int, ResponseDefinition] = {
     status.HTTP_401_UNAUTHORIZED: {
@@ -59,3 +63,20 @@ def protected_error_responses(*status_codes: int) -> dict[int | str, ResponseDef
 
     requested = {status.HTTP_401_UNAUTHORIZED, status.HTTP_429_TOO_MANY_REQUESTS, *status_codes}
     return {code: _PROTECTED_ERROR_RESPONSES[code] for code in sorted(requested)}
+
+
+async def request_validation_error_response(
+    _request: Request,
+    error: Exception,
+) -> JSONResponse:
+    """Return the documented 422 shape without reflecting request values."""
+
+    validation_error = cast(RequestValidationError, error)
+    detail = [
+        {field: item[field] for field in _PUBLIC_VALIDATION_ERROR_FIELDS if field in item}
+        for item in validation_error.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": detail},
+    )
