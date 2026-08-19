@@ -495,6 +495,12 @@ async def test_completion_happy_path_documents_notifications_and_retention(
     assert requested.status_code == 201
     assert requested.json()["status"] == "requested"
     assert requested.json()["notification_created"] is True
+    move_list = await client.get(
+        "/api/v1/move-jobs",
+        headers=_headers(created, "company_manager"),
+    )
+    assert move_list.status_code == 200
+    assert move_list.json()["moves"][0]["completion_request_status"] == "requested"
     assert (
         await client.post(
             request_url,

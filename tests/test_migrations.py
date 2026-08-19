@@ -18,7 +18,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "a_23_0001"
+ALEMBIC_HEAD = "int_09_0001"
+ALEMBIC_FRONTEND_PREVIOUS = "a_23_0001"
 ALEMBIC_AI_V2_HEAD = "b_08_0001"
 ALEMBIC_AI_V2_PREVIOUS = "a_19_0001"
 ALEMBIC_MEDIA_CONSENT_PREVIOUS = "a_16_0001"
@@ -71,6 +72,10 @@ BUSINESS_TABLES = {
     "outbox_event",
     "event_consumption",
     "notification_delivery",
+    "workspace_account",
+    "workspace_membership",
+    "workspace_session",
+    "workspace_contact_point",
 }
 
 
@@ -92,6 +97,108 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+@pytest.mark.parametrize(
+    ("history_kind", "message"),
+    [
+        ("workspace", "workspace rows exist"),
+        ("job_edit", "job edit audit rows exist"),
+        ("external_notification", "external notification rows exist"),
+    ],
+)
+def test_frontend_contract_migration_guards_new_history(
+    tmp_path: Path,
+    history_kind: str,
+    message: str,
+) -> None:
+    database_url = (
+        f"sqlite+pysqlite:///{(tmp_path / f'frontend-{history_kind}.sqlite3').as_posix()}"
+    )
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    try:
+        command.upgrade(configuration, "head")
+        metadata = MetaData()
+        metadata.reflect(
+            engine,
+            only=(
+                "workspace_account",
+                "move_job",
+                "job_participant",
+                "audit_event",
+                "notification_delivery",
+            ),
+        )
+        now = datetime.now(UTC)
+        job_id = uuid4().hex
+        participant_id = uuid4().hex
+        with engine.begin() as connection:
+            if history_kind == "workspace":
+                connection.execute(
+                    metadata.tables["workspace_account"].insert(),
+                    {
+                        "id": uuid4().hex,
+                        "role": "COMPANY_MANAGER",
+                        "display_name": "migration account",
+                        "created_at": now,
+                    },
+                )
+            else:
+                connection.execute(
+                    metadata.tables["move_job"].insert(),
+                    {
+                        "id": job_id,
+                        "title": "migration contract guard",
+                        "status": "DRAFT",
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                connection.execute(
+                    metadata.tables["job_participant"].insert(),
+                    {
+                        "id": participant_id,
+                        "job_id": job_id,
+                        "role": "CUSTOMER",
+                        "display_name": "migration participant",
+                        "created_at": now,
+                    },
+                )
+                if history_kind == "job_edit":
+                    connection.execute(
+                        metadata.tables["audit_event"].insert(),
+                        {
+                            "id": uuid4().hex,
+                            "job_id": job_id,
+                            "actor_participant_id": participant_id,
+                            "event_type": "JOB_BASIC_INFO_UPDATED",
+                            "payload": {"changed_fields": ["title"]},
+                            "occurred_at": now,
+                        },
+                    )
+                else:
+                    connection.execute(
+                        metadata.tables["notification_delivery"].insert(),
+                        {
+                            "id": uuid4().hex,
+                            "event_id": uuid4().hex,
+                            "event_type": "SCOPE_LOCKED_V1",
+                            "job_id": job_id,
+                            "recipient_participant_id": participant_id,
+                            "channel": "EMAIL",
+                            "destination": "migration@example.com",
+                            "status": "PENDING",
+                            "attempt_count": 0,
+                            "created_at": now,
+                        },
+                    )
+
+        with pytest.raises(RuntimeError, match=message):
+            command.downgrade(configuration, ALEMBIC_FRONTEND_PREVIOUS)
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 def test_scope_execution_plan_migration_roundtrips_and_guards_history(
@@ -141,7 +248,7 @@ def test_scope_execution_plan_migration_roundtrips_and_guards_history(
 
         with pytest.raises(RuntimeError, match="scope execution plan rows exist"):
             command.downgrade(configuration, ALEMBIC_AI_V2_HEAD)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_FRONTEND_PREVIOUS
 
         with engine.begin() as connection:
             connection.execute(proposal.delete())

@@ -10,9 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.contracts.actor import ParticipantRole
 from app.contracts.events import DomainEvent, DomainEventType
 from app.contracts.primitives import utc_now
+from app.modules.access.models import (
+    NotificationContactChannel,
+    WorkspaceContactPoint,
+    WorkspaceMembership,
+)
 from app.modules.move_job.models import JobParticipant, MoveJob
 from app.modules.notification.models import (
     EventConsumption,
+    NotificationChannel,
     NotificationDelivery,
     NotificationStatus,
 )
@@ -66,12 +72,14 @@ def _response(intent: NotificationDelivery) -> NotificationResponse:
         event_type=intent.event_type,
         job_id=intent.job_id,
         recipient_participant_id=intent.recipient_participant_id,
+        channel=intent.channel,
         status=intent.status,
         attempt_count=intent.attempt_count,
         created_at=intent.created_at,
         last_attempt_at=intent.last_attempt_at,
         sent_at=intent.sent_at,
         last_error_code=intent.last_error_code,
+        provider_message_id=intent.provider_message_id,
     )
 
 
@@ -111,16 +119,56 @@ async def consume_notification_event(
             .order_by(JobParticipant.id)
         )
     ).all()
-    intents = [
-        NotificationDelivery(
-            event_id=event.event_id,
-            event_type=event.event_type,
-            job_id=job_id,
-            recipient_participant_id=participant_id,
-            status=NotificationStatus.PENDING,
+    intents: list[NotificationDelivery] = []
+    for participant_id in participant_ids:
+        intents.append(
+            NotificationDelivery(
+                event_id=event.event_id,
+                event_type=event.event_type,
+                job_id=job_id,
+                recipient_participant_id=participant_id,
+                channel=NotificationChannel.IN_APP,
+                status=NotificationStatus.PENDING,
+            )
         )
-        for participant_id in participant_ids
-    ]
+    if participant_ids:
+        contact_rows = (
+            await session.execute(
+                select(
+                    WorkspaceMembership.participant_id,
+                    WorkspaceContactPoint.channel,
+                    WorkspaceContactPoint.destination,
+                )
+                .join(
+                    WorkspaceContactPoint,
+                    WorkspaceContactPoint.account_id == WorkspaceMembership.account_id,
+                )
+                .where(
+                    WorkspaceMembership.participant_id.in_(participant_ids),
+                    WorkspaceMembership.revoked_at.is_(None),
+                    WorkspaceContactPoint.enabled.is_(True),
+                )
+                .order_by(WorkspaceMembership.participant_id, WorkspaceContactPoint.channel)
+            )
+        ).all()
+        channel_map = {
+            NotificationContactChannel.EMAIL: NotificationChannel.EMAIL,
+            NotificationContactChannel.SMS: NotificationChannel.SMS,
+            NotificationContactChannel.KAKAO: NotificationChannel.KAKAO,
+        }
+        intents.extend(
+            NotificationDelivery(
+                event_id=event.event_id,
+                event_type=event.event_type,
+                job_id=job_id,
+                recipient_participant_id=participant_id,
+                channel=channel_map[channel],
+                destination=destination,
+                status=NotificationStatus.PENDING,
+                next_attempt_at=utc_now(),
+            )
+            for participant_id, channel, destination in contact_rows
+        )
     session.add_all(intents)
     await session.flush()
     return tuple(_response(intent) for intent in intents)
@@ -137,6 +185,7 @@ async def list_notifications(
             .where(
                 NotificationDelivery.job_id == job_id,
                 NotificationDelivery.recipient_participant_id == recipient_participant_id,
+                NotificationDelivery.channel == NotificationChannel.IN_APP,
             )
             .order_by(NotificationDelivery.created_at, NotificationDelivery.id)
         )
@@ -169,6 +218,8 @@ def _require_notification_transition(
 async def mark_notification_sent(
     session: AsyncSession,
     notification_id: UUID,
+    *,
+    provider_message_id: str | None = None,
 ) -> NotificationResponse:
     """Record a successful provider delivery without storing provider payloads."""
 
@@ -182,6 +233,10 @@ async def mark_notification_sent(
     intent.last_attempt_at = now
     intent.sent_at = now
     intent.last_error_code = None
+    intent.provider_message_id = provider_message_id
+    intent.next_attempt_at = None
+    intent.locked_until = None
+    intent.lock_token = None
     await session.flush()
     await session.refresh(intent)
     return _response(intent)
@@ -202,6 +257,8 @@ async def mark_notification_failed(
     intent.attempt_count += 1
     intent.last_attempt_at = utc_now()
     intent.last_error_code = error_code
+    intent.locked_until = None
+    intent.lock_token = None
     await session.flush()
     return _response(intent)
 
@@ -216,5 +273,6 @@ async def retry_notification(
     _require_notification_transition(intent.status, NotificationStatus.PENDING)
     intent.status = NotificationStatus.PENDING
     intent.last_error_code = None
+    intent.next_attempt_at = utc_now()
     await session.flush()
     return _response(intent)

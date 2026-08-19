@@ -42,6 +42,9 @@ SERVICE_ACCOUNT_EMAIL_PATTERN = re.compile(
     r"^[a-z][a-z0-9-]{4,28}[a-z0-9]@"
     r"[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$"
 )
+NOTIFICATION_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+SMS_SENDER_NUMBER_PATTERN = re.compile(r"^[0-9]{8,13}$")
+KAKAO_SENDER_KEY_PATTERN = re.compile(r"^[A-Za-z0-9]{40}$")
 
 
 class Settings(BaseSettings):
@@ -82,6 +85,40 @@ class Settings(BaseSettings):
     event_publish_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
     notification_batch_size: int = Field(default=100, ge=1, le=100)
     notification_pull_timeout_seconds: float = Field(default=10.0, gt=0, le=30.0)
+    notification_delivery_enabled: bool = False
+    notification_delivery_lease_seconds: int = Field(default=60, ge=1, le=600)
+    notification_delivery_timeout_seconds: float = Field(default=10.0, gt=0, le=300.0)
+    nhn_notification_email_app_key: str | None = Field(default=None, min_length=1, max_length=255)
+    nhn_notification_email_secret_key: SecretStr | None = Field(default=None, repr=False)
+    nhn_notification_email_sender_address: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=100,
+    )
+    nhn_notification_email_sender_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+    )
+    nhn_notification_sms_app_key: str | None = Field(default=None, min_length=1, max_length=255)
+    nhn_notification_sms_secret_key: SecretStr | None = Field(default=None, repr=False)
+    nhn_notification_sms_sender_number: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=13,
+    )
+    nhn_notification_kakao_app_key: str | None = Field(default=None, min_length=1, max_length=255)
+    nhn_notification_kakao_secret_key: SecretStr | None = Field(default=None, repr=False)
+    nhn_notification_kakao_sender_key: str | None = Field(
+        default=None,
+        min_length=40,
+        max_length=40,
+    )
+    nhn_notification_kakao_template_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+    )
     task_queue_location: str | None = None
     task_queue_name: str | None = None
     task_worker_url: str | None = None
@@ -283,6 +320,54 @@ class Settings(BaseSettings):
         if self.outbox_lease_seconds <= self.event_publish_timeout_seconds:
             msg = "outbox_lease_seconds must exceed event_publish_timeout_seconds"
             raise ValueError(msg)
+        if (
+            self.notification_delivery_lease_seconds
+            <= self.notification_delivery_timeout_seconds + 1
+        ):
+            msg = "notification delivery lease must exceed its timeout by more than one second"
+            raise ValueError(msg)
+        notification_provider_settings = (
+            self.nhn_notification_email_app_key,
+            self.nhn_notification_email_secret_key,
+            self.nhn_notification_email_sender_address,
+            self.nhn_notification_email_sender_name,
+            self.nhn_notification_sms_app_key,
+            self.nhn_notification_sms_secret_key,
+            self.nhn_notification_sms_sender_number,
+            self.nhn_notification_kakao_app_key,
+            self.nhn_notification_kakao_secret_key,
+            self.nhn_notification_kakao_sender_key,
+            self.nhn_notification_kakao_template_code,
+        )
+        if self.notification_delivery_enabled and (
+            self.frontend_origin is None
+            or any(value is None for value in notification_provider_settings)
+        ):
+            msg = "enabled external notification delivery requires frontend and NHN settings"
+            raise ValueError(msg)
+        secret_values = (
+            self.nhn_notification_email_secret_key,
+            self.nhn_notification_sms_secret_key,
+            self.nhn_notification_kakao_secret_key,
+        )
+        if any(secret is not None and not secret.get_secret_value() for secret in secret_values):
+            raise ValueError("NHN notification secret keys must not be empty")
+        if (
+            self.nhn_notification_email_sender_address is not None
+            and NOTIFICATION_EMAIL_PATTERN.fullmatch(self.nhn_notification_email_sender_address)
+            is None
+        ):
+            raise ValueError("nhn_notification_email_sender_address must be an email address")
+        if (
+            self.nhn_notification_sms_sender_number is not None
+            and SMS_SENDER_NUMBER_PATTERN.fullmatch(self.nhn_notification_sms_sender_number) is None
+        ):
+            raise ValueError("nhn_notification_sms_sender_number must contain 8 to 13 digits")
+        if (
+            self.nhn_notification_kakao_sender_key is not None
+            and KAKAO_SENDER_KEY_PATTERN.fullmatch(self.nhn_notification_kakao_sender_key) is None
+        ):
+            raise ValueError("nhn_notification_kakao_sender_key must contain 40 alphanumerics")
         if self.background_job_lease_seconds <= self.task_enqueue_timeout_seconds:
             msg = "background_job_lease_seconds must exceed task_enqueue_timeout_seconds"
             raise ValueError(msg)

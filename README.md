@@ -39,6 +39,7 @@
 - [동시 개발 및 main 머지 충돌 방지 가이드](docs/CONCURRENT_DEVELOPMENT_GUIDE.md)
 - [공통 타입·Port·event 계약](docs/CONTRACTS.md)
 - [현재 main 팀·FE 인계](docs/TEAM_HANDOFF.md)
+- [INT-09 프론트엔드 연동 인계](docs/INT_09_FRONTEND_HANDOFF.md)
 - [AI 작업 지침](AGENTS.md)
 
 ## 상태
@@ -49,10 +50,14 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 - `POST /move-jobs/onboarding`: 소비자 작업과 소비자 전용 비밀 링크 생성
 - `GET /me`: 현재 역할·초대 상태·허용 기능 조회
+- `POST /sessions`, `GET·DELETE /session`: 역할 링크를 30일 HttpOnly 작업공간 세션에 연결·복원·종료
+- `GET·PUT·DELETE /session/contact-points/{channel}`: 명시적 동의를 받은 외부 알림 연락처 조회·저장·철회
 - `POST·GET /move-jobs/{job_id}/invitations`: 다음 역할 초대 발급·목록 조회 (`display_name` 생략 시 역할 기본값 사용)
 - `POST /move-jobs/{job_id}/invitations/{invitation_id}/{accept|decline|revoke|reissue}`: 초대 수락·거절·폐기·재발급
 - `POST /move-jobs`: 신뢰 bootstrap용 작업·세 역할·위치·구역 생성
+- `GET /move-jobs`: 작업공간의 고객·업체·기사 다중 작업 목록과 검색·상태·예정일 필터
 - `GET /move-jobs/{job_id}`: 전체 작업 구성 조회
+- `PATCH /move-jobs/{job_id}`: 고객의 견적 전 일정·표시 위치·현장 조건 수정
 - `DELETE /move-jobs/{job_id}`: 고객의 견적 전 작업 취소와 모든 작업 capability 철회
 - `POST /move-jobs/{job_id}/participants/{participant_id}/access-links`: 자기 역할 링크 회전
 - `POST /move-jobs/{job_id}/access-links/{access_link_id}/revoke`: 역할 링크 철회
@@ -99,6 +104,8 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 소비자 self-service 생성은 `POST /move-jobs/onboarding`을 사용합니다. 요청의 `customer_display_name`은 고객 participant 표시명과 이후 업무 화면 header의 고객명 원본으로 저장합니다. 이 응답은 최초 발급부터 7일 동안 유효한 소비자 비밀값 하나만 한 번 반환하며, 업체나 현장기사 capability를 미리 만들지 않습니다. 소비자만 업체 담당자를 초대하고 수락한 업체 담당자만 현장기사를 초대할 수 있습니다. 고객은 견적이 생성되기 전 `DELETE /move-jobs/{job_id}`로 작업을 취소할 수 있습니다. 서버는 업무·감사 이력을 물리 삭제하지 않고 작업을 `CANCELED`로 전이하며 모든 초대와 access link를 철회합니다. 초대가 `pending`인 링크는 `/me`와 수락·거절 외 업무 API를 열 수 없으며, 폐기·재발급은 기존 secret과 그 하위 초대를 즉시 무효화합니다. 하위 링크의 만료는 발급자 링크 만료를 넘지 않습니다. 기존 `POST /move-jobs`는 정확히 세 역할을 한 번에 준비하는 신뢰 bootstrap 계약으로 남아 일반 frontend 생성 흐름에서 사용하지 않습니다. bearer 링크 자체는 개인 신원을 증명하지 않습니다. 비밀값은 `Authorization: Bearer <secret>`으로 전달하며 데이터베이스에는 SHA-256 hash만 저장합니다. 비밀값을 반환하는 응답은 cache하지 않습니다.
 
+검증된 역할 링크는 `POST /sessions`로 서버 소유 작업공간에 한 번 연결할 수 있습니다. 응답 cookie는 30일 `HttpOnly`이고 DB에는 원문 대신 hash만 저장합니다. 같은 역할의 다른 작업 링크를 현재 cookie와 함께 다시 연결하면 `GET /move-jobs`가 여러 작업을 복원하며, bearer로 목록을 조회하면 해당 링크의 한 작업만 반환합니다. 유효한 cookie 없이 bearer 하나만 다시 제시하면 그 작업만 새 작업공간으로 재연결해 다른 작업·계정 연락처로 권한이 확대되지 않습니다. cookie 기반 mutation은 응답의 메모리 전용 `csrf_token`을 `X-SEQRET-CSRF`로 보내야 합니다. 견적 전 고객은 `PATCH /move-jobs/{job_id}`로 제목·일정·표시 위치·구조화 현장 조건을 수정할 수 있고 변경은 `JOB_BASIC_INFO_UPDATED` 감사 이력으로 남습니다. 정확한 FE 전환 순서는 [`docs/INT_09_FRONTEND_HANDOFF.md`](docs/INT_09_FRONTEND_HANDOFF.md)를 따릅니다.
+
 촬영 미디어는 작업에 속한 구역과 `inventory`, `condition`, `change_evidence`, `completion` 목적 중 하나로 등록할 수 있습니다. 변경·완료 command는 목적과 촬영자 역할을 다시 검증합니다. 사진은 20 MiB, 영상은 200 MiB로 제한하며, 업로드 완료 시 `StoragePort`로 MIME type, 정확한 크기와 object generation을 다시 확인합니다. 완료·취소된 작업에는 새 촬영·업로드를 허용하지 않습니다. 비공개 객체의 signed URL과 create-only `upload_headers`는 HTTPS 응답으로만 반환하고 값은 정규화하지 않으며 cache, 데이터베이스와 로그에는 저장하지 않습니다. 로컬에서 storage 설정을 생략하면 업로드 API는 `503`을 반환하고, 배포 API는 storage 설정 없이는 시작하지 않습니다.
 
 촬영 소유자는 `GET /capture-sessions`로 자신이 만든 세션, 미디어의 `pending_upload|uploaded|processing|ready|failed|deleted` 상태와 선택적 분석 상태를 복구할 수 있습니다. 응답에는 object key, generation, signed URL과 provider task ID가 포함되지 않습니다. 하나 이상의 `READY` inventory 미디어가 준비된 뒤 촬영 세션을 한 번 제출합니다. 제출과 `capture_submitted.v1`은 같은 transaction에 기록되며 이후 해당 세션의 새 미디어 변경은 막힙니다. 매분 relay가 분석 intent를 멱등 Cloud Task로 전달하고 private worker가 B의 분석 결과를 만든 뒤 A의 `import_analysis_draft` command로 편집 가능한 범위 초안을 생성합니다. provider 오류나 안전하게 가져올 수 없는 결과는 provider-neutral 실패 상태로 남고 수동 범위 작성은 계속 가능합니다.
@@ -121,7 +128,7 @@ FastAPI·PostgreSQL 기반, 두 트랙의 공통 계약과 작업·참여자·�
 
 촬영 제출, 분석 완료·실패, 범위 잠금, 현장 변경요청, 배차 확정, 완료 미디어 등록, 완료 제출·요청·고객 결정은 업무 트랜잭션 안에서 Outbox event를 저장합니다. `python -m app.entrypoints.outbox_relay`를 한 번 실행하면 due event를 lease로 선점해 Pub/Sub에 발행하고 알림 subscription의 bounded batch를 pull한 뒤, due 미디어·분석 intent를 Cloud Tasks에 전달하는 event pump로 동작합니다. 실패한 발행·enqueue는 지수 backoff로 다시 시도되고, 소비자는 `event_id`별 영속 receipt로 중복 효과를 막습니다. 참여자별 알림 intent에는 연락처나 메시지 원문 없이 발송 상태와 정제된 오류 코드만 저장합니다.
 
-같은 scheduled relay Job이 Pub/Sub `DomainEvent`를 `consume_notification_event` application command에 전달하고 DB commit 뒤 ack합니다. 최초 31일 replay와 DLQ 운영 절차는 [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](docs/NOTIFICATION_CONSUMER_RUNBOOK.md)를 따릅니다. 실제 연락처 해석과 이메일·메시지 provider 호출은 destination 계약이 없어 이 런타임에 포함하지 않으며 현재는 `PENDING` in-app intent까지만 생성합니다.
+같은 scheduled relay Job이 Pub/Sub `DomainEvent`를 `consume_notification_event` application command에 전달하고 DB commit 뒤 ack합니다. 최초 31일 replay와 DLQ 운영 절차는 [`docs/NOTIFICATION_CONSUMER_RUNBOOK.md`](docs/NOTIFICATION_CONSUMER_RUNBOOK.md)를 따릅니다. 서버 작업공간 계정에 명시적으로 동의한 연락처가 있으면 in-app 이력과 별도로 NHN Cloud Email·SMS·카카오 알림톡 delivery를 만들고 lease·최대 5회 재시도로 발송합니다. 외부 발송은 기본 비활성이며 등록된 발신자·승인 템플릿·Secret을 모두 구성한 환경에서만 켤 수 있습니다.
 
 ## 로컬 개발
 
@@ -163,6 +170,20 @@ uv run uvicorn app.entrypoints.api:app --reload
 | `SEQRET_EVENT_PUBLISH_TIMEOUT_SECONDS` | `10` | 개별 Pub/Sub 발행 완료를 기다리는 최대 시간 |
 | `SEQRET_NOTIFICATION_BATCH_SIZE` | `100` | event pump 한 번에 pull할 최대 notification event 수 |
 | `SEQRET_NOTIFICATION_PULL_TIMEOUT_SECONDS` | `10` | notification pull이 빈 batch를 기다리는 최대 시간 |
+| `SEQRET_NOTIFICATION_DELIVERY_ENABLED` | `false` | 동의 연락처에 NHN Cloud 외부 알림을 실제 발송할지 여부. 활성화 시 아래 설정과 frontend origin이 모두 필요 |
+| `SEQRET_NOTIFICATION_DELIVERY_LEASE_SECONDS` | `60` | 외부 발송 소유권 lease. provider timeout보다 1초를 초과해 길어야 함 |
+| `SEQRET_NOTIFICATION_DELIVERY_TIMEOUT_SECONDS` | `10` | 개별 외부 provider 호출 제한 시간 |
+| `SEQRET_NHN_NOTIFICATION_EMAIL_APP_KEY` | 없음 | NHN Cloud Email app key |
+| `SEQRET_NHN_NOTIFICATION_EMAIL_SECRET_KEY` | 없음 | NHN Cloud Email secret key. Secret Manager로만 주입 |
+| `SEQRET_NHN_NOTIFICATION_EMAIL_SENDER_ADDRESS` | 없음 | NHN Cloud에 등록된 이메일 발신 주소 |
+| `SEQRET_NHN_NOTIFICATION_EMAIL_SENDER_NAME` | 없음 | 이메일 발신 표시명 |
+| `SEQRET_NHN_NOTIFICATION_SMS_APP_KEY` | 없음 | NHN Cloud SMS app key |
+| `SEQRET_NHN_NOTIFICATION_SMS_SECRET_KEY` | 없음 | NHN Cloud SMS secret key. Secret Manager로만 주입 |
+| `SEQRET_NHN_NOTIFICATION_SMS_SENDER_NUMBER` | 없음 | NHN Cloud에 등록된 숫자 8~13자의 국내 발신번호 |
+| `SEQRET_NHN_NOTIFICATION_KAKAO_APP_KEY` | 없음 | NHN Cloud 알림톡 app key |
+| `SEQRET_NHN_NOTIFICATION_KAKAO_SECRET_KEY` | 없음 | NHN Cloud 알림톡 secret key. Secret Manager로만 주입 |
+| `SEQRET_NHN_NOTIFICATION_KAKAO_SENDER_KEY` | 없음 | 등록된 40자 영숫자 발신 프로필 키 |
+| `SEQRET_NHN_NOTIFICATION_KAKAO_TEMPLATE_CODE` | 없음 | `#{message}`, `#{deepLink}`를 사용하는 승인 템플릿 코드 |
 | `SEQRET_TASK_QUEUE_LOCATION` | 없음 | Cloud Tasks queue region. task 설정과 함께 relay에 구성 |
 | `SEQRET_TASK_QUEUE_NAME` | 없음 | media validation·retention task queue ID |
 | `SEQRET_TASK_WORKER_URL` | 없음 | OIDC로 호출하는 canonical HTTPS private worker origin |

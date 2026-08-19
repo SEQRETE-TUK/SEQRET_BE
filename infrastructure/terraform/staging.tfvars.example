@@ -28,5 +28,20 @@ monitoring_notification_channel_ids = [
 # redis_vpc_network     = "projects/PROJECT_ID/global/networks/NETWORK"
 # redis_vpc_subnetwork  = "projects/PROJECT_ID/regions/asia-northeast3/subnetworks/SUBNETWORK"
 
+# External Email, domestic SMS/LMS, and Kakao Alimtalk stay disabled until all
+# NHN resources are approved. Store only each secret key in Secret Manager.
+# notification_delivery_enabled                       = true
+# nhn_notification_email_app_key                      = "EMAIL_APP_KEY"
+# nhn_notification_email_secret_key_secret_id         = "seqret-nhn-email-secret"
+# nhn_notification_email_sender_address               = "notice@example.com"
+# nhn_notification_email_sender_name                  = "SEQRET"
+# nhn_notification_sms_app_key                        = "SMS_APP_KEY"
+# nhn_notification_sms_secret_key_secret_id           = "seqret-nhn-sms-secret"
+# nhn_notification_sms_sender_number                  = "0212345678"
+# nhn_notification_kakao_app_key                      = "KAKAO_APP_KEY"
+# nhn_notification_kakao_secret_key_secret_id         = "seqret-nhn-kakao-secret"
+# nhn_notification_kakao_sender_key                   = "0123456789012345678901234567890123456789"
+# nhn_notification_kakao_template_code                = "SEQRET_NOTICE"
+
 # Replace PROJECT_ID, REPOSITORY and the digest before planning.
 container_image = "asia-northeast3-docker.pkg.dev/PROJECT_ID/REPOSITORY/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000"

@@ -7,7 +7,7 @@
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `cfe42966072adc60505f6f50ecd491482631b33d`
+> `bcd898e41fe72e2d4cec9207dabecb9fffcad197`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,7 +21,7 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-19에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/cfe42966072adc60505f6f50ecd491482631b33d)는
+2026-08-19에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/bcd898e41fe72e2d4cec9207dabecb9fffcad197)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
@@ -38,6 +38,11 @@ query·mutation을 수행한다. `/`, `/provider`, `/provider/web`, `/crew`도 �
 뜻하지 않는다. frontend PRD 부록의 `/v1/jobs`,
 `consumer|provider|crew`, 공통 error envelope와 CRUD 경로도 현재 backend 계약이 아니라 별도
 제안이다. 이 문서의 경로와 frontend PRD 경로를 암묵적으로 선택하거나 혼용하지 않는다.
+현재 일반 API client와 download helper는 `credentials: "omit"`이고 업체 다중 연결은 메모리,
+고객 기본정보 수정은 `sessionStorage`를 원본으로 사용한다. INT-09 backend 계약에 연결하려면 일반
+API를 `credentials: "include"`로 전환하고 세션·목록·PATCH를 사용해야 한다. signed GCS PUT은
+계속 credential을 보내지 않는다. 세부 변경은 [INT-09 FE 인계](INT_09_FRONTEND_HANDOFF.md)를
+따른다.
 
 승인된 19개 화면 경로 중 `media-uploads` 단순화 adapter를 제외한 18개가 현재 OpenAPI에
 등록됐다. 업체 이슈 목록·변경 제안·설명, 완료 요청 철회와 소비자 onboarding·역할 초대도 화면
@@ -64,11 +69,12 @@ B 소유 Port·event·AI 결과 schema가 바뀌는 slice에만 해당 계약 �
 ### 2.1 URL·인증
 
 - 기본 prefix: `/api/v1`
-- 인증: `Authorization: Bearer <access-link-secret>`
+- 인증: 최초 연결과 단일 작업은 `Authorization: Bearer <access-link-secret>`, 재접속과 다중 작업은 서버가 발급한 HttpOnly workspace cookie
 - 고객: `customer`
 - 업체 담당자: `company_manager`
 - 현장기사: `field_worker`
 - 작업 ID와 인증 actor의 작업이 다르면 정보 노출 방지를 위해 `404`를 반환한다.
+- cookie 기반 `POST|PUT|PATCH|DELETE`는 `/session` 응답의 `csrf_token`을 `X-SEQRET-CSRF`로 전달한다. bearer 인증이 있으면 기존 capability 인증이 우선한다.
 - 후속 목표 계약의 mutation은 중복 탭과 mobile retry를 막기 위해 `Idempotency-Key` header를 받는다. 같은 key와 같은 body는 기존 결과를 반환한다. 현재 main의 HTTP API에는 이 공통 header 계약이 없다. 구현된 `analysis-review` 완료와 범위 제안·수정요청·확인은 현재 source ID와 정확한 payload를 기준으로 재전송을 식별한다. 현장 이슈는 작업별 `client_reference`와 정확한 payload, 변경 제안은 이슈 ID와 정확한 payload, 결정·설명은 기존 terminal 상태와 정확한 payload로 replay를 식별한다.
 
 MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본다. 팀장을 포함한 배차 화면의 작업자들은 로그인 participant가 아니라 업체의 배정 인력 record다.
@@ -116,6 +122,14 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/decline` | 받은 초대 거절·link 철회 | pending 초대 대상 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/revoke` | 발급한 초대·하위 초대 철회 | 발급자 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 기존 link·하위 초대 철회 후 재발급 | 발급자 | 구현 |
+| `POST` | `/api/v1/sessions` | 검증된 역할 link를 30일 서버 작업공간에 연결 | active link | 구현 |
+| `GET` | `/api/v1/session` | 새로고침 후 계정·멤버십·CSRF 복원 | workspace cookie | 구현 |
+| `DELETE` | `/api/v1/session` | 현재 workspace session 철회 | cookie + CSRF | 구현 |
+| `GET` | `/api/v1/move-jobs` | 계정의 다중 작업 목록·검색·상태·예정일 필터 | workspace cookie 또는 bearer | 구현 |
+| `PATCH` | `/api/v1/move-jobs/{job_id}` | 견적 전 일정·표시 위치·현장 조건 수정 | 고객 bearer 또는 cookie + CSRF | 구현 |
+| `GET` | `/api/v1/session/contact-points` | 마스킹된 외부 알림 연락처 조회 | workspace cookie | 구현 |
+| `PUT` | `/api/v1/session/contact-points/{channel}` | 명시적 수신 동의 연락처 저장·교체 | cookie + CSRF | 구현 |
+| `DELETE` | `/api/v1/session/contact-points/{channel}` | 연락처 철회와 미발송 delivery 중단 | cookie + CSRF | 구현 |
 
 요청은 `title`, timezone이 포함된 선택적 `scheduled_at`, `customer_display_name`, 1~2개의
 `locations`를 받는다. 각 location은 중복되지 않는 `origin|destination`, 표시용 `label`,
@@ -224,7 +238,8 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 | `workflow_steps[]` | `{key, status}[]` | 업체 sidebar의 완료·현재·대기 상태 |
 | `unread_notification_count` | integer | 업체 header의 `알림 3`; 업체 응답에서만 사용 |
 
-별도 알림 목록 화면이 없으므로 notification list/read API는 만들지 않는다.
+기존 `GET /move-jobs/{job_id}/notifications`는 in-app과 외부 delivery 상태 이력 조회를 제공한다.
+별도 읽음·안 읽음 상태와 read receipt API는 제품 범위에 포함하지 않는다.
 
 ### 4.2 `GET /scope-review`
 
@@ -867,7 +882,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | --- | --- |
 | 기존 세 역할 bootstrap과 운영용 자기 link 회전 | 일반 frontend는 onboarding·invitation 실행 계약을 사용한다. 기존 route는 신뢰 bootstrap·운영 호환 범위다. |
 | 일반 작업·scope·change·completion CRUD/list | 화면 단위 view와 command로 대체 |
-| notification 목록·읽음 처리 | 목록 화면이 없으므로 header count만 view에 포함 |
+| notification 읽음·안 읽음 처리 | in-app event 이력 조회와 외부 전달 상태는 구현됐지만 read receipt는 제품 범위에서 제외 |
 | audit event 전체 조회 | 화면에 필요한 변경·완료 기록만 completion summary에 포함 |
 | background job·재처리·정합성·삭제 API | 내부 운영 기능. frontend에 노출하지 않음 |
 | 차량·작업자 master CRUD | 업체 seed 또는 별도 연동 범위 |
@@ -879,7 +894,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 53개 path와 62개 operation이 있다. `/api/v1` 업무 operation 59개와
+현재 OpenAPI에는 57개 path와 70개 operation이 있다. `/api/v1` 업무 operation 67개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
 배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
@@ -891,7 +906,9 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | --- | --- |
 | `POST /move-jobs/onboarding` | 소비자 작업과 고객 capability 하나만 생성하는 공개 실행 계약이다. |
 | `GET /me`, invitation 생성·목록·action | 역할별 landing, 단계적 초대와 link lifecycle의 공개 실행 계약이다. |
+| session 생성·복원·종료, contact-point 조회·저장·삭제 6개 | 역할 link를 서버 작업공간에 연결하고 새로고침 복원·CSRF·명시적 외부 알림 동의를 제공한다. |
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
+| `GET /move-jobs`, `PATCH /move-jobs/{id}` | 역할별 다중 작업 목록·검색·필터와 고객의 견적 전 기본정보 서버 수정을 제공한다. v2 조건 변경은 새 범위 snapshot을 만들며 잠긴 범위는 거부한다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
 | `DELETE /move-jobs/{id}` | 견적 전 고객 작업을 취소하고 모든 capability를 철회하는 frontend 실행 계약으로 유지 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
@@ -908,7 +925,9 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 현재 upload 계약은 opaque `upload_url`·`upload_headers`를 그대로 사용한 뒤 별도 complete command가
 generation-pinned 비동기 검증을 시작한다. 이를 `media-uploads` 한 경로로 축소하려면 현재
 `UPLOADED → PROCESSING → READY|FAILED` 계약과 재시도 의미를 보존하는 별도 설계가 필요하다.
-현재 API CORS는 `DELETE`, `GET`, `POST`, `PUT`만 허용하며 작업 취소와 배차 확정의 browser preflight를 회귀 테스트한다.
+현재 API CORS는 credential 요청과 `DELETE`, `GET`, `PATCH`, `POST`, `PUT`,
+`Authorization`, `Content-Type`, `X-SEQRET-CSRF`, `X-SEQRET-Job-ID`, `traceparent`를 허용하며
+작업 취소·기본정보 수정·배차 확정의 browser preflight를 회귀 테스트한다.
 
 domain의 불변 version, content hash, access control, Outbox, audit와 provider Port는 삭제하지
 않는다. 이 문서만 병합해 현재 route를 deprecate하지 않으며, 승인된 교체 계약과 전환 계획이

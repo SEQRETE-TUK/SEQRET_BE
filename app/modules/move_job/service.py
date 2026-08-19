@@ -1,21 +1,29 @@
 """Application commands for move job topology."""
 
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.contracts.actor import ParticipantRole
 from app.contracts.primitives import utc_now
+from app.contracts.scope_review import (
+    CompanyParticipationStatus,
+    QuoteSnapshot,
+    ScopeReviewStatus,
+)
 from app.modules.access.models import (
     InvitationStatus,
     ParticipantAccessToken,
     ParticipantInvitation,
+    WorkspaceMembership,
 )
 from app.modules.access.service import issue_access_link, revoke_access_link
-from app.modules.completion.models import AuditEventType
+from app.modules.completion.models import AuditEventType, CompletionRequest, CompletionRequestStatus
 from app.modules.completion.service import add_audit_event
+from app.modules.field_change.models import ChangeProposalDetail
 from app.modules.move_job.models import (
     JobParticipant,
     Location,
@@ -31,11 +39,17 @@ from app.modules.move_job.schemas import (
     LocationResponse,
     MoveJobCreate,
     MoveJobCreatedResponse,
+    MoveJobListResponse,
+    MoveJobPatch,
     MoveJobResponse,
+    MoveJobSummaryResponse,
     ParticipantResponse,
     RoomZoneResponse,
 )
-from app.modules.scope_review.models import ScopeProposal
+from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeVersion
+from app.modules.scope.schemas import ScopeContent, ScopeVersionCreate
+from app.modules.scope.service import ScopeVersionConflictError, create_scope_version
+from app.modules.scope_review.models import ScopeProposal, ScopeProposalStatus
 
 
 class MoveJobNotFoundError(LookupError):
@@ -43,7 +57,7 @@ class MoveJobNotFoundError(LookupError):
 
 
 class MoveJobConflictError(RuntimeError):
-    """Raised when a move job can no longer be canceled."""
+    """Raised when a move job can no longer accept the requested mutation."""
 
 
 def _locations_from_command(locations: tuple[LocationCreate, ...]) -> list[Location]:
@@ -169,6 +183,422 @@ async def get_move_job(session: AsyncSession, job_id: UUID) -> MoveJobResponse:
     job = await _load_move_job(session, job_id)
     if job is None:
         raise MoveJobNotFoundError(job_id)
+    return _to_response(job)
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+async def _company_status(
+    session: AsyncSession,
+    job: MoveJob,
+) -> CompanyParticipationStatus:
+    invitation = await session.scalar(
+        select(ParticipantInvitation).where(
+            ParticipantInvitation.job_id == job.id,
+            ParticipantInvitation.role == ParticipantRole.COMPANY_MANAGER,
+        )
+    )
+
+    return _company_status_from_invitation(job, invitation)
+
+
+def _company_status_from_invitation(
+    job: MoveJob,
+    invitation: ParticipantInvitation | None,
+) -> CompanyParticipationStatus:
+    company_exists = any(
+        participant.role is ParticipantRole.COMPANY_MANAGER for participant in job.participants
+    )
+    if invitation is None:
+        return (
+            CompanyParticipationStatus.JOINED
+            if company_exists
+            else CompanyParticipationStatus.NOT_INVITED
+        )
+    if invitation.status is InvitationStatus.PENDING:
+        return (
+            CompanyParticipationStatus.EXPIRED
+            if _aware(invitation.expires_at) <= utc_now()
+            else CompanyParticipationStatus.INVITED
+        )
+    return {
+        InvitationStatus.ACCEPTED: CompanyParticipationStatus.JOINED,
+        InvitationStatus.DECLINED: CompanyParticipationStatus.DECLINED,
+        InvitationStatus.EXPIRED: CompanyParticipationStatus.EXPIRED,
+        InvitationStatus.REVOKED: CompanyParticipationStatus.REVOKED,
+    }[invitation.status]
+
+
+def _scope_status(proposal: ScopeProposal | None) -> ScopeReviewStatus:
+    if proposal is None:
+        return ScopeReviewStatus.COMPANY_REVIEW
+    return {
+        ScopeProposalStatus.CUSTOMER_REVIEW: ScopeReviewStatus.CUSTOMER_REVIEW,
+        ScopeProposalStatus.REVISION_REQUESTED: ScopeReviewStatus.REVISION_REQUESTED,
+        ScopeProposalStatus.CONFIRMED: ScopeReviewStatus.CONFIRMED,
+        ScopeProposalStatus.SUPERSEDED: ScopeReviewStatus.COMPANY_REVIEW,
+    }[proposal.status]
+
+
+async def _move_summary(
+    session: AsyncSession,
+    job: MoveJob,
+) -> MoveJobSummaryResponse:
+    scope_version = await session.scalar(
+        select(ScopeVersion)
+        .where(ScopeVersion.job_id == job.id)
+        .order_by(ScopeVersion.sequence_number.desc(), ScopeVersion.id.desc())
+        .limit(1)
+    )
+    proposal = await session.scalar(
+        select(ScopeProposal)
+        .where(ScopeProposal.job_id == job.id)
+        .order_by(ScopeProposal.sent_at.desc(), ScopeProposal.id.desc())
+        .limit(1)
+    )
+    completion_status = await session.scalar(
+        select(CompletionRequest.status)
+        .where(CompletionRequest.job_id == job.id)
+        .order_by(CompletionRequest.requested_at.desc(), CompletionRequest.id.desc())
+        .limit(1)
+    )
+    current_change = None
+    if scope_version is not None:
+        current_change = await session.scalar(
+            select(ChangeProposalDetail)
+            .join(
+                ChangeRequest,
+                ChangeRequest.id == ChangeProposalDetail.change_request_id,
+            )
+            .where(
+                ChangeRequest.job_id == job.id,
+                ChangeRequest.status == ChangeRequestStatus.APPROVED,
+                ChangeRequest.result_scope_version_id == scope_version.id,
+            )
+            .limit(1)
+        )
+    return _move_summary_response(
+        job,
+        scope_version=scope_version,
+        proposal=proposal,
+        completion_status=completion_status,
+        current_change=current_change,
+        company_status=await _company_status(session, job),
+    )
+
+
+def _move_summary_response(
+    job: MoveJob,
+    *,
+    scope_version: ScopeVersion | None,
+    proposal: ScopeProposal | None,
+    completion_status: CompletionRequestStatus | None,
+    current_change: ChangeProposalDetail | None,
+    company_status: CompanyParticipationStatus,
+) -> MoveJobSummaryResponse:
+    quote = None
+    adjustment_count = 0
+    if current_change is not None:
+        quote = QuoteSnapshot.model_validate(
+            {
+                "base_amount_krw": current_change.base_amount_krw,
+                "adjustments": current_change.adjustments,
+                "total_amount_krw": current_change.total_amount_krw,
+            },
+            strict=False,
+        )
+        adjustment_count = len(quote.adjustments)
+    elif proposal is not None:
+        quote = QuoteSnapshot.model_validate(
+            {
+                "base_amount_krw": proposal.base_amount_krw,
+                "adjustments": proposal.adjustments,
+                "total_amount_krw": proposal.total_amount_krw,
+            },
+            strict=False,
+        )
+        adjustment_count = len(quote.adjustments)
+    content = scope_version.content if scope_version is not None else {}
+    raw_items = content.get("items", [])
+    item_count = len(raw_items) if isinstance(raw_items, list) else 0
+    return MoveJobSummaryResponse(
+        job=_to_response(job),
+        version_label=(
+            f"V{scope_version.sequence_number}" if scope_version is not None else "초안"
+        ),
+        scope_status=_scope_status(proposal),
+        company_participation_status=company_status,
+        completion_request_status=completion_status,
+        quote=quote,
+        item_count=item_count,
+        adjustment_count=adjustment_count,
+    )
+
+
+async def list_move_jobs(
+    session: AsyncSession,
+    *,
+    actor_participant_id: UUID | None = None,
+    account_id: UUID | None = None,
+    status_filter: MoveJobStatus | None = None,
+    search: str | None = None,
+    scheduled_from: datetime | None = None,
+    scheduled_to: datetime | None = None,
+    limit: int = 50,
+) -> MoveJobListResponse:
+    """List every job attached to one capability or durable workspace."""
+
+    if (actor_participant_id is None) == (account_id is None):
+        raise ValueError("exactly one list identity is required")
+    if scheduled_from is not None and scheduled_from.utcoffset() is None:
+        raise ValueError("scheduled_from must include a timezone")
+    if scheduled_to is not None and scheduled_to.utcoffset() is None:
+        raise ValueError("scheduled_to must include a timezone")
+    if scheduled_from is not None and scheduled_to is not None and scheduled_from > scheduled_to:
+        raise ValueError("scheduled_from must not exceed scheduled_to")
+    if search is not None and not search.strip():
+        raise ValueError("q must contain a non-whitespace character")
+
+    participant_job_ids = select(JobParticipant.job_id)
+    if account_id is not None:
+        participant_job_ids = participant_job_ids.join(
+            WorkspaceMembership,
+            WorkspaceMembership.participant_id == JobParticipant.id,
+        ).where(
+            WorkspaceMembership.account_id == account_id,
+            WorkspaceMembership.revoked_at.is_(None),
+        )
+    else:
+        participant_job_ids = participant_job_ids.where(JobParticipant.id == actor_participant_id)
+    statement = (
+        select(MoveJob)
+        .where(MoveJob.id.in_(participant_job_ids))
+        .options(
+            selectinload(MoveJob.participants),
+            selectinload(MoveJob.locations).selectinload(Location.room_zones),
+        )
+    )
+    if status_filter is not None:
+        statement = statement.where(MoveJob.status == status_filter)
+    if scheduled_from is not None:
+        statement = statement.where(MoveJob.scheduled_at >= scheduled_from)
+    if scheduled_to is not None:
+        statement = statement.where(MoveJob.scheduled_at <= scheduled_to)
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        matching_jobs = (
+            select(MoveJob.id)
+            .outerjoin(Location, Location.job_id == MoveJob.id)
+            .outerjoin(JobParticipant, JobParticipant.job_id == MoveJob.id)
+            .where(
+                or_(
+                    func.lower(MoveJob.title).like(pattern),
+                    func.lower(Location.label).like(pattern),
+                    func.lower(JobParticipant.display_name).like(pattern),
+                )
+            )
+        )
+        statement = statement.where(MoveJob.id.in_(matching_jobs))
+    jobs = (
+        (
+            await session.scalars(
+                statement.order_by(MoveJob.created_at.desc(), MoveJob.id.desc()).limit(limit)
+            )
+        )
+        .unique()
+        .all()
+    )
+    if not jobs:
+        return MoveJobListResponse(moves=())
+
+    job_ids = tuple(job.id for job in jobs)
+    scope_versions = (
+        await session.scalars(
+            select(ScopeVersion)
+            .where(ScopeVersion.job_id.in_(job_ids))
+            .order_by(
+                ScopeVersion.job_id,
+                ScopeVersion.sequence_number.desc(),
+                ScopeVersion.id.desc(),
+            )
+        )
+    ).all()
+    scope_by_job: dict[UUID, ScopeVersion] = {}
+    for scope_version in scope_versions:
+        scope_by_job.setdefault(scope_version.job_id, scope_version)
+
+    proposals = (
+        await session.scalars(
+            select(ScopeProposal)
+            .where(ScopeProposal.job_id.in_(job_ids))
+            .order_by(
+                ScopeProposal.job_id,
+                ScopeProposal.sent_at.desc(),
+                ScopeProposal.id.desc(),
+            )
+        )
+    ).all()
+    proposal_by_job: dict[UUID, ScopeProposal] = {}
+    for proposal in proposals:
+        proposal_by_job.setdefault(proposal.job_id, proposal)
+
+    completion_rows = (
+        await session.execute(
+            select(CompletionRequest.job_id, CompletionRequest.status)
+            .where(CompletionRequest.job_id.in_(job_ids))
+            .order_by(
+                CompletionRequest.job_id,
+                CompletionRequest.requested_at.desc(),
+                CompletionRequest.id.desc(),
+            )
+        )
+    ).all()
+    completion_by_job: dict[UUID, CompletionRequestStatus] = {}
+    for completion_job_id, completion_status in completion_rows:
+        completion_by_job.setdefault(completion_job_id, completion_status)
+
+    change_rows = (
+        await session.execute(
+            select(ChangeProposalDetail, ChangeRequest.result_scope_version_id)
+            .join(
+                ChangeRequest,
+                ChangeRequest.id == ChangeProposalDetail.change_request_id,
+            )
+            .where(
+                ChangeRequest.job_id.in_(job_ids),
+                ChangeRequest.status == ChangeRequestStatus.APPROVED,
+            )
+        )
+    ).all()
+    change_by_scope: dict[UUID, ChangeProposalDetail] = {
+        result_scope_version_id: detail
+        for detail, result_scope_version_id in change_rows
+        if result_scope_version_id is not None
+    }
+
+    invitations = (
+        await session.scalars(
+            select(ParticipantInvitation).where(
+                ParticipantInvitation.job_id.in_(job_ids),
+                ParticipantInvitation.role == ParticipantRole.COMPANY_MANAGER,
+            )
+        )
+    ).all()
+    invitation_by_job = {invitation.job_id: invitation for invitation in invitations}
+
+    moves: list[MoveJobSummaryResponse] = []
+    for job in jobs:
+        current_scope_version = scope_by_job.get(job.id)
+        moves.append(
+            _move_summary_response(
+                job,
+                scope_version=current_scope_version,
+                proposal=proposal_by_job.get(job.id),
+                completion_status=completion_by_job.get(job.id),
+                current_change=(
+                    change_by_scope.get(current_scope_version.id)
+                    if current_scope_version is not None
+                    else None
+                ),
+                company_status=_company_status_from_invitation(
+                    job,
+                    invitation_by_job.get(job.id),
+                ),
+            )
+        )
+    return MoveJobListResponse(moves=tuple(moves))
+
+
+async def patch_move_job(
+    session: AsyncSession,
+    job_id: UUID,
+    actor_participant_id: UUID,
+    command: MoveJobPatch,
+) -> MoveJobResponse:
+    """Update basic information while preserving any v2 scope snapshot history."""
+
+    job = await session.scalar(
+        select(MoveJob)
+        .where(MoveJob.id == job_id)
+        .options(
+            selectinload(MoveJob.participants),
+            selectinload(MoveJob.locations).selectinload(Location.room_zones),
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise MoveJobNotFoundError(job_id)
+    if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise MoveJobConflictError(job_id)
+    proposal_id = await session.scalar(
+        select(ScopeProposal.id).where(ScopeProposal.job_id == job_id).limit(1)
+    )
+    if proposal_id is not None:
+        raise MoveJobConflictError(job_id)
+
+    current_scope = await session.scalar(
+        select(ScopeVersion)
+        .where(ScopeVersion.job_id == job_id)
+        .order_by(ScopeVersion.sequence_number.desc(), ScopeVersion.id.desc())
+        .limit(1)
+    )
+    changes_scope_conditions = any(
+        location_patch.conditions is not None for location_patch in command.locations or ()
+    )
+    if (
+        changes_scope_conditions
+        and current_scope is not None
+        and current_scope.locked_at is not None
+    ):
+        raise MoveJobConflictError(job_id)
+
+    changed_fields: list[str] = []
+    if "title" in command.model_fields_set:
+        job.title = command.title or ""
+        changed_fields.append("title")
+    if "scheduled_at" in command.model_fields_set:
+        job.scheduled_at = command.scheduled_at
+        changed_fields.append("scheduled_at")
+    if command.locations is not None:
+        locations_by_kind = {location.kind: location for location in job.locations}
+        for location_patch in command.locations:
+            location = locations_by_kind.get(location_patch.kind)
+            if location is None:
+                raise MoveJobNotFoundError(job_id)
+            if location_patch.label is not None:
+                location.label = location_patch.label
+            if location_patch.conditions is not None:
+                location.conditions = location_patch.conditions.model_dump(mode="json")
+            changed_fields.append(f"location:{location_patch.kind.value}")
+    job.updated_at = utc_now()
+    if (
+        changes_scope_conditions
+        and current_scope is not None
+        and current_scope.content.get("schema_version", 1) == 2
+    ):
+        current_content = ScopeContent.model_validate(current_scope.content, strict=False)
+        try:
+            await create_scope_version(
+                session,
+                job_id,
+                actor_participant_id,
+                ScopeVersionCreate(
+                    parent_version_id=current_scope.id,
+                    content=current_content.model_copy(update={"location_conditions": ()}),
+                ),
+            )
+        except ScopeVersionConflictError as error:
+            raise MoveJobConflictError(job_id) from error
+    add_audit_event(
+        session,
+        job.id,
+        AuditEventType.JOB_BASIC_INFO_UPDATED,
+        actor_participant_id=actor_participant_id,
+        payload={"changed_fields": sorted(changed_fields)},
+    )
+    await session.flush()
     return _to_response(job)
 
 

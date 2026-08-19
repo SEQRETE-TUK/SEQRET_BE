@@ -42,6 +42,7 @@ class AuditEventType(StrEnum):
     CHANGE_REJECTED = "change_rejected"
     COMPLETION_CONFIRMED = "completion_confirmed"
     JOB_COMPLETED = "job_completed"
+    JOB_BASIC_INFO_UPDATED = "job_basic_info_updated"
 
 
 class CompletionRequestStatus(StrEnum):
@@ -297,7 +298,7 @@ class AuditEvent(Base):
             "'SCOPE_VERSION_LOCKED', 'CHANGE_REQUESTED', "
             "'CHANGE_CLARIFICATION_REQUESTED', 'CHANGE_EXPLAINED', "
             "'CHANGE_APPROVED', 'CHANGE_REJECTED', 'COMPLETION_CONFIRMED', "
-            "'JOB_COMPLETED')",
+            "'JOB_COMPLETED', 'JOB_BASIC_INFO_UPDATED')",
             name="audit_event_type",
         ),
         Index("ix_audit_event_job_occurred", "job_id", "occurred_at", "id"),

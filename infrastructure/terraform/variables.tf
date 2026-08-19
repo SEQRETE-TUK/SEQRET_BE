@@ -196,6 +196,144 @@ variable "outbox_relay_database_url_secret_id" {
   }
 }
 
+variable "notification_delivery_enabled" {
+  description = "Enable NHN Cloud Email, SMS, and Kakao transactional delivery from the relay job."
+  type        = bool
+  default     = false
+}
+
+variable "nhn_notification_email_app_key" {
+  description = "Optional NHN Cloud Email application key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_email_app_key == null || try(length(trimspace(var.nhn_notification_email_app_key)) >= 1 && length(var.nhn_notification_email_app_key) <= 255, false)
+    error_message = "nhn_notification_email_app_key must be null or a nonempty value of at most 255 characters."
+  }
+}
+
+variable "nhn_notification_email_secret_key_secret_id" {
+  description = "Optional Secret Manager ID containing the NHN Cloud Email secret key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_email_secret_key_secret_id == null || can(regex("^[A-Za-z0-9_-]{1,255}$", var.nhn_notification_email_secret_key_secret_id))
+    error_message = "nhn_notification_email_secret_key_secret_id must be null or a Secret Manager secret ID."
+  }
+}
+
+variable "nhn_notification_email_sender_address" {
+  description = "Registered NHN Cloud Email sender address."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_email_sender_address == null || try(length(var.nhn_notification_email_sender_address) <= 100 && can(regex("^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$", var.nhn_notification_email_sender_address)), false)
+    error_message = "nhn_notification_email_sender_address must be null or a valid email address."
+  }
+}
+
+variable "nhn_notification_email_sender_name" {
+  description = "Transactional email sender display name."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_email_sender_name == null || try(length(trimspace(var.nhn_notification_email_sender_name)) >= 1 && length(var.nhn_notification_email_sender_name) <= 100, false)
+    error_message = "nhn_notification_email_sender_name must be null or a nonempty value of at most 100 characters."
+  }
+}
+
+variable "nhn_notification_sms_app_key" {
+  description = "Optional NHN Cloud SMS application key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_sms_app_key == null || try(length(trimspace(var.nhn_notification_sms_app_key)) >= 1 && length(var.nhn_notification_sms_app_key) <= 255, false)
+    error_message = "nhn_notification_sms_app_key must be null or a nonempty value of at most 255 characters."
+  }
+}
+
+variable "nhn_notification_sms_secret_key_secret_id" {
+  description = "Optional Secret Manager ID containing the NHN Cloud SMS secret key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_sms_secret_key_secret_id == null || can(regex("^[A-Za-z0-9_-]{1,255}$", var.nhn_notification_sms_secret_key_secret_id))
+    error_message = "nhn_notification_sms_secret_key_secret_id must be null or a Secret Manager secret ID."
+  }
+}
+
+variable "nhn_notification_sms_sender_number" {
+  description = "Registered digits-only NHN Cloud SMS sender number."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_sms_sender_number == null || can(regex("^[0-9]{8,13}$", var.nhn_notification_sms_sender_number))
+    error_message = "nhn_notification_sms_sender_number must be null or 8 to 13 digits."
+  }
+}
+
+variable "nhn_notification_kakao_app_key" {
+  description = "Optional NHN Cloud KakaoTalk Bizmessage application key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_kakao_app_key == null || try(length(trimspace(var.nhn_notification_kakao_app_key)) >= 1 && length(var.nhn_notification_kakao_app_key) <= 255, false)
+    error_message = "nhn_notification_kakao_app_key must be null or a nonempty value of at most 255 characters."
+  }
+}
+
+variable "nhn_notification_kakao_secret_key_secret_id" {
+  description = "Optional Secret Manager ID containing the NHN Cloud Kakao secret key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_kakao_secret_key_secret_id == null || can(regex("^[A-Za-z0-9_-]{1,255}$", var.nhn_notification_kakao_secret_key_secret_id))
+    error_message = "nhn_notification_kakao_secret_key_secret_id must be null or a Secret Manager secret ID."
+  }
+}
+
+variable "nhn_notification_kakao_sender_key" {
+  description = "Registered Kakao Alimtalk sender profile key."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_kakao_sender_key == null || can(regex("^[A-Za-z0-9]{40}$", var.nhn_notification_kakao_sender_key))
+    error_message = "nhn_notification_kakao_sender_key must be null or exactly 40 alphanumeric characters."
+  }
+}
+
+variable "nhn_notification_kakao_template_code" {
+  description = "Approved Alimtalk template using message and deepLink parameters."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.nhn_notification_kakao_template_code == null || try(length(trimspace(var.nhn_notification_kakao_template_code)) >= 1 && length(var.nhn_notification_kakao_template_code) <= 20, false)
+    error_message = "nhn_notification_kakao_template_code must be null or a nonempty value of at most 20 characters."
+  }
+}
+
 variable "cloud_sql_instance_id" {
   description = "Existing same-project, same-region Cloud SQL PostgreSQL instance ID."
   type        = string

@@ -3,8 +3,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, HTTPException, Request, Security, status
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 
 from app.contracts.actor import ActorContext, ParticipantRole
 from app.contracts.ports import CachePort
@@ -14,10 +14,17 @@ from app.modules.access.service import (
     InvalidAccessTokenError,
     authenticate_access_token,
 )
+from app.modules.access.workspace import (
+    WORKSPACE_SESSION_COOKIE,
+    InvalidWorkspaceSessionError,
+    authenticate_workspace_actor,
+)
 from app.platform.db.session import transactional_session
 from app.platform.observability import set_correlation_job
 
 bearer = HTTPBearer(auto_error=False)
+workspace_cookie = APIKeyCookie(name=WORKSPACE_SESSION_COOKIE, auto_error=False)
+WorkspaceCookieSecret = Annotated[str | None, Security(workspace_cookie)]
 
 
 async def get_bearer_secret(
@@ -73,14 +80,47 @@ async def _authenticate_request(
 
 
 async def get_current_actor(
-    secret: BearerSecret,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    cookie_secret: WorkspaceCookieSecret,
     request: Request,
 ) -> ActorContext:
-    return await _authenticate_request(
-        secret,
-        request,
-        allow_pending_invitation=False,
-    )
+    if credentials is not None:
+        return await _authenticate_request(
+            credentials.credentials,
+            request,
+            allow_pending_invitation=False,
+        )
+    raw_job_id = request.path_params.get("job_id") or request.headers.get("X-SEQRET-Job-ID")
+    if cookie_secret is None or raw_job_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        job_id = UUID(str(raw_job_id))
+        csrf_token = (
+            request.headers.get("X-SEQRET-CSRF")
+            if request.method not in {"GET", "HEAD", "OPTIONS"}
+            else None
+        )
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and csrf_token is None:
+            raise InvalidWorkspaceSessionError
+        async with transactional_session(request.app.state.database_session_factory) as session:
+            actor = await authenticate_workspace_actor(
+                session,
+                cookie_secret,
+                job_id,
+                csrf_token=csrf_token,
+            )
+        assert actor.job_id is not None
+        set_correlation_job(actor.job_id)
+        return actor
+    except (InvalidWorkspaceSessionError, ValueError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid workspace session",
+        ) from error
 
 
 CurrentActor = Annotated[ActorContext, Depends(get_current_actor)]

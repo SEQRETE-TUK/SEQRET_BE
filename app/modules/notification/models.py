@@ -31,6 +31,15 @@ class NotificationStatus(StrEnum):
     FAILED = "failed"
 
 
+class NotificationChannel(StrEnum):
+    """In-app history and externally delivered participant channels."""
+
+    IN_APP = "in_app"
+    EMAIL = "email"
+    SMS = "sms"
+    KAKAO = "kakao"
+
+
 class EventConsumption(Base):
     """One durable idempotency receipt per event consumer."""
 
@@ -47,11 +56,16 @@ class EventConsumption(Base):
 
 
 class NotificationDelivery(Base):
-    """A recipient-specific notification fact without contact details or message text."""
+    """A recipient-specific delivery intent; response schemas never expose its destination."""
 
     __tablename__ = "notification_delivery"
     __table_args__ = (
-        UniqueConstraint("event_id", "recipient_participant_id"),
+        UniqueConstraint(
+            "event_id",
+            "recipient_participant_id",
+            "channel",
+            name="uq_notification_delivery_event_recipient_channel",
+        ),
         CheckConstraint(
             "event_type IN ("
             "'CAPTURE_SUBMITTED_V1', 'ANALYSIS_COMPLETED_V1', "
@@ -65,6 +79,15 @@ class NotificationDelivery(Base):
         CheckConstraint(
             "status IN ('PENDING', 'SENT', 'FAILED')",
             name="notification_status",
+        ),
+        CheckConstraint(
+            "channel IN ('IN_APP', 'EMAIL', 'SMS', 'KAKAO')",
+            name="notification_channel",
+        ),
+        CheckConstraint(
+            "(channel = 'IN_APP' AND destination IS NULL) OR "
+            "(channel <> 'IN_APP' AND destination IS NOT NULL)",
+            name="notification_destination_by_channel",
         ),
         CheckConstraint("attempt_count >= 0", name="notification_attempt_count_nonnegative"),
         CheckConstraint(
@@ -89,6 +112,7 @@ class NotificationDelivery(Base):
             "created_at",
             "id",
         ),
+        Index("ix_notification_delivery_pending", "status", "next_attempt_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -105,6 +129,13 @@ class NotificationDelivery(Base):
         ForeignKey("job_participant.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, name="notification_channel", native_enum=False),
+        nullable=False,
+        default=NotificationChannel.IN_APP,
+        server_default=text("'IN_APP'"),
+    )
+    destination: Mapped[str | None] = mapped_column(String(320))
     status: Mapped[NotificationStatus] = mapped_column(
         Enum(NotificationStatus, name="notification_status", native_enum=False),
         nullable=False,
@@ -124,3 +155,7 @@ class NotificationDelivery(Base):
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(64))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lock_token: Mapped[UUID | None] = mapped_column(Uuid)
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))

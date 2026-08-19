@@ -1,6 +1,6 @@
 # 팀 인계 — 현재 `main` 기준
 
-> 작성일: 2026-08-17
+> 작성일: 2026-08-19
 > 기능 기준 커밋: 이 문서를 포함한 최신 `main`
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -8,16 +8,19 @@
 
 ## 현재 제공 범위
 
-- OpenAPI operation은 53개 path에 62개다: `/api/v1` 업무 operation 59개와 `/healthz`, `/readyz`, `/edgez` 3개다.
-- 소비자 전용 작업 생성, 소비자→업체→현장기사 invitation, 역할별 access link 인증·회전·철회, 본인 촬영 세션·미디어 상태 복구, 미디어 업로드·분석 제출과 상태 조회, 고객 AI 초안 검토·완료, 범위 검토·견적·수정요청·확인, 불변 작업범위와 양측 승인, 작업별 후보 snapshot 기반 배차·현장기사 알림·브리프·체크인, 현장기사 이슈→업체 변경 제안→고객 결정, 대표기사 완료 제출→업체 요청→고객 확인·문제 신고→문서·보존, 기존 현장 변경요청·완료 확인, 감사·알림 조회와 미디어 보존 background job을 제공한다.
-- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
+- OpenAPI operation은 57개 path에 70개다: `/api/v1` 업무 operation 67개와 `/healthz`, `/readyz`, `/edgez` 3개다.
+- 기존 역할별 E2E 흐름에 더해 서버 작업공간 계정·세션, 고객·업체·기사 다중 작업 목록·검색·필터, 고객 기본정보 수정, 명시적 연락처 동의와 Email·SMS·카카오 외부 delivery를 제공한다.
+- Terraform은 예약 Outbox relay를 Cloud Scheduler가 매분 실행하도록 정의한다. 이 Job은 Outbox·알림 pump, 최대 10개 동시 외부 알림 delivery와 due 미디어·분석 Cloud Task dispatch를 함께 수행한다. lease 소유권을 잃은 미확정 작업이 있으면 실패 종료하고, batch limit에 반복 도달하면 경보한다.
 - 최신 `main`에는 Redis Direct VPC 선택 경로, GCS adapter, AI v1·v2 분석 실행·구조화 초안 저장, 미디어 validation·삭제 handler와 Cloud Tasks private worker가 병합됐다. B 모듈은 공개 HTTP route를 추가하지 않는다.
-- Alembic은 단일 head `a_23_0001`다. 출·도착지 구조화 조건은 기존 location에 `unknown`으로 안전하게 보강되고 기존 촬영은 동의 미기록 상태로 유지된다. 기존 AI v1 detection은 구조화 필드가 비어 있는 version 1로 backfill되며 v2 품목과 위치 조건 제안은 별도 파생 이력으로 저장된다. v2 AI 결과, 견적 실행계획, 완료 제출·요청·문제·새 완료 event·사용자 지정 완료 checklist, 배차·체크인, 현장 이슈·변경 제안, 범위 제안·수정요청, 초대·감사·완료 확인·촬영 분석·Outbox·알림·소비 이력이 생긴 환경에서는 schema downgrade가 차단되므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
+- Alembic은 단일 head `int_09_0001`다. workspace account·membership·session·contact point와 외부 notification delivery snapshot을 추가한다. workspace row, 기본정보 수정 감사 또는 외부 delivery 이력이 있으면 INT-09 downgrade를 차단하며 기존 migration guard도 유지하므로 rollback은 확장 schema를 유지한 application revision 전환으로 수행한다.
 
 ## FE 연동 계약
 
-- 업무 prefix는 `/api/v1`이고, 인증은 `Authorization: Bearer <access-link-secret>`이다.
+- 업무 prefix는 `/api/v1`이다. 최초 연결은 `Authorization: Bearer <access-link-secret>`, 재접속·다중 목록은 30일 HttpOnly workspace cookie를 사용한다.
 - 역할값은 `customer`, `company_manager`, `field_worker`다. access link는 개인 신원을 증명하는 로그인 계정이 아니라 한 작업과 역할에 묶인 capability다.
+- active 역할 link는 `POST /sessions`로 서버 계정에 연결한다. 같은 역할의 다른 작업 link를 cookie와 함께 다시 연결할 수 있고 `GET /session`이 멤버십과 메모리 전용 CSRF를 복원한다. cookie mutation에는 `X-SEQRET-CSRF`가 필요하다.
+- `GET /move-jobs`는 cookie account의 다중 작업 또는 bearer의 한 작업 요약을 반환하고 검색·상태·예정일 필터를 지원한다. 고객은 견적·완료·취소 전 `PATCH /move-jobs/{job_id}`로 제목·일정·표시 위치·구조화 조건을 수정한다.
+- workspace contact API는 명시적 `delivery_consent: true`를 요구하고 destination 원문을 응답하지 않는다. future event부터 in-app과 선택한 외부 delivery를 생성하며 실제 NHN 발송은 배포 설정을 별도 활성화해야 한다.
 - `POST /move-jobs/onboarding`은 공개 소비자 생성 route다. 고객 참여자와 고객 access secret 하나만 반환하며 업체·현장기사 capability를 미리 발급하지 않는다.
 - 고객은 견적 생성 전 `DELETE /move-jobs/{job_id}`로 작업을 취소할 수 있다. 서버는 이력을 물리 삭제하지 않고 `CANCELED`로 전이하며 모든 초대와 access link를 철회한다. 견적·완료 작업은 `409`, 다른 역할은 `403`이다.
 - `POST·GET /move-jobs/{job_id}/invitations`와 action route는 소비자→업체, 수락한 업체→현장기사 순서만 허용한다. pending link는 `/me`와 수락·거절에만 쓸 수 있고, 상위 초대 폐기·재발급 또는 발급자 access-link 직접 철회는 하위 초대를 함께 철회한다. frontend는 secret을 URL query, storage, log나 analytics에 넣지 않고 자체 route의 fragment 또는 메모리 전달만 사용한다.
@@ -50,12 +53,12 @@
 - staging은 아직 `https://34-160-87-130.sslip.io`를 임시 allowlist로 사용한다. 현재 canonical FE origin은 `https://seqret.vercel.app`이므로 다음 backend 배포에서 GitHub environment 변수와 bucket CORS를 함께 교체한다.
 - GCS upload에는 API CORS와 별개의 bucket CORS가 필요하다. 실제 FE origin과 `PUT`, `Content-Type`, `x-goog-if-generation-match`를 허용한 뒤 브라우저 preflight와 create-only upload를 함께 검증한다.
 - 배포 API는 `MEDIA_BUCKET_NAME`으로 지정한 private bucket과 API service account signer를 `StoragePort`에 연결한다. 실제 bucket CORS와 외부 IAM 선행조건은 별도로 검증한다.
-- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 2026-08-19 Production 기준 `main`은 `cfe42966072adc60505f6f50ecd491482631b33d`다. Vite 8.2.1·React 19.2.4 기반이며, FE PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인 총 27개 시각 demo 화면을 선언한다. `f8d9f338` 이후 추가된 고객명 입력은 기존 onboarding `customer_display_name` 계약을 그대로 사용한다.
+- canonical [SEQRET_FE](https://github.com/SEQRETE-TUK/SEQRET_FE)의 최신 `origin/main`은 `bcd898e41fe72e2d4cec9207dabecb9fffcad197`다. 일반 API·download helper가 아직 `credentials: "omit"`이고 업체 다중 연결은 메모리, 고객 기본정보 수정은 `sessionStorage` 원본이므로 [INT-09 FE 인계](INT_09_FRONTEND_HANDOFF.md)에 따라 전환해야 한다. signed GCS PUT만 `omit`을 유지한다.
 - FE [#2](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/2)에서 API client와 Query 기반을 마련했고, FE [#4](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/4)는 `/consumer/capture`에서 작업·세션 조회, 세션 생성, opaque signed PUT, upload 완료, READY 확인과 분석 제출·terminal polling을 연결했다. FE [#5](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/5)는 AI 초안 조회·편집·완료를 연결했고, FE [#6](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/6)은 미확정 이탈 방지와 `409` 최신 상태 복구를 추가했다. 현재 `/`, `/provider`, `/provider/web`, `/crew`도 onboarding·초대·범위·변경·배차·체크인·완료·문서 API를 실제 query·mutation으로 사용한다. secret은 React 메모리에만 보관한다.
 - FE [#7](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/7)은 화면 단위 dynamic import로 초기 JS를 224.60 kB까지 줄이고 500 kB 경고를 제거했다. production preview에서 7개 진입 경로와 전용 chunk 로드를 검증했다.
-- FE [#8](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/8)은 역할별 실행 계약 Playwright와 CI를 추가했고, FE [#9](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/9)는 pending 업체·현장기사의 보호 API 선호출과 인증 초기화를 차단했다. 현재 `cfe42966`의 `test:e2e`는 secret 비저장과 capture·AI v2·견적 payload 계약 4개를 검증하며 모두 통과한다.
+- FE [#8](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/8)은 역할별 실행 계약 Playwright와 CI를 추가했고, FE [#9](https://github.com/SEQRETE-TUK/SEQRET_FE/pull/9)는 pending 업체·현장기사의 보호 API 선호출과 인증 초기화를 차단했다. INT-09 session·다중 목록·PATCH 계약에 대한 FE test는 별도로 추가해야 한다.
 - FE 작업 지침은 실제 Vite source에 맞는 `AGENTS.md`로 정정됐다. access secret은 호출 시 메모리에서만 전달하고, signed URL·header와 함께 영구 저장소·로그에 남기지 않는 규칙을 포함한다.
-- FE quality CI와 2026-08-19 14:01 KST Vercel Production 배포는 성공했다. generated URL은 Vercel SSO로 보호되지만 공개 alias `https://seqret.vercel.app`은 200으로 열린다. 공개 asset 3개의 SHA-256은 `cfe42966`을 `VITE_MOCK_API=true`로 재현 빌드한 결과와 모두 일치하고 화면도 `Mock 모드`를 표시한다. 따라서 다음 backend 배포에서 API·GCS CORS를 이 origin으로 교체한 뒤 FE를 `VITE_MOCK_API=false`와 실제 `VITE_API_BASE_URL`로 재배포해야 live E2E가 가능하다. 저장소 homepage의 `https://seqret-fe.vercel.app`은 현재 `DEPLOYMENT_NOT_FOUND` 404다.
+- 프론트 운영 설정은 프론트 담당자가 `VITE_API_BASE_URL=https://<backend-origin>`, `VITE_MOCK_API=false`로 적용한다. 백엔드는 canonical FE origin을 API·GCS CORS에 정확히 맞추고 credential preflight를 검증한다. Vercel과 현재 `sslip.io`는 cross-site이므로 브라우저 cookie 정책까지 고려하면 같은 site의 custom FE/API domain이 안전하다.
 - 최신 FE와 로컬 backend를 직접 연결한 브라우저 검증은 고객 onboarding `201` → 기본명 `이사업체 담당자` 초대 `201` → 이사 취소 `204` → 기존 고객 token `401`까지 통과했다. 확인서 탭 재진입 때 FE가 pending 초대를 다시 생성해 `409`와 비활성 공유 버튼을 표시하는 잔여 문제가 있으므로, FE가 invitation 조회 결과에 따라 최초 발급과 재발급을 구분해야 한다.
 
 ## B 트랙 인계
@@ -66,6 +69,7 @@
 
 ## 외부 활성화 전 확인
 
+- **NHN 알림:** 코드·Terraform·workflow는 Email·SMS·알림톡 발송을 지원하지만 실제 app key·secret, 등록 발신자, 40자 알림톡 sender key와 `#{message}`·`#{deepLink}` 승인 템플릿은 저장소 밖에서 준비해야 한다. 기본 `NOTIFICATION_DELIVERY_ENABLED=false`로 먼저 배포하고, Secret Manager ID와 GitHub staging 변수를 모두 검증한 별도 rollout에서 활성화한 뒤 채널별 실제 수신 canary를 수행한다. 로컬 fake 성공은 운영 발송 증거가 아니다.
 - **GCS:** staging private bucket `seqret-stg-20260813-media`, `MEDIA_BUCKET_NAME`과 runtime IAM이 준비됐다. 시간 제한 Vercel canary 뒤 bucket CORS는 API와 함께 `https://34-160-87-130.sslip.io`로 원복했다. 실제 FE origin을 확정하면 둘을 함께 교체하고 브라우저 preflight와 create-only upload를 다시 검증한다.
 - **Redis:** [#109](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/109)에서 `seqret-stg-cache`(Basic 1 GiB, Redis 7.2, AUTH, persistence 없음, `allkeys-lru`)와 `seqret-redis-url`을 활성화했다. API만 `default` network·regional subnet의 Direct VPC `private-ranges-only` egress를 사용하고 worker는 Redis Secret과 VPC attachment를 받지 않는다. 서울 Basic M1 단가는 2026-08-16 Catalog 기준 USD 0.065/GiB-hour, 730시간 약 USD 47.45다. 정상 canary는 Memorystore `eval`·`incr` metric으로 연결을 증명했고, 통제된 장애 canary는 PostgreSQL 원본 제한으로 `200`을 유지하며 `access_rate_limit_cache_fallback` WARNING을 남겼다.
 - **DB 역할:** [#110](https://github.com/SEQRETE-TUK/SEQRET_BE/issues/110)에서 migration/API/worker/relay/recovery 역할과 Secret을 분리해 staging cutover를 완료했다. 35개 application table은 `seqret_migration`이 소유하고 세 runtime은 `SELECT`·`INSERT`·`UPDATE`만, recovery는 `SELECT`와 session read-only만 가진다. 두 번의 rollout으로 stable·rollback revision까지 전용 Secret으로 교체한 뒤 legacy credential을 회전하고 기존 Secret version을 비활성화했다. runtime DDL·audit 변경·recovery write 차단, 실제 worker import·relay 발행과 전용 recovery credential PITR를 검증했다.

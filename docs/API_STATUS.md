@@ -5,7 +5,7 @@
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `cfe42966072adc60505f6f50ecd491482631b33d`
+> `bcd898e41fe72e2d4cec9207dabecb9fffcad197`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -15,14 +15,14 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 62개 | 53개 path의 업무 operation 59개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 70개 | 57개 path의 업무 operation 67개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 실제 API 연동 범위 | capture + 3역할 | 촬영·분석과 고객·업체·현장기사의 초대, 범위·변경, 배차·체크인, 완료 흐름을 query·mutation으로 호출; 별도 signed PUT 포함 |
 | 기존 8화면 기준 backend 목표 API | 17개 | 16개 구현; 화면용 `media-uploads` adapter만 조건부 잔여 |
 | 승인된 P0 화면 포함 backend 목표 API | 19개 | 18개 구현; 완료 제출과 고객 결정 포함 |
 | 남은 목표 API | 1개 | 기존 capture 상태 전이를 보존할 upload adapter만 조건부 잔여 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 59개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 67개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -42,17 +42,17 @@
 
 | 항목 | 확인 결과 | backend 판단 |
 | --- | --- | --- |
-| runtime | Vite 8.2.1, React 19.2.4, TypeScript | 최신 `cfe42966` lockfile·production build 기준 |
+| runtime | Vite 8.2.1, React 19.2.4, TypeScript | 최신 `bcd898e4` lockfile·source 기준 |
 | 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 역할별 업무 경로와 capture가 실제 API client를 사용하고 design system만 독립 시각 경로 |
 | 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | PRD 수치는 시각 범위이며 현재 역할별 runtime workflow 수와 동일하지 않음 |
 | server state | TanStack Query 기반 역할별 query·mutation·polling, command replay와 `409` refetch | 초대 pending 동안 보호 API를 호출하지 않으며 수락 뒤 역할 업무 query를 활성화함 |
-| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | capture·초대·scope·change·dispatch·completion 실행 계약을 화면에 연결함 |
-| CI·배포 | FE quality CI와 2026-08-19 14:01 KST Vercel Production 배포 성공 | 공개 alias는 `https://seqret.vercel.app`; 배포 asset은 `cfe42966`을 `VITE_MOCK_API=true`로 빌드한 결과와 SHA-256이 일치하므로 아직 backend와 연결되지 않음 |
+| API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | 일반 API도 `credentials: "omit"`이므로 workspace cookie 연동 전환이 필요하고 signed PUT만 omit 유지 |
+| 다중 목록·기본정보 | mock 다중 목록과 메모리 provider connection, `sessionStorage` 기본정보 초안 | INT-09 서버 session·`GET /move-jobs`·`PATCH /move-jobs/{id}`로 전환 필요 |
+| CI·배포 | FE Vercel 배포는 프론트 담당 범위 | 운영 환경값은 `VITE_API_BASE_URL=https://<backend-origin>`, `VITE_MOCK_API=false`; 백엔드는 FE 설정을 변경하지 않음 |
 
-`f8d9f338` 이후 2차 대조 대상인 `cfe42966`은 고객 이름을 입력받아 기존 onboarding
-`customer_display_name`에 전달하고 mock 목록을 개인화한다. 새 endpoint·method·request field는
-추가하지 않았으며 현재 backend의 필수 문자열·최대 100자 계약과 일치한다. 공개 Vercel 화면도
-이 변경을 포함하지만 `Mock 모드`로 표시되며 실제 API 요청은 발생하지 않는다.
+최신 대조 대상 `bcd898e4`는 고객 이름을 기존 onboarding `customer_display_name`에 전달하고
+mock 목록을 개인화한다. 역할별 업무 API는 연결됐지만 세션·목록·기본정보 수정은 아직 INT-09
+계약을 호출하지 않는다. 정확한 FE 변경점은 [INT-09 FE 인계](INT_09_FRONTEND_HANDOFF.md)에 있다.
 
 ### 3.2 계약 불일치
 
@@ -61,7 +61,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/media-consent-policy`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins`, `/completion-*` 등 59개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/sessions`, `/session/contact-points`, `/move-jobs`, `/invitations`, `/media-consent-policy`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins`, `/completion-*` 등 67개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -109,11 +109,14 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 고객·업체가 최초 사진을 직접 등록 | 화면용 `capture-submissions` adapter | 현재 저수준 capture 생성·upload·complete·submit·status 계약을 한 화면 command/view로 감쌀 때만 추가 |
 | 소비자가 작업을 직접 생성 | `POST /api/v1/move-jobs/onboarding` | 구현. 고객 참여자와 고객 secret 하나만 발급 |
 | 소비자가 업체를, 업체가 현장기사를 초대 | `/me`, invitation 생성·목록·수락·거절·폐기·재발급 | 구현. pending 업무 접근 차단과 상위 철회 cascade 포함 |
+| 역할별 여러 작업과 새로고침 복원 | `/sessions`, `/session`, `GET /move-jobs` | 구현. 30일 HttpOnly cookie, CSRF, 동일 역할 멤버십 목록·검색·필터 포함 |
+| 고객 기본정보 서버 수정 | `PATCH /api/v1/move-jobs/{job_id}` | 구현. 견적·완료·취소 및 잠긴 범위 전 제목·일정·표시 위치·구조화 조건을 허용하고 v2 조건은 새 불변 snapshot에 반영 |
+| 실제 이메일·SMS·카카오 전달 | contact-point API와 relay NHN adapter | 구현. 명시적 동의, lease·재시도·provider 결과 검증 포함; 실제 credential 활성화·수신 canary는 운영 선행조건 |
 
 현장 변경 화면을 지원하기 위해 목표 17개 밖의 업체용 `GET /field-issues`,
 `POST /change-proposals`, `POST /change-proposals/{id}/explanation`도 실행 계약으로 등록됐다.
 
-## 5. 현재 서버 업무 operation 59개
+## 5. 현재 서버 업무 operation 67개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -121,6 +124,12 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | --- | --- | --- |
 | `POST /api/v1/move-jobs/onboarding` | 소비자 작업과 소비자 capability 하나 생성 | 실제 소비자 onboarding 생성 경로로 사용 |
 | `GET /api/v1/me` | 현재 역할·초대 상태·허용 기능 조회 | 역할별 landing에서 사용 |
+| `POST /api/v1/sessions` | active 역할 link를 서버 작업공간 계정에 연결 | 최초 연결과 동일 역할의 추가 작업 연결에 사용 |
+| `GET /api/v1/session` | HttpOnly cookie로 계정·멤버십·CSRF 복원 | 앱 시작·새로고침 query로 사용 |
+| `DELETE /api/v1/session` | 현재 workspace session 철회 | cookie + CSRF 로그아웃 command |
+| `GET /api/v1/session/contact-points` | 마스킹된 외부 알림 연락처 목록 | 실제 수신 설정 화면 query |
+| `PUT /api/v1/session/contact-points/{channel}` | 명시적 동의 연락처 저장·교체 | 이메일 또는 한국 `+82` SMS·카카오 destination 등록 |
+| `DELETE /api/v1/session/contact-points/{channel}` | 연락처 철회와 미발송 row 중단 | cookie + CSRF command |
 | `POST /api/v1/move-jobs/{job_id}/invitations` | 다음 역할 참여자와 pending capability 생성 | 소비자→업체, 수락 업체→현장기사만 허용 |
 | `GET /api/v1/move-jobs/{job_id}/invitations` | 본인이 발급했거나 받은 초대 상태 조회 | 초대 관리 화면에서 사용 |
 | `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/accept` | 받은 초대 수락 | 수락 뒤에만 일반 업무 권한 활성화 |
@@ -128,7 +137,9 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/revoke` | 발급한 초대 폐기 | link와 하위 초대 즉시 철회 |
 | `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 발급한 초대 재발급 | 기존 link·하위 초대를 철회하고 pending link 한 번 반환 |
 | `POST /api/v1/move-jobs` | 작업과 정확히 세 역할의 초기 capability 생성 | 신뢰 bootstrap·전달 채널 결정 전 일반 frontend 연동에서 제외 |
+| `GET /api/v1/move-jobs` | workspace 다중 작업 목록·검색·상태·예정일 필터 | 고객·업체·기사 목록과 완료 기록의 서버 원본 |
 | `GET /api/v1/move-jobs/{job_id}` | 작업·참여자·공간 구성 조회 | 화면별 view에 필요한 header만 재사용 |
+| `PATCH /api/v1/move-jobs/{job_id}` | 고객의 견적 전 기본정보 부분 수정 | sessionStorage 초안을 대체하고 감사 event 기록 |
 | `DELETE /api/v1/move-jobs/{job_id}` | 고객의 견적 전 작업 취소와 모든 작업 capability 철회 | FE 작업 삭제 버튼의 실행 계약; 이력은 물리 삭제하지 않고 `CANCELED`로 보존 |
 | `POST /api/v1/move-jobs/{job_id}/participants/{participant_id}/access-links` | 역할 link 재발급 | private bootstrap·운영으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/access-links/{access_link_id}/revoke` | 역할 link와 위임한 하위 초대 철회 | private bootstrap·운영으로 유지 |
@@ -174,7 +185,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/completion-confirmations` | 고객·업체 완료 확인 | 고객 완료 결정과 업체 완료 요청 흐름으로 재구성 |
 | `GET /api/v1/move-jobs/{job_id}/completion-confirmations` | 완료 확인 이력 조회 | `completion-summary`에 흡수 |
 | `GET /api/v1/move-jobs/{job_id}/audit-events` | 전체 감사 이력 조회 | 내부 유지; 화면에는 필요한 요약만 제공 |
-| `GET /api/v1/move-jobs/{job_id}/notifications` | 참여자 알림 이력 조회 | 알림함 화면이 없어 frontend에서 제외 |
+| `GET /api/v1/move-jobs/{job_id}/notifications` | 참여자 in-app·외부 전달 상태 이력 조회 | 현재 알림함 이력에 사용; 읽음·안 읽음 처리는 제외 |
 | `POST /api/v1/move-jobs/{job_id}/background-jobs` | 보존 삭제 등 background job 생성 | 내부 운영 기능으로 유지 |
 | `GET /api/v1/move-jobs/{job_id}/background-jobs` | background job 상태·오류 조회 | 내부 운영 기능으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/background-jobs/{background_job_id}/retry` | 실패·lease 만료 job 재실행 | 내부 운영 기능으로 유지 |
@@ -183,7 +194,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 별도 complete command가 generation·MIME type·크기를 고정한 비동기 validation intent를 만든다.
 제안 `POST /media-uploads`가 complete API를 흡수하려면 이 상태 전이와 재시도 계약을 먼저
 versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idempotency-Key` 공통 header는
-없고 API CORS는 실제 공개 mutation에 필요한 `DELETE`, `GET`, `POST`, `PUT`만 허용한다. 제안 계약은
+없고 API CORS는 credential 요청과 `DELETE`, `GET`, `PATCH`, `POST`, `PUT`을 허용한다. 제안 계약은
 OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 촬영 제출은 capture 소유자에게 멱등이며 제출 뒤 추가 media mutation을 막는다. 분석 상태 API는
 `scope_version_id` 또는 provider-neutral 실패만 노출하므로, FE는 provider task ID나 오류 원문을
@@ -199,7 +210,8 @@ OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 
 ## 7. 남은 backend·연동 범위
 
-A-24까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 시각, 누적 총액과 승인된 현장 변경을 포함하는 한 장 공동확인 계약을 제공한다. 아래 항목은 FE 연동 결과나 B·외부 결정을 선행조건으로 둔 조건부 범위다.
+INT-09까지 현재 backend는 다중 작업·기본정보 수정·서버 세션·외부 전달 실행 계약을 제공한다.
+남은 항목은 FE 전환, 운영 credential 또는 실제 배포 증거이며 새 backend CRUD 공백이 아니다.
 
 ### 조건부 계약·조회 재구성
 
@@ -212,22 +224,27 @@ A-24까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 
 ### frontend 연동
 
+- 최신 FE `bcd898e4`의 일반 API·download 요청을 `credentials: "include"`로 전환하고 signed GCS PUT만 `omit`으로 유지
+- 역할 링크 검증 뒤 `/sessions`, 앱 시작 때 `/session`, 다중 목록에 `GET /move-jobs`, 고객 저장 버튼에 `PATCH /move-jobs/{id}` 연결
+- cookie mutation에 메모리 전용 `X-SEQRET-CSRF`를 붙이고 메모리 provider connection과 기본정보 `sessionStorage`를 서버 원본으로 사용하지 않도록 전환
+- Vercel과 `sslip.io`의 cross-site cookie 제한을 피하려면 운영 FE/API를 같은 site의 custom domain으로 배치
 - source에는 scope·변경·배차·완료 API query·mutation이 연결되어 있고, 현재 FE `test:e2e`의 mock 계약·secret 비저장 회귀 4개가 통과함
 - 최신 FE와 로컬 backend 실브라우저에서 고객 onboarding `201`, 기본 업체명 초대 `201`, 이사 취소 `204`, 취소 뒤 기존 token `401`을 확인함
 - 확인서 탭을 나갔다 다시 들어오면 FE가 기존 pending 초대를 조회하지 않고 `POST /invitations`를 재호출해 `409`와 비활성 공유 버튼을 표시함. 기존 secret을 backend가 복구할 수 없으므로 FE가 invitation 상태를 조회해 발급·재발급을 구분해야 함
 - 임시 HTTPS FE에서 고객 onboarding → 업체·기사 초대 → 견적·범위 확정 → 배차·체크인 → 완료 제출·요청·확정의 staging 실브라우저 E2E가 완료됨
-- 공개 alias `https://seqret.vercel.app`에 맞춰 API와 GCS CORS를 교체하고, FE를 `VITE_MOCK_API=false`와 실제 `VITE_API_BASE_URL`로 다시 배포한 뒤 signed PUT·READY polling을 브라우저에서 재검증
+- 프론트 담당자가 `VITE_MOCK_API=false`와 실제 `VITE_API_BASE_URL`로 재배포한 뒤 session cookie, signed PUT·READY polling과 역할별 목록을 브라우저에서 재검증
+- NHN Cloud 발신자·템플릿 승인과 세 Secret을 준비한 뒤 외부 delivery를 별도 rollout에서 활성화하고 실제 테스트 수신처로 채널별 canary 수행
 
 ### migration
 
-INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했고 A-23은 `a_23_0001`과 `scope_proposal.execution_plan`을 추가했다. 단일 head는 `a_23_0001`이며 A-20·A-21·A-22는 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했고 A-23은 `a_23_0001`과 `scope_proposal.execution_plan`을 추가했다. INT-09는 `int_09_0001`과 workspace account·membership·session·contact point, 기본정보 수정 감사와 외부 notification delivery 필드를 추가했다. 단일 head는 `int_09_0001`이며 A-20·A-21·A-22는 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
 
 ## 8. frontend 연동 기준
 
 - 최신 main의 비운영 `/openapi.json`만 현재 실행 계약으로 사용한다.
 - 현재 route 이름과 제안 경로를 섞어 임시 연동하지 않는다.
 - 각 최종 endpoint가 OpenAPI에 추가되고 권한·오류·중복 호출 test가 통과한 뒤 연동한다.
-- FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지하고 capability secret은 화면에서도 메모리에만 보관한다.
+- FE 공통 기반의 `VITE_API_BASE_URL`, API client와 TanStack Query 정책을 유지한다. capability secret과 CSRF token은 메모리에만 두고 workspace secret은 HttpOnly cookie로만 처리한다.
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
 - 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. FE #8은 역할별 실행 계약 Playwright 검증을 CI에 추가했고 FE #9는 pending 초대의 보호 API 선호출을 차단했다.
