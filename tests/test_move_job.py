@@ -3,6 +3,9 @@
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -16,8 +19,8 @@ from app.config import AppEnvironment, Settings
 from app.contracts.actor import ActorContext, ActorKind, ParticipantRole
 from app.contracts.primitives import JobId, ParticipantId, RequestId
 from app.main import create_app
-from app.modules.move_job.models import LocationKind
-from app.modules.move_job.router import get_move_job_endpoint
+from app.modules.move_job.models import LocationKind, MoveJobStatus
+from app.modules.move_job.router import cancel_move_job_endpoint, get_move_job_endpoint
 from app.modules.move_job.schemas import (
     CarryDistanceCondition,
     CustomerMoveJobCreate,
@@ -29,7 +32,12 @@ from app.modules.move_job.schemas import (
     ParticipantCreate,
     RoomZoneCreate,
 )
-from app.modules.move_job.service import MoveJobNotFoundError, get_move_job
+from app.modules.move_job.service import (
+    MoveJobConflictError,
+    MoveJobNotFoundError,
+    cancel_move_job,
+    get_move_job,
+)
 from app.platform.db import Base, create_session_factory
 
 
@@ -82,6 +90,13 @@ def _move_job_payload() -> dict[str, object]:
             },
         ],
     }
+
+
+def _secret(created: dict[str, Any], role: str) -> str:
+    return cast(
+        str,
+        next(link["secret"] for link in created["access_links"] if link["role"] == role),
+    )
 
 
 @pytest.mark.anyio
@@ -186,6 +201,65 @@ async def test_customer_onboarding_issues_only_the_customer_capability(
         "customer_display_name",
         "locations",
     }
+
+
+@pytest.mark.anyio
+async def test_only_customer_can_cancel_and_quote_blocks_cancellation(
+    move_job_client: AsyncClient,
+) -> None:
+    created_response = await move_job_client.post(
+        "/api/v1/move-jobs",
+        json=_move_job_payload(),
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    job_id = created["job"]["id"]
+    customer_headers = {"Authorization": f"Bearer {_secret(created, 'customer')}"}
+    manager_headers = {"Authorization": f"Bearer {_secret(created, 'company_manager')}"}
+    delete_url = f"/api/v1/move-jobs/{job_id}"
+
+    assert (await move_job_client.delete(delete_url, headers=manager_headers)).status_code == 403
+    zone_id = created["job"]["locations"][0]["room_zones"][0]["id"]
+    content = {
+        "items": [
+            {
+                "item_key": "sofa",
+                "room_zone_id": zone_id,
+                "description": "3인 소파 운반",
+            }
+        ]
+    }
+    source = await move_job_client.post(
+        f"{delete_url}/scope-versions",
+        headers=customer_headers,
+        json={"content": content},
+    )
+    assert source.status_code == 201
+    proposal = await move_job_client.post(
+        f"{delete_url}/scope-proposals",
+        headers=manager_headers,
+        json={
+            "source_scope_version_id": source.json()["id"],
+            "content": content,
+            "quote": {
+                "base_amount_krw": 500_000,
+                "adjustments": [],
+                "total_amount_krw": 500_000,
+            },
+            "execution_plan": {
+                "vehicle_count": 1,
+                "vehicle_description": "1톤 탑차",
+                "worker_count": 2,
+                "estimated_duration_minutes": 180,
+            },
+            "reason": "확정 품목 기준 견적",
+        },
+    )
+    assert proposal.status_code == 201
+
+    blocked = await move_job_client.delete(delete_url, headers=customer_headers)
+    assert blocked.status_code == 409
+    assert (await move_job_client.get(delete_url, headers=customer_headers)).status_code == 200
 
 
 def test_customer_onboarding_contract_rejects_duplicate_locations_and_naive_time() -> None:
@@ -385,4 +459,43 @@ async def test_move_job_service_and_endpoints_map_disappeared_job(
     with pytest.raises(Exception) as get_error:
         await get_move_job_endpoint(job_id, actor, session)
     assert getattr(get_error.value, "status_code", None) == 404
+
+    cancel_session = AsyncMock(spec=AsyncSession)
+    cancel_session.scalar = AsyncMock(return_value=None)
+    with pytest.raises(MoveJobNotFoundError):
+        await cancel_move_job(cancel_session, job_id, participant_id)
+
+    async def raise_cancel_missing(*_args: object) -> None:
+        raise MoveJobNotFoundError(job_id)
+
+    async def raise_cancel_conflict(*_args: object) -> None:
+        raise MoveJobConflictError(job_id)
+
+    monkeypatch.setattr("app.modules.move_job.router.cancel_move_job", raise_cancel_missing)
+    with pytest.raises(Exception) as cancel_missing:
+        await cancel_move_job_endpoint(job_id, actor, session)
+    assert getattr(cancel_missing.value, "status_code", None) == 404
+
+    monkeypatch.setattr("app.modules.move_job.router.cancel_move_job", raise_cancel_conflict)
+    with pytest.raises(Exception) as cancel_conflict:
+        await cancel_move_job_endpoint(job_id, actor, session)
+    assert getattr(cancel_conflict.value, "status_code", None) == 409
     await session.close()
+
+
+@pytest.mark.anyio
+async def test_cancel_move_job_service_handles_terminal_states_and_existing_quote() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    actor_id = uuid4()
+    job_id = uuid4()
+
+    session.scalar = AsyncMock(return_value=SimpleNamespace(status=MoveJobStatus.CANCELED))
+    await cancel_move_job(session, job_id, actor_id)
+
+    session.scalar = AsyncMock(return_value=SimpleNamespace(status=MoveJobStatus.COMPLETED))
+    with pytest.raises(MoveJobConflictError):
+        await cancel_move_job(session, job_id, actor_id)
+
+    session.scalar = AsyncMock(side_effect=[SimpleNamespace(status=MoveJobStatus.DRAFT), uuid4()])
+    with pytest.raises(MoveJobConflictError):
+        await cancel_move_job(session, job_id, actor_id)

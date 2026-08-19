@@ -102,7 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.add_middleware(
             CORSMiddleware,
             allow_origins=[runtime_context.settings.frontend_origin],
-            allow_methods=["GET", "POST", "PUT"],
+            allow_methods=["DELETE", "GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type", "traceparent"],
             expose_headers=["Retry-After", "X-Request-ID"],
         )

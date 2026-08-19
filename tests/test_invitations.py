@@ -36,6 +36,7 @@ from app.modules.access.models import (
 from app.modules.access.schemas import InvitationCreate
 from app.modules.access.service import InvalidAccessTokenError
 from app.modules.completion.models import AuditEvent, AuditEventType
+from app.modules.move_job.models import MoveJob, MoveJobStatus
 from app.platform.db import Base, create_session_factory
 
 
@@ -102,6 +103,57 @@ async def _invite(
 
 
 @pytest.mark.anyio
+async def test_canceling_unquoted_job_revokes_pending_invitation_and_all_links(
+    invitation_api: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    client, factory = invitation_api
+    created = await _onboard_customer(client, "취소할 이사")
+    job_id = created["job"]["id"]
+    customer_secret = created["customer_access_link"]["secret"]
+    issued = await _invite(
+        client,
+        job_id=job_id,
+        secret=customer_secret,
+        role="company_manager",
+        display_name="취소 대상 업체",
+    )
+    manager_secret = issued["access_link"]["secret"]
+
+    canceled = await client.delete(
+        f"/api/v1/move-jobs/{job_id}",
+        headers=_bearer(customer_secret),
+    )
+
+    assert canceled.status_code == 204
+    assert canceled.content == b""
+    assert (await client.get("/api/v1/me", headers=_bearer(customer_secret))).status_code == 401
+    assert (await client.get("/api/v1/me", headers=_bearer(manager_secret))).status_code == 401
+    async with factory() as session:
+        job = await session.get(MoveJob, UUID(job_id))
+        invitation = await session.get(
+            ParticipantInvitation,
+            UUID(issued["invitation"]["id"]),
+        )
+        access_links = tuple((await session.scalars(select(ParticipantAccessToken))).all())
+        revoked_events = tuple(
+            (
+                await session.scalars(
+                    select(AuditEvent).where(
+                        AuditEvent.job_id == UUID(job_id),
+                        AuditEvent.event_type == AuditEventType.ACCESS_LINK_REVOKED,
+                    )
+                )
+            ).all()
+        )
+    assert job is not None and job.status is MoveJobStatus.CANCELED
+    assert invitation is not None and invitation.status is InvitationStatus.REVOKED
+    assert invitation.resolved_at is not None
+    assert all(access_link.revoked_at is not None for access_link in access_links)
+    assert len(revoked_events) == 2
+    assert {event.payload.get("operation") for event in revoked_events} == {"job_canceled"}
+
+
+@pytest.mark.anyio
 async def test_customer_invites_manager_then_manager_invites_worker(
     invitation_api: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
@@ -122,13 +174,14 @@ async def test_customer_invites_manager_then_manager_invites_worker(
     assert empty.status_code == 200
     assert empty.json() == {"invitations": []}
 
-    manager_issued = await _invite(
-        client,
-        job_id=job_id,
-        secret=customer_secret,
-        role="company_manager",
-        display_name="업체 담당자",
+    manager_response = await client.post(
+        f"/api/v1/move-jobs/{job_id}/invitations",
+        json={"role": "company_manager"},
+        headers=_bearer(customer_secret),
     )
+    assert manager_response.status_code == 201
+    manager_issued = manager_response.json()
+    assert manager_issued["invitation"]["display_name"] == "이사업체 담당자"
     manager_invitation = manager_issued["invitation"]
     manager_secret = manager_issued["access_link"]["secret"]
     assert manager_invitation["status"] == "pending"
@@ -505,6 +558,7 @@ async def test_access_link_revocation_cascades_delegated_capabilities(
 
 
 def test_invitation_command_rejects_customer_and_unknown_fields() -> None:
+    assert InvitationCreate.model_validate({"role": "company_manager"}).display_name is None
     with pytest.raises(ValidationError, match="customer cannot be invited"):
         InvitationCreate.model_validate({"role": "customer", "display_name": "고객"})
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):

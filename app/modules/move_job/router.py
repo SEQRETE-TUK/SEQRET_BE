@@ -1,10 +1,12 @@
 """Move job HTTP API."""
 
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.errors import protected_error_responses
+from app.contracts.actor import ParticipantRole
 from app.modules.access.auth import CurrentActor, authorize_job_actor
 from app.modules.move_job.schemas import (
     CustomerMoveJobCreate,
@@ -14,7 +16,9 @@ from app.modules.move_job.schemas import (
     MoveJobResponse,
 )
 from app.modules.move_job.service import (
+    MoveJobConflictError,
     MoveJobNotFoundError,
+    cancel_move_job,
     create_customer_move_job,
     create_move_job,
     get_move_job,
@@ -74,3 +78,38 @@ async def get_move_job_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="move job not found"
         ) from error
+
+
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=protected_error_responses(
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
+    summary="견적 전 소비자 작업 취소",
+)
+async def cancel_move_job_endpoint(
+    job_id: UUID,
+    actor: CurrentActor,
+    session: Session,
+) -> Response:
+    authorize_job_actor(actor, job_id, frozenset({ParticipantRole.CUSTOMER}))
+    try:
+        await cancel_move_job(
+            session,
+            job_id,
+            cast(UUID, actor.participant_id),
+        )
+    except MoveJobNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="move job not found",
+        ) from error
+    except MoveJobConflictError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="quoted or completed move job cannot be canceled",
+        ) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

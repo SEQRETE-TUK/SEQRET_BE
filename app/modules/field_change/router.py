@@ -41,7 +41,13 @@ from app.platform.db.dependencies import Session
 
 router = APIRouter(prefix="/move-jobs", tags=["field-change"])
 PROPOSAL_VIEW_ROLES = frozenset({ParticipantRole.CUSTOMER, ParticipantRole.COMPANY_MANAGER})
-ISSUE_VIEW_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
+ISSUE_VIEW_ROLES = frozenset(
+    {
+        ParticipantRole.CUSTOMER,
+        ParticipantRole.COMPANY_MANAGER,
+        ParticipantRole.FIELD_WORKER,
+    }
+)
 ISSUE_REPORT_ROLES = frozenset({ParticipantRole.COMPANY_MANAGER, ParticipantRole.FIELD_WORKER})
 
 

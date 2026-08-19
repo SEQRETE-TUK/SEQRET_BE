@@ -30,7 +30,7 @@ from app.contracts.primitives import (
 from app.main import create_app
 from app.modules.access.models import InvitationStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
-from app.modules.move_job.models import JobParticipant, MoveJob
+from app.modules.move_job.models import JobParticipant, MoveJob, MoveJobStatus
 from app.modules.scope.models import ScopeApproval, ScopeVersion
 from app.modules.scope_review import service as scope_review_service
 from app.modules.scope_review.models import (
@@ -247,7 +247,7 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert draft_view.json()["approved_changes"] == []
     assert draft_view.json()["scope"]["item_count"] == 2
     assert draft_view.json()["quote"] is None
-    assert (await client.get(review_url, headers=_headers(worker_secret))).status_code == 403
+    assert (await client.get(review_url, headers=_headers(worker_secret))).status_code == 404
 
     payload = _proposal_payload(created, source["id"])
     proposed = await client.post(
@@ -391,6 +391,12 @@ async def test_scope_review_quote_revision_and_confirmation_flow(
     assert final_view.json()["scope"]["locked_at"] is not None
     assert final_view.json()["customer_confirmed_at"] == confirmed.json()["confirmed_at"]
     assert final_view.json()["revision_request"] is None
+    worker_view = await client.get(review_url, headers=_headers(worker_secret))
+    assert worker_view.status_code == 200
+    assert worker_view.json()["job"]["viewer_role"] == "field_worker"
+    assert worker_view.json()["scope"]["locked_at"] is not None
+    assert worker_view.json()["scope"]["status"] == "confirmed"
+    assert worker_view.json()["quote"] == final_view.json()["quote"]
     assert (
         await client.post(
             proposals_url,
@@ -942,6 +948,46 @@ def test_scope_review_preserves_legacy_proposal_without_execution_plan() -> None
     proposal = cast(ScopeProposal, SimpleNamespace(execution_plan=None))
 
     assert scope_review_service._execution_plan_from_proposal(proposal) is None
+
+
+@pytest.mark.anyio
+async def test_scope_proposal_rejects_missing_or_terminal_job_before_scope_lookup() -> None:
+    source_id = uuid4()
+    zone_id = uuid4()
+    command = ScopeProposalCreate.model_validate(
+        {
+            "source_scope_version_id": str(source_id),
+            "content": {
+                "items": [
+                    {
+                        "item_key": "sofa",
+                        "room_zone_id": str(zone_id),
+                        "description": "3인 소파 운반",
+                    }
+                ]
+            },
+            "quote": {
+                "base_amount_krw": 1,
+                "adjustments": [],
+                "total_amount_krw": 1,
+            },
+            "execution_plan": {
+                "vehicle_count": 1,
+                "vehicle_description": "1톤 탑차",
+                "worker_count": 1,
+                "estimated_duration_minutes": 30,
+            },
+            "reason": "테스트 견적",
+        }
+    )
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar = AsyncMock(return_value=None)
+    with pytest.raises(ScopeReviewNotFoundError):
+        await create_scope_proposal(session, uuid4(), uuid4(), command)
+
+    session.scalar = AsyncMock(return_value=MoveJobStatus.CANCELED)
+    with pytest.raises(ScopeReviewConflictError):
+        await create_scope_proposal(session, uuid4(), uuid4(), command)
 
 
 def test_scope_proposal_contract_rejects_invalid_money_and_classification() -> None:

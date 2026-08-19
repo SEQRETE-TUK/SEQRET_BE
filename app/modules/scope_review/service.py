@@ -29,6 +29,7 @@ from app.modules.move_job.models import (
     Location,
     LocationKind,
     MoveJob,
+    MoveJobStatus,
 )
 from app.modules.scope.models import (
     ChangeRequest,
@@ -345,6 +346,14 @@ async def create_scope_proposal(
 ) -> ScopeProposalResponse:
     """Create one immutable quoted child scope, replaying an identical request safely."""
 
+    job_status = await session.scalar(
+        select(MoveJob.status).where(MoveJob.id == job_id).with_for_update()
+    )
+    if job_status is None:
+        raise ScopeReviewNotFoundError(job_id)
+    if job_status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
+        raise ScopeReviewConflictError(job_id)
+
     source = await session.scalar(
         select(ScopeVersion)
         .where(
@@ -614,6 +623,8 @@ async def get_scope_review(
     if viewer is None or viewer.role is not role:
         raise ScopeReviewNotFoundError(job_id)
     current = await _current_scope_version(session, job_id)
+    if role is ParticipantRole.FIELD_WORKER and current.locked_at is None:
+        raise ScopeReviewNotFoundError(current.id)
     versions = (
         await session.scalars(
             select(ScopeVersion)

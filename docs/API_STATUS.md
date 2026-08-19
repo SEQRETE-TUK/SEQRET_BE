@@ -1,11 +1,11 @@
 # SEQRET MVP API 구현 현황
 
-> 기준일: 2026-08-17
+> 기준일: 2026-08-19
 >
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `58ccfd0fa27353de7676f2251a96d0701f5a5aea`
+> `cfe42966072adc60505f6f50ecd491482631b33d`
 >
 > 관련 문서: [API 명세](API_SPEC.md), [추가 화면 요청서](FRONTEND_SCREEN_REQUEST.md)
 >
@@ -15,14 +15,14 @@
 
 | 구분 | 수량 | 의미 |
 | --- | ---: | --- |
-| 현재 FastAPI 등록 operation | 61개 | 53개 path의 업무 operation 58개 + 운영 operation 3개 |
+| 현재 FastAPI 등록 operation | 62개 | 53개 path의 업무 operation 59개 + 운영 operation 3개 |
 | 최신 FE가 선언한 시각 demo 화면 | 27개 | 소비자 12 + 업체 mobile 6 + 업체 web 4 + 작업자 5; API E2E 증거 아님 |
 | FE 실제 API 연동 범위 | capture + 3역할 | 촬영·분석과 고객·업체·현장기사의 초대, 범위·변경, 배차·체크인, 완료 흐름을 query·mutation으로 호출; 별도 signed PUT 포함 |
 | 기존 8화면 기준 backend 목표 API | 17개 | 16개 구현; 화면용 `media-uploads` adapter만 조건부 잔여 |
 | 승인된 P0 화면 포함 backend 목표 API | 19개 | 18개 구현; 완료 제출과 고객 결정 포함 |
 | 남은 목표 API | 1개 | 기존 capture 상태 전이를 보존할 upload adapter만 조건부 잔여 |
 
-현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 58개 업무 operation과
+현재 route가 많다고 frontend 준비가 끝난 것은 아니다. frontend는 현재 59개 업무 operation과
 [API 명세](API_SPEC.md), FE PRD 부록의 제안 경로를 혼용하지 않는다. 제품 범위와 A 소유 계약을
 고정하고 OpenAPI에 구현한 경로만 연동한다. B 소유 Port·event·AI 결과 schema가 변하는 경우에만
 해당 영향 범위를 별도로 조정한다.
@@ -42,12 +42,17 @@
 
 | 항목 | 확인 결과 | backend 판단 |
 | --- | --- | --- |
-| runtime | Vite 7, React 19, TypeScript | `TECH_STACK.md`의 Vite 선택과 일치 |
+| runtime | Vite 8.2.1, React 19.2.4, TypeScript | 최신 `cfe42966` lockfile·production build 기준 |
 | 사용자 경로 | `/`, `/consumer/capture`, `/provider`, `/provider/web`, `/crew`, `/design-system` | 역할별 업무 경로와 capture가 실제 API client를 사용하고 design system만 독립 시각 경로 |
 | 화면·상태 | PRD 기준 27개 화면과 `screen`, `view`, `state` query variant | PRD 수치는 시각 범위이며 현재 역할별 runtime workflow 수와 동일하지 않음 |
 | server state | TanStack Query 기반 역할별 query·mutation·polling, command replay와 `409` refetch | 초대 pending 동안 보호 API를 호출하지 않으며 수락 뒤 역할 업무 query를 활성화함 |
 | API 기반 | `VITE_API_BASE_URL`, `/api/v1` 제한, 명시적 Bearer, opaque signed PUT client 존재 | capture·초대·scope·change·dispatch·completion 실행 계약을 화면에 연결함 |
-| CI·배포 | FE #8·#9 포함 필수 CI 성공, Playwright 6개 통과; deployment와 environment 0개 | 자동 계약 검증은 있으나 canonical HTTPS origin·영구 배포는 없음 |
+| CI·배포 | FE quality CI와 2026-08-19 14:01 KST Vercel Production 배포 성공 | 공개 alias는 `https://seqret.vercel.app`; 배포 asset은 `cfe42966`을 `VITE_MOCK_API=true`로 빌드한 결과와 SHA-256이 일치하므로 아직 backend와 연결되지 않음 |
+
+`f8d9f338` 이후 2차 대조 대상인 `cfe42966`은 고객 이름을 입력받아 기존 onboarding
+`customer_display_name`에 전달하고 mock 목록을 개인화한다. 새 endpoint·method·request field는
+추가하지 않았으며 현재 backend의 필수 문자열·최대 100자 계약과 일치한다. 공개 Vercel 화면도
+이 변경을 포함하지만 `Mock 모드`로 표시되며 실제 API 요청은 발생하지 않는다.
 
 ### 3.2 계약 불일치
 
@@ -56,7 +61,7 @@
 | base path | `https://api.{service}.kr/v1` | `/api/v1` |
 | 역할 | `consumer`, `provider`, `crew` | `customer`, `company_manager`, `field_worker` |
 | 오류 body | `{error: {code, message, request_id}}` | FastAPI `detail`; 일부 응답에 `x-request-id` |
-| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/media-consent-policy`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins`, `/completion-*` 등 58개 operation |
+| 업무 경로 | `/jobs`, `/change-orders`, `/assignment`, `/completion/*` 등 | `/move-jobs`, `/invitations`, `/media-consent-policy`, `/capture-sessions/*/submit`, `/analysis-review`, `/scope-review`, `/dispatch`, `/field-brief`, `/check-ins`, `/completion-*` 등 59개 operation |
 | upload 완료 | `/media` 또는 `/completion/media` 한 단계처럼 기술 | URL 발급 후 opaque headers PUT, 별도 complete command와 비동기 validation |
 
 FE PRD 부록은 화면 요구를 설명하는 대안 제안이며 OpenAPI나 구현 증거가 아니다. 특히 현재
@@ -76,23 +81,23 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 업체 범위 | `POST /api/v1/move-jobs/{job_id}/scope-proposals` | 범위·금액·실행계획을 고객에게 전송 | 구현 | 범위 v1·v2, 원화 견적, 차량·인원·예상시간, 포함·제외·사유를 저장하고 업체 확인을 함께 기록 |
 | 고객 AI 검토 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 업로드와 AI 검토 초안 조회 | 구현 | v1/v2 품목, 위치조건 snapshot·AI 제안과 공간별 media 수를 provider-neutral view로 반환 |
 | 고객 AI 검토 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 수정 결과를 업체 검토 초안으로 제출 | 구현 | 구조화 품목·전체 위치조건 고객 편집본을 불변 자식으로 생성하고 동일 payload 재전송은 멱등 처리 |
-| 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 구현 | 변경요청·견적 snapshot과 generation-pinned READY preview를 한 view로 반환 |
+| 고객 변경 승인 | `GET /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}` | 현장 변경 사유, 증빙, 금액 조회 | 구현 | 변경요청·견적 snapshot과 generation-pinned UPLOADED·READY preview를 한 view로 반환; 승인은 READY에서만 처리 |
 | 고객 변경 승인 | `POST /api/v1/move-jobs/{job_id}/change-proposals/{proposal_id}/decision` | 승인·거절·설명 요청 | 구현 | 고객 전용 결정, 정확 replay, 승인 시 양측 확인·scope lock을 원자적으로 수행 |
 | 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 구현 | 현재 범위에 묶인 작업별 immutable 후보 snapshot, 요구사항·충돌·선택 상태 반환 |
 | 업체 배차 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 배정 확정과 알림 생성 | 구현 | 용량·인원·기술·자격·대표 기사를 원자 검증하고 `dispatch_confirmed.v1` 알림 연결 |
-| 업체·고객 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 요청·문서 요약 | 구현 | 업체와 요청받은 고객의 단일 view; READY generation-pinned preview 포함 |
+| 업체·고객 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 요청·문서 요약 | 구현 | 업체와 요청받은 고객의 단일 view; 체크리스트 항목과 UPLOADED·READY generation-pinned preview 포함, 최종 확인은 READY에서만 처리 |
 | 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 7일 완료 확인 요청 | 구현 | 최신 제출·활성 요청·정확 replay 검증과 고객 알림 intent 연결 |
 | 업체 완료 | `GET /api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF 4종·manifest ZIP 다운로드 | 구현 | 결정적 archive; 준비 전 `409`, 완료 DB 사실과 생성 실패 분리 |
 | 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 구현 | 확정 배정·현재 잠긴 범위·마스킹 위치·checklist와 체크인 상태를 한 view로 반환 |
 | 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 구현 | 배정된 대표 기사, 예정일 당일과 checklist 전체 확인을 검증하고 정확 replay 허용 |
 | 현장기사 이슈 | `POST /api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 signed upload URL 발급 | 전환 | 기존 capture 3단계와 `StoragePort` 재사용; frontend path 단순화 |
-| 현장 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 보고자 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 업체·기사 시작 가능, 제안 전 READY 필수 |
+| 현장 이슈 | `POST /api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업·파손 위험·현장 장애 보고 | 구현 | 잠긴 범위와 보고자 소유 UPLOADED·READY 증거를 검증하고 무가격 이슈와 업체 견적 단계를 분리; 고객도 목록 조회 가능하고 승인은 READY 필수 |
 
 ### 4.2 승인된 추가 P0 화면 2개
 
 | 화면 | Method · Path | 용도 | 상태 | 재사용 기반·남은 일 |
 | --- | --- | --- | --- | --- |
-| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 구현 | 체크인·현재 배차·범위·작업자·선택적 READY 미디어 검증과 정정 제출 지원 |
+| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 구현 | 체크인·현재 배차·범위·작업자·선택적 upload-complete 미디어 검증과 정정 제출 지원; 고객 최종 확인은 READY 필수 |
 | 고객 완료 확인 | `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 문제 신고 | 구현 | 책임 자동판단 없이 문제를 분리하고 확인 시 완료·보존 intent를 원자 반영 |
 
 두 P0 API는 승인되어 [API 명세](API_SPEC.md)와 OpenAPI에 편입됐다. 목표 19개 중 화면용 upload adapter를 제외한 18개가 구현됐다.
@@ -108,7 +113,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 현장 변경 화면을 지원하기 위해 목표 17개 밖의 업체용 `GET /field-issues`,
 `POST /change-proposals`, `POST /change-proposals/{id}/explanation`도 실행 계약으로 등록됐다.
 
-## 5. 현재 서버 업무 operation 58개
+## 5. 현재 서버 업무 operation 59개
 
 이 표는 현재 호출 가능한 API의 용도와 최종 처리 방향이다. `유지`는 frontend 공개 유지를 뜻하지 않고 내부 bootstrap·운영 용도로 보존한다는 의미다.
 
@@ -124,6 +129,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/invitations/{invitation_id}/reissue` | 발급한 초대 재발급 | 기존 link·하위 초대를 철회하고 pending link 한 번 반환 |
 | `POST /api/v1/move-jobs` | 작업과 정확히 세 역할의 초기 capability 생성 | 신뢰 bootstrap·전달 채널 결정 전 일반 frontend 연동에서 제외 |
 | `GET /api/v1/move-jobs/{job_id}` | 작업·참여자·공간 구성 조회 | 화면별 view에 필요한 header만 재사용 |
+| `DELETE /api/v1/move-jobs/{job_id}` | 고객의 견적 전 작업 취소와 모든 작업 capability 철회 | FE 작업 삭제 버튼의 실행 계약; 이력은 물리 삭제하지 않고 `CANCELED`로 보존 |
 | `POST /api/v1/move-jobs/{job_id}/participants/{participant_id}/access-links` | 역할 link 재발급 | private bootstrap·운영으로 유지 |
 | `POST /api/v1/move-jobs/{job_id}/access-links/{access_link_id}/revoke` | 역할 link와 위임한 하위 초대 철회 | private bootstrap·운영으로 유지 |
 | `GET /api/v1/move-jobs/{job_id}/media-consent-policy` | 현재 동의문 버전·처리 목적·보관기간 조회 | 촬영 전 동의 화면의 server source |
@@ -177,7 +183,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 별도 complete command가 generation·MIME type·크기를 고정한 비동기 validation intent를 만든다.
 제안 `POST /media-uploads`가 complete API를 흡수하려면 이 상태 전이와 재시도 계약을 먼저
 versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idempotency-Key` 공통 header는
-없고 API CORS는 실제 공개 mutation에 필요한 `GET`, `POST`, `PUT`만 허용한다. 제안 계약은
+없고 API CORS는 실제 공개 mutation에 필요한 `DELETE`, `GET`, `POST`, `PUT`만 허용한다. 제안 계약은
 OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 촬영 제출은 capture 소유자에게 멱등이며 제출 뒤 추가 media mutation을 막는다. 분석 상태 API는
 `scope_version_id` 또는 provider-neutral 실패만 노출하므로, FE는 provider task ID나 오류 원문을
@@ -206,9 +212,11 @@ A-24까지 현재 `scope-review`는 업체 참여 상태, 범위 hash·잠금 �
 
 ### frontend 연동
 
-- scope·변경·배차·완료 화면의 실제 API query·mutation 연동과 역할별 mock browser 회귀 6개는 완료됨
+- source에는 scope·변경·배차·완료 API query·mutation이 연결되어 있고, 현재 FE `test:e2e`의 mock 계약·secret 비저장 회귀 4개가 통과함
+- 최신 FE와 로컬 backend 실브라우저에서 고객 onboarding `201`, 기본 업체명 초대 `201`, 이사 취소 `204`, 취소 뒤 기존 token `401`을 확인함
+- 확인서 탭을 나갔다 다시 들어오면 FE가 기존 pending 초대를 조회하지 않고 `POST /invitations`를 재호출해 `409`와 비활성 공유 버튼을 표시함. 기존 secret을 backend가 복구할 수 없으므로 FE가 invitation 상태를 조회해 발급·재발급을 구분해야 함
 - 임시 HTTPS FE에서 고객 onboarding → 업체·기사 초대 → 견적·범위 확정 → 배차·체크인 → 완료 제출·요청·확정의 staging 실브라우저 E2E가 완료됨
-- canonical HTTPS origin 구매·배포 뒤 API와 GCS CORS를 실제 origin으로 교체하고 signed PUT·READY polling을 브라우저에서 재검증
+- 공개 alias `https://seqret.vercel.app`에 맞춰 API와 GCS CORS를 교체하고, FE를 `VITE_MOCK_API=false`와 실제 `VITE_API_BASE_URL`로 다시 배포한 뒤 signed PUT·READY polling을 브라우저에서 재검증
 
 ### migration
 
@@ -223,4 +231,4 @@ INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `
 - 화면 조회는 여러 CRUD 호출을 조합하지 않고 화면별 `GET` 한 번을 기본으로 한다.
 - CTA 하나는 command endpoint 하나에 대응한다.
 - 촬영 E2E는 FE #4, `analysis-review` 조회·완료는 FE #5, 충돌 복구는 FE #6으로 연결됐다. FE #8은 역할별 실행 계약 Playwright 검증을 CI에 추가했고 FE #9는 pending 초대의 보호 API 선호출을 차단했다.
-- 2026-08-16의 임시 HTTPS canary가 끝난 뒤 API와 GCS CORS는 `https://34-160-87-130.sslip.io`로 원복했다. canonical FE origin이 생길 때 둘을 함께 교체한다.
+- 2026-08-16의 임시 HTTPS canary가 끝난 뒤 API와 GCS CORS는 `https://34-160-87-130.sslip.io`로 원복했다. 현재 canonical FE origin은 `https://seqret.vercel.app`이며 다음 backend 배포에서 둘을 함께 교체한다.

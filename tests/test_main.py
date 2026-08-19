@@ -43,6 +43,7 @@ def test_protected_api_openapi_documents_reachable_http_errors() -> None:
     route_failures = {
         ("get", "/api/v1/me"): set(),
         ("get", job_path): set(),
+        ("delete", job_path): {403, 409},
         ("post", f"{job_path}/invitations"): {403, 409},
         ("get", f"{job_path}/invitations"): {403},
         ("post", f"{job_path}/invitations/{{invitation_id}}/accept"): {409},
@@ -199,6 +200,14 @@ def test_cors_allows_only_the_configured_browser_origin() -> None:
                 "Access-Control-Request-Headers": "authorization,content-type,traceparent",
             },
         )
+        delete_allowed = client.options(
+            "/api/v1/move-jobs/00000000-0000-4000-8000-000000000000",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
         rejected = client.options(
             "/api/v1/move-jobs",
             headers={
@@ -210,6 +219,9 @@ def test_cors_allows_only_the_configured_browser_origin() -> None:
     assert allowed.status_code == 200
     assert allowed.headers["access-control-allow-origin"] == origin
     assert "PUT" in allowed.headers["access-control-allow-methods"]
+    assert delete_allowed.status_code == 200
+    assert delete_allowed.headers["access-control-allow-origin"] == origin
+    assert "DELETE" in delete_allowed.headers["access-control-allow-methods"]
     assert allowed.headers.get("access-control-allow-credentials") != "true"
     assert rejected.status_code == 400
     assert "access-control-allow-origin" not in rejected.headers

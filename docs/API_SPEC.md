@@ -2,12 +2,12 @@
 
 > 상태: 목표 계약 문서. 구현으로 표시한 경로만 현재 실행 계약
 >
-> 기준일: 2026-08-17
+> 기준일: 2026-08-19
 >
 > backend 기능 기준 코드: 이 문서를 포함한 최신 `main`
 >
 > frontend 확인 기준: `SEQRETE-TUK/SEQRET_FE` `origin/main`
-> `58ccfd0fa27353de7676f2251a96d0701f5a5aea`
+> `cfe42966072adc60505f6f50ecd491482631b33d`
 >
 > 실행 계약의 단일 원본: 최신 `main` 코드와 비운영 환경의 `/openapi.json`
 
@@ -21,11 +21,13 @@
 - [업체 화면 3개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-176): 작업범위 검토·확정, 배차·인력 배정, 완료·변경 내역
 - [현장기사 화면 2개](https://www.figma.com/design/5O1rDwIOxzdb0iW8Aa5K5m/?node-id=88-691): 현장 상세·체크인, 변경·이슈 보고
 
-2026-08-16에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/58ccfd0fa27353de7676f2251a96d0701f5a5aea)는
+2026-08-19에 확인한 [최신 frontend](https://github.com/SEQRETE-TUK/SEQRET_FE/tree/cfe42966072adc60505f6f50ecd491482631b33d)는
 Vite·React 19 기반이며, 자체 PRD가 소비자 12개·업체 mobile 6개·업체 web 4개·작업자 5개인
 총 27개 demo 화면을 선언한다. 실제 source에는 역할 진입, 소비자 `screen=1..15`, 업체 mobile
 `screen=0..5`, 업체 web `view=cases|quote|assign|operate`, 작업자 `screen=0..4`와 다수의
 `state` query variant가 있다. 이 수치는 시각 demo 범위이며 backend E2E 완료 수가 아니다.
+최신 변경은 역할 진입에서 받은 고객명을 기존 onboarding의 필수 `customer_display_name`으로
+전달한다. backend는 이 값을 고객 participant 표시명과 이후 범위·완료 header에 그대로 사용한다.
 
 frontend source에는 `VITE_API_BASE_URL`, `/api/v1`로 제한한 공통 client, 명시적 Bearer 전달,
 opaque signed PUT helper와 TanStack Query provider·retry 정책이 있다. `/consumer/capture`는 이
@@ -107,6 +109,7 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 | --- | --- | --- | --- | --- |
 | `POST` | `/api/v1/move-jobs/onboarding` | 작업과 고객 참여자·고객 전용 capability 하나 생성 | 공개 | 구현 |
 | `GET` | `/api/v1/me` | 현재 역할·초대 상태·명시적 permission 조회 | 모든 link | 구현 |
+| `DELETE` | `/api/v1/move-jobs/{job_id}` | 견적 전 작업 취소와 모든 capability 철회 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations` | 다음 역할 초대와 one-time secret 발급 | 고객, 업체 | 구현 |
 | `GET` | `/api/v1/move-jobs/{job_id}/invitations` | 본인이 발급했거나 받은 초대 목록 | 고객, 업체 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/invitations/{invitation_id}/accept` | 받은 초대 수락 | pending 초대 대상 | 구현 |
@@ -122,15 +125,19 @@ MVP에서는 인증하는 현장기사 한 명을 대표 현장 사용자로 본
 초대 순서는 소비자→업체, 수락 업체→현장기사로 고정한다. 상태는
 `pending|accepted|declined|expired|revoked`이며 pending token은 `/me`와 자기 수락·거절 외 업무
 API에서 401이다. 하위 link 만료는 발급자 만료를 넘지 않고 상위 초대 폐기·재발급 또는 발급자
-access-link 직접 철회는 하위 초대를 함께 철회한다. 기존 `POST /move-jobs`의 세 역할 동시 생성은 신뢰 bootstrap 호환 계약이며 일반
+access-link 직접 철회는 하위 초대를 함께 철회한다. 초대 생성의 `display_name`은 선택값이며 생략하면
+업체는 `이사업체 담당자`, 현장기사는 `현장기사`를 표시명으로 저장한다. 기존 `POST /move-jobs`의 세 역할 동시 생성은 신뢰 bootstrap 호환 계약이며 일반
 frontend onboarding에서 호출하지 않는다. secret 응답은 `Cache-Control: no-store`이며 frontend는
 query string, 영구 저장소, log와 analytics에 기록하지 않는다.
+고객 작업 취소는 `ScopeProposal`이 하나도 없는 경우에만 `204`로 처리한다. 물리 삭제 대신 작업을
+`CANCELED`로 전이하고 모든 초대·활성 access link를 같은 transaction에서 철회한다. 견적 또는
+완료 이력이 있으면 `409`, 다른 역할은 `403`이다.
 
 ### 3.1 고객·업체 공통 범위
 
 | Method | Path | 용도 | 역할 | 구현 상태 |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 출·도착지 조건, 원본 사진과 양측 확인 상태 조회 | 고객, 업체 | 구현·범위 v1·v2 |
+| `GET` | `/api/v1/move-jobs/{job_id}/scope-review` | 작업범위, 금액, 공간별 항목, 출·도착지 조건, 원본 사진과 양측 확인 상태 조회 | 고객, 업체, 현장기사 | 구현·범위 v1·v2 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/revision-request` | 고객의 `수정 요청` 제출 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-review/confirm` | 고객의 `이 범위 확인` 처리 | 고객 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/scope-proposals` | 업체가 수정 범위·금액·차량·인원·사유를 고객에게 전송 | 업체 | 구현·범위 v1·v2 |
@@ -148,6 +155,8 @@ query string, 영구 저장소, log와 analytics에 기록하지 않는다.
 
 pending·거절·만료·철회된 초대의 표시명은 `company_display_name`으로 노출하지 않는다. 기존 신뢰
 bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업은 `company_joined`로 해석한다.
+현장기사는 확정되어 잠긴 현재 범위만 조회할 수 있으며, 업체 제안 전이나 고객 확인 대기 중인
+초안은 `404`로 감춘다. 제안·수정 요청·확인 command의 기존 역할 제한은 바뀌지 않는다.
 
 ### 3.2 고객 사진·AI 검토
 
@@ -191,7 +200,7 @@ bootstrap에서 초대 record 없이 업체 참여자가 함께 생성된 작업
 | `POST` | `/api/v1/move-jobs/{job_id}/check-ins` | checklist 전체 확인과 `현장 도착 체크인` 기록 | 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/media-uploads` | 이슈 증빙 사진의 signed upload URL 발급 | 현장기사 | storage logic 재사용·path 단순화 |
 | `POST` | `/api/v1/move-jobs/{job_id}/field-issues` | 범위 밖 작업, 파손 위험 또는 현장 장애를 보고 | 업체, 현장기사 | 구현 |
-| `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 업체, 현장기사 | 구현 |
+| `GET` | `/api/v1/move-jobs/{job_id}/field-issues` | 이슈와 변경 제안 처리 상태 목록 | 고객, 업체, 현장기사 | 구현 |
 | `POST` | `/api/v1/move-jobs/{job_id}/completion-submissions` | 완료 checklist, 실제 근무, 현장 확인과 선택적 완료 미디어 제출 | 대표 현장기사 | 구현 |
 
 ## 4. 화면 조회 계약
@@ -287,8 +296,9 @@ Response `ChangeProposalView`:
 - `explanation`, `explained_at`
 - `decided_by`, `decided_at`, `decision_note`
 
-`requested_by`와 `decided_by`는 참여자 ID, 표시명과 역할만 반환한다. 증거 preview는 `READY`
-객체의 generation-pinned 5분 URL이고 object key·generation은 포함하지 않는다.
+`requested_by`와 `decided_by`는 참여자 ID, 표시명과 역할만 반환한다. 증거 preview는 upload complete로
+generation·MIME type·크기가 고정된 `UPLOADED|READY` 객체의 generation-pinned 5분 URL이고 object
+key·generation은 포함하지 않는다. 고객 승인은 모든 증거가 `READY`가 된 뒤에만 처리한다.
 
 ### 4.5 `GET /dispatch`
 
@@ -315,7 +325,7 @@ Response `CompletionSummaryView`:
 - `job: JobHeader`
 - `job_status`, `completion_submission_id`, `completed_at`, `final_amount_krw`, `duration_minutes`
 - `completion_media[]`, `completion_media_count`
-- `checklist: {completed_count, total_count}`
+- `checklist: {completed_count, total_count, items: [{key, label, confirmed}]}`
 - `onsite_confirmation_completed`
 - `worker_shifts[]`: 작업자, 역할, 시작·종료, 근무시간
 - `field_changes[]`: 제안 ID, 제목, 상태, 승인 시각, 증감·최종 금액
@@ -325,7 +335,7 @@ Response `CompletionSummaryView`:
 - `documents[]`: `quote|changes|completion|decision`, 문서명, `ready|not_ready`
 - `archive_ready`, `retention_until`, `problem_report_count`
 
-업체는 제출 전에도 요약을 읽을 수 있지만 문서는 견적과 완료 제출이 모두 있을 때만 준비된다. 고객은 자신에게 완료 요청이 생성된 뒤에만 같은 요약을 읽는다. completion 미디어 preview는 `READY` 객체의 generation-pinned 5분 HTTPS URL이며 object key와 generation은 반환하지 않는다.
+업체는 제출 전에도 요약을 읽을 수 있지만 문서는 견적과 완료 제출이 모두 있을 때만 준비된다. 고객은 자신에게 완료 요청이 생성된 뒤에만 같은 요약을 읽는다. completion 미디어 preview는 upload complete로 generation·MIME type·크기가 고정된 `UPLOADED|READY` 객체의 generation-pinned 5분 HTTPS URL이며 object key와 generation은 반환하지 않는다. 고객의 최종 완료 확인은 첨부 미디어가 모두 `READY`일 때만 처리한다.
 
 `GET /documents/archive`는 견적서, 변경 승인 기록, 작업 완료 기록, 완료 확인 기록 PDF와 schema v1 `manifest.json`을 담은 결정적 `200 application/zip`과 `Content-Disposition` 파일명을 반환한다. 화면의 필수 문서가 아직 준비되지 않았으면 빈 archive 대신 `409`를 반환한다. 외부 PDF provider 실패가 완료 사실을 변경하지 않는다.
 
@@ -650,7 +660,9 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 ```
 
 - 체크인한 대표 현장기사만 현재 확정 배차와 잠긴 leaf 범위에 제출한다. setup의 완료 checklist와 배정 작업자 전체가 정확히 한 번씩 포함돼야 한다.
-- 완료 미디어는 선택 사항이다. 전달한 ID는 같은 기사가 업로드한 `READY` completion 객체여야 하고 generation이 고정돼야 한다.
+- 완료 미디어는 선택 사항이다. 전달한 ID는 같은 기사가 upload complete를 마친 `UPLOADED|READY`
+  completion 객체여야 하고 generation이 고정돼야 한다. 이 조건으로 FE는 complete 응답 직후 제출할 수
+  있지만 고객의 최종 완료 확인은 비동기 검증이 모두 `READY`로 끝난 뒤에만 허용한다.
 - 같은 `client_reference`와 정확한 payload는 최초 결과를 반환한다. 고객 문제 신고·요청 만료·철회 뒤에는 새 reference로 정정 제출할 수 있다.
 
 ### 5.8 완료 확인 요청·철회·결정
@@ -678,7 +690,9 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 }
 ```
 
-- 고객만 최신 살아 있는 요청을 `confirm|report_issue`로 결정한다. 확인 body에는 문제 필드를 넣지 않고, 문제 신고는 `missing_work|damage|amount|other`와 설명이 필수다.
+- 고객만 최신 살아 있는 요청을 `confirm|report_issue`로 결정한다. 확인 body에는 문제 필드를 넣지 않고,
+  문제 신고는 `missing_work|damage|amount|other`와 설명이 필수다. completion 미디어가 있으면 `confirm`은
+  모두 `READY`인 경우에만 처리한다.
 - 문제 신고는 작업을 완료하지 않고 정정 제출을 허용한다. 확인은 작업을 `completed`로 전이하고 선택적 완료 미디어의 보존 삭제 intent를 함께 만든다.
 - terminal 요청의 정확한 결정 replay는 같은 결과를 반환하고 상충 결정은 `409`다.
 
@@ -712,9 +726,9 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 - 이 단순화 경로는 아직 구현되지 않았다. 현재 실행 계약은 현장기사가 자기 capture session을 만든 뒤
   기존 `/media-assets/upload`에서 `purpose: "change_evidence"`로 URL을 받고 opaque header를 적용해
   PUT한 다음 별도 `/complete` command를 호출하는 3단계다.
-- 업로드 완료 뒤 `UPLOADED`부터 `POST /field-issues`가 해당 media ID를 받을 수 있다. 비동기
-  validation이 generation·MIME type·크기·SHA-256을 확인해 모든 증거가 `READY`가 된 뒤에만 업체가
-  변경 제안을 만들 수 있다. `PENDING_UPLOAD|PROCESSING|FAILED` 증거는 이슈 보고에서 거부한다.
+- 업로드 완료 뒤 `UPLOADED`부터 `POST /field-issues`와 업체 변경 제안이 해당 media ID를 받을 수 있다.
+  비동기 validation이 generation·MIME type·크기·SHA-256을 확인해 모든 증거가 `READY`가 된 뒤에만
+  고객 승인을 처리한다. `PENDING_UPLOAD|PROCESSING|FAILED` 증거는 이슈 보고·제안·preview에서 거부한다.
 
 ### 5.10 현장 이슈 보고
 
@@ -865,12 +879,12 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 
 ## 9. 현재 구현에서의 전환
 
-현재 OpenAPI에는 53개 path와 61개 operation이 있다. `/api/v1` 업무 operation 58개와
+현재 OpenAPI에는 53개 path와 62개 operation이 있다. `/api/v1` 업무 operation 59개와
 운영 operation 3개다. 이 문서의 목표 17개 중 `analysis-review` 조회·완료 2개,
 `scope-review` 조회·제안·수정요청·확인 4개, 변경 제안 조회·결정 2개, 현장 이슈 보고,
 배차 조회·확정 2개, field brief·체크인, 완료 요약·요청·철회·결정·문서와 현장기사 완료 제출이
 실행 계약으로 등록됐다. 배차 setup, 업체 이슈 목록·변경 제안·설명 3개와 소비자 onboarding·역할
-초대 8개 operation도 별도 실행 계약으로 등록됐다. 남은 단순화 제안 경로와 FE PRD 부록의 대안
+초대 8개 operation과 견적 전 고객 작업 취소도 별도 실행 계약으로 등록됐다. 남은 단순화 제안 경로와 FE PRD 부록의 대안
 경로는 아직 등록되지 않았다.
 
 | 현재 공개 경로 묶음 | 최종 처리 |
@@ -879,6 +893,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | `GET /me`, invitation 생성·목록·action | 역할별 landing, 단계적 초대와 link lifecycle의 공개 실행 계약이다. |
 | `POST /move-jobs`, access-link 생성·철회 | 세 역할 동시 생성 bootstrap과 기존 운영 계약을 호환 유지하되 일반 frontend onboarding에서는 사용하지 않는다. |
 | `GET /move-jobs/{id}` | 6개 화면 view에 필요한 header만 포함하고 제거 |
+| `DELETE /move-jobs/{id}` | 견적 전 고객 작업을 취소하고 모든 capability를 철회하는 frontend 실행 계약으로 유지 |
 | capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
 | analysis review 조회·완료 2개 | 최신 완료 분석의 v1/v2 구조화 품목·위치 조건 제안을 조회하고 고객 편집본을 불변 자식 scope version으로 한 번만 생성한다. FE는 v2 필드와 위치조건 검수 UI를 추가 연결해야 한다. |
 | scope review 조회·제안·수정요청·확인 4개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1·v2 내용과 `schema_version`을 노출한다. |
@@ -893,7 +908,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 현재 upload 계약은 opaque `upload_url`·`upload_headers`를 그대로 사용한 뒤 별도 complete command가
 generation-pinned 비동기 검증을 시작한다. 이를 `media-uploads` 한 경로로 축소하려면 현재
 `UPLOADED → PROCESSING → READY|FAILED` 계약과 재시도 의미를 보존하는 별도 설계가 필요하다.
-현재 API CORS는 `GET`, `POST`, `PUT`만 허용하며 배차 확정의 browser preflight를 회귀 테스트한다.
+현재 API CORS는 `DELETE`, `GET`, `POST`, `PUT`만 허용하며 작업 취소와 배차 확정의 browser preflight를 회귀 테스트한다.
 
 domain의 불변 version, content hash, access control, Outbox, audit와 provider Port는 삭제하지
 않는다. 이 문서만 병합해 현재 route를 deprecate하지 않으며, 승인된 교체 계약과 전환 계획이

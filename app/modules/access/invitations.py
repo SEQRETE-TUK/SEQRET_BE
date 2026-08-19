@@ -171,10 +171,17 @@ async def create_invitation(
     if existing_invitation is not None or existing_participant is not None:
         raise InvitationConflictError("role already provisioned")
 
+    display_name = (
+        command.display_name
+        or {
+            ParticipantRole.COMPANY_MANAGER: "이사업체 담당자",
+            ParticipantRole.FIELD_WORKER: "현장기사",
+        }[command.role]
+    )
     invitee = JobParticipant(
         job_id=job_id,
         role=command.role,
-        display_name=command.display_name,
+        display_name=display_name,
     )
     session.add(invitee)
     await session.flush()
