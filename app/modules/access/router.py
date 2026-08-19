@@ -37,6 +37,7 @@ from app.modules.access.schemas import (
     InvitationIssuedResponse,
     InvitationListResponse,
     InvitationResponse,
+    MoveConnectionCreate,
     WorkspaceContactPointListResponse,
     WorkspaceContactPointResponse,
     WorkspaceContactPointUpsert,
@@ -50,6 +51,7 @@ from app.modules.access.service import (
 )
 from app.modules.access.workspace import (
     WORKSPACE_SESSION_COOKIE,
+    InvalidMoveConnectionError,
     InvalidWorkspaceSessionError,
     WorkspaceConflictError,
     WorkspaceContactNotFoundError,
@@ -59,6 +61,7 @@ from app.modules.access.workspace import (
     delete_contact_point,
     get_workspace_session,
     list_contact_points,
+    resolve_move_connection,
     revoke_workspace_session,
     upsert_contact_point,
 )
@@ -72,6 +75,19 @@ def _workspace_cookie_security(request: Request) -> tuple[bool, Literal["lax", "
     environment = request.app.state.runtime_context.settings.environment
     deployed = environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
     return deployed, "none" if deployed else "lax"
+
+
+def _set_workspace_cookie(request: Request, response: Response, secret: str) -> None:
+    secure, same_site = _workspace_cookie_security(request)
+    response.set_cookie(
+        WORKSPACE_SESSION_COOKIE,
+        secret,
+        max_age=30 * 24 * 60 * 60,
+        path="/api/v1",
+        secure=secure,
+        httponly=True,
+        samesite=same_site,
+    )
 
 
 async def _workspace_principal(
@@ -120,16 +136,45 @@ async def create_workspace_session_endpoint(
     except WorkspaceConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     if issued.cookie_secret is not None:
-        secure, same_site = _workspace_cookie_security(request)
-        response.set_cookie(
-            WORKSPACE_SESSION_COOKIE,
-            issued.cookie_secret,
-            max_age=30 * 24 * 60 * 60,
-            path="/api/v1",
-            secure=secure,
-            httponly=True,
-            samesite=same_site,
+        _set_workspace_cookie(request, response, issued.cookie_secret)
+    response.headers["Cache-Control"] = "no-store"
+    return issued.response
+
+
+@identity_router.post(
+    "/connections",
+    response_model=WorkspaceSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=protected_error_responses(status.HTTP_409_CONFLICT),
+    summary="공용 이사 연결 코드와 선택 역할로 작업공간 연결",
+)
+async def create_move_connection_endpoint(
+    command: MoveConnectionCreate,
+    request: Request,
+    response: Response,
+    session: Session,
+    cookie_secret: WorkspaceCookieSecret,
+) -> WorkspaceSessionResponse:
+    try:
+        participant = await resolve_move_connection(
+            session,
+            command.connection_code,
+            command.role,
         )
+        issued = await create_or_extend_workspace_session(
+            session,
+            participant.id,
+            current_cookie_secret=cookie_secret,
+        )
+    except InvalidMoveConnectionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid move connection code",
+        ) from error
+    except WorkspaceConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    if issued.cookie_secret is not None:
+        _set_workspace_cookie(request, response, issued.cookie_secret)
     response.headers["Cache-Control"] = "no-store"
     return issued.response
 

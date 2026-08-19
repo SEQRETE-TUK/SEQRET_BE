@@ -192,6 +192,7 @@ async def create_customer_move_job(
     return CustomerMoveJobCreatedResponse(
         job=_to_response(job, viewer_role=ParticipantRole.CUSTOMER),
         customer_access_link=access_link,
+        connection_code=f"MOVE-{job.id.hex[:8].upper()}",
     )
 
 

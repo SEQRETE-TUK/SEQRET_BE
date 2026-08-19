@@ -286,7 +286,8 @@ class MoveJobCreatedResponse(ContractModel):
 
 
 class CustomerMoveJobCreatedResponse(ContractModel):
-    """Self-service creation result with no capability for another role."""
+    """Self-service creation result with its reusable move connection code."""
 
     job: MoveJobResponse
     customer_access_link: AccessLinkResponse
+    connection_code: str

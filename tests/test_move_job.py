@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import Response
@@ -225,7 +225,8 @@ async def test_customer_onboarding_issues_only_the_customer_capability(
     assert response.status_code == 201
     assert response.headers["cache-control"] == "no-store"
     body = response.json()
-    assert set(body) == {"job", "customer_access_link"}
+    assert set(body) == {"job", "customer_access_link", "connection_code"}
+    assert body["connection_code"] == f"MOVE-{UUID(body['job']['id']).hex[:8].upper()}"
     assert [participant["role"] for participant in body["job"]["participants"]] == ["customer"]
     customer_link = body["customer_access_link"]
     assert customer_link["role"] == "customer"
@@ -252,7 +253,11 @@ async def test_customer_onboarding_issues_only_the_customer_capability(
     operation = openapi["paths"]["/api/v1/move-jobs/onboarding"]["post"]
     assert "security" not in operation
     response_schema = openapi["components"]["schemas"]["CustomerMoveJobCreatedResponse"]
-    assert set(response_schema["properties"]) == {"job", "customer_access_link"}
+    assert set(response_schema["properties"]) == {
+        "job",
+        "customer_access_link",
+        "connection_code",
+    }
     request_schema = openapi["components"]["schemas"]["CustomerMoveJobCreate"]
     assert set(request_schema["properties"]) == {
         "title",
