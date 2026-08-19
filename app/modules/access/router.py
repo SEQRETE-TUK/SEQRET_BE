@@ -81,6 +81,9 @@ def _set_workspace_cookie(request: Request, response: Response, secret: str) -> 
     secure, same_site = _workspace_cookie_security(request)
     response.set_cookie(
         WORKSPACE_SESSION_COOKIE,
+        # The random session token must reach the browser; it is held only in a
+        # Secure HttpOnly cookie in deployed environments and stored hashed server-side.
+        # codeql[py/clear-text-storage-sensitive-data]
         secret,
         max_age=30 * 24 * 60 * 60,
         path="/api/v1",
