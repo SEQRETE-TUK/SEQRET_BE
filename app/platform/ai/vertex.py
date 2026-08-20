@@ -422,7 +422,7 @@ class VertexAIProvider:
             sources = self._source_assets(
                 request,
                 item.source_indices,
-                allow_single_source_fallback=False,
+                allow_single_source_fallback=True,
             )
             draft = DraftItem(
                 item_key=item.item_key,
@@ -440,12 +440,15 @@ class VertexAIProvider:
         location_ids: set[object] = set()
         location_kinds: set[str] = set()
         for condition in raw.location_conditions:
+            source_indices = (
+                (0,) if len(request.source_media_asset_ids) == 1 else condition.source_indices
+            )
             sources = self._source_assets(
                 request,
-                condition.source_indices,
-                allow_single_source_fallback=False,
+                source_indices,
+                allow_single_source_fallback=True,
             )
-            contexts = [request.source_contexts[index] for index in condition.source_indices]
+            contexts = [request.source_contexts[index] for index in source_indices]
             context_location_ids = {context.location_id for context in contexts}
             context_location_kinds = {context.location_kind for context in contexts}
             if len(context_location_ids) != 1 or len(context_location_kinds) != 1:

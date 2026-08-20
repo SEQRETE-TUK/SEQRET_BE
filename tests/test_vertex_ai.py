@@ -223,6 +223,35 @@ async def test_analyze_v2_maps_items_and_location_context_without_exposing_ids()
 
 
 @pytest.mark.anyio
+async def test_analyze_v2_maps_any_source_indices_to_only_input() -> None:
+    output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
+        '"quantity": 1, "unit": "개", "confidence": 0.9, "source_indices": [99]}], '
+        '"location_conditions": [{"source_indices": [99], "confidence": 0.5}]}'
+    )
+    request = _request_v2()
+    request = request.model_copy(
+        update={
+            "source_media_asset_ids": request.source_media_asset_ids[:1],
+            "object_keys": request.object_keys[:1],
+            "content_types": request.content_types[:1],
+            "source_contexts": request.source_contexts[:1],
+        }
+    )
+
+    result = await _provider(StubModels(text=output)).analyze(
+        request=request,
+        idempotency_key=KEY,
+        timeout_seconds=30,
+    )
+
+    assert result.draft_items[0].source_media_asset_ids == request.source_media_asset_ids
+    assert result.location_condition_suggestions[0].source_media_asset_ids == (
+        request.source_media_asset_ids
+    )
+
+
+@pytest.mark.anyio
 async def test_analyze_v2_rejects_untrusted_or_incomplete_output() -> None:
     cases = [
         (
