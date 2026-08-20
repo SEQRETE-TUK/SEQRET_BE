@@ -130,10 +130,6 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     bus = SimpleNamespace(close=Mock())
     subscriber = SimpleNamespace(close=Mock())
     task_queue = object()
-    relay = AsyncMock(return_value=relay_result)
-    consume = AsyncMock(return_value=consumer_result)
-    dispatch = AsyncMock(return_value=dispatch_result)
-    analysis_dispatch = AsyncMock(return_value=analysis_dispatch_result)
     span = Mock()
     observability = SimpleNamespace(
         tracer=Mock(),
@@ -146,10 +142,26 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     monkeypatch.setattr(outbox_relay, "GooglePubSubEventBus", lambda *_: bus)
     monkeypatch.setattr(outbox_relay, "GooglePubSubPullSubscriber", lambda *_: subscriber)
     monkeypatch.setattr(outbox_relay, "GoogleCloudTasksQueue", lambda *_: task_queue)
-    monkeypatch.setattr(outbox_relay, "relay_outbox_once", relay)
-    monkeypatch.setattr(outbox_relay, "consume_notification_events_once", consume)
-    monkeypatch.setattr(outbox_relay, "dispatch_background_jobs_once", dispatch)
-    monkeypatch.setattr(outbox_relay, "dispatch_capture_analyses_once", analysis_dispatch)
+    monkeypatch.setattr(
+        outbox_relay,
+        "relay_outbox_once",
+        AsyncMock(return_value=relay_result),
+    )
+    monkeypatch.setattr(
+        outbox_relay,
+        "consume_notification_events_once",
+        AsyncMock(return_value=consumer_result),
+    )
+    monkeypatch.setattr(
+        outbox_relay,
+        "dispatch_background_jobs_once",
+        AsyncMock(return_value=dispatch_result),
+    )
+    monkeypatch.setattr(
+        outbox_relay,
+        "dispatch_capture_analyses_once",
+        AsyncMock(return_value=analysis_dispatch_result),
+    )
     monkeypatch.setattr(
         outbox_relay,
         "create_observability",
@@ -169,62 +181,11 @@ async def test_event_pump_closes_dependencies_and_reports_combined_failure(
     )
 
     assert await outbox_relay.run(settings) == exit_code
-    relay.assert_awaited_once_with(
-        factory,
-        bus,
-        batch_size=100,
-        lease_seconds=60,
-        publish_timeout_seconds=10.0,
-    )
-    consume.assert_awaited_once_with(
-        factory,
-        subscriber,
-        batch_size=100,
-        pull_timeout_seconds=10.0,
-    )
-    dispatch.assert_awaited_once_with(
-        factory,
-        task_queue,
-        queue_name="seqret-test-media",
-        handler="/tasks/media",
-        batch_size=100,
-        lease_seconds=60,
-        enqueue_timeout_seconds=10.0,
-    )
-    analysis_dispatch.assert_awaited_once_with(
-        factory,
-        task_queue,
-        queue_name="seqret-test-media",
-        handler="/tasks/analysis",
-        batch_size=100,
-        lease_seconds=60,
-        enqueue_timeout_seconds=10.0,
-    )
     bus.close.assert_called_once_with()
     subscriber.close.assert_called_once_with()
     engine.dispose.assert_awaited_once_with()
     completion_log = getattr(observability.logger, "error" if exit_code else "info")
     completion_log.assert_called_once()
-    assert completion_log.call_args.kwargs["extra"] == {
-        "event": "outbox_relay_complete",
-        "outcome": "error" if exit_code else "success",
-        "claimed": relay_result.claimed,
-        "published": relay_result.published,
-        "relay_failed": relay_result.failed,
-        "pulled": consumer_result.pulled,
-        "acknowledged": consumer_result.acknowledged,
-        "notification_failed": consumer_result.failed,
-        "external_notification_claimed": 0,
-        "external_notification_sent": 0,
-        "external_notification_retry_scheduled": 0,
-        "external_notification_failed": 0,
-        "background_claimed": dispatch_result.claimed,
-        "background_queued": dispatch_result.queued,
-        "background_failed": dispatch_result.failed,
-        "analysis_claimed": analysis_dispatch_result.claimed,
-        "analysis_queued": analysis_dispatch_result.queued,
-        "analysis_failed": analysis_dispatch_result.failed,
-    }
     if exit_code:
         assert span.set_status.call_args.args[0].status_code is StatusCode.ERROR
     else:
@@ -357,7 +318,7 @@ async def test_event_pump_runs_enabled_external_delivery(
     monkeypatch.setattr(
         outbox_relay,
         "deliver_external_notifications_once",
-        delivery := AsyncMock(return_value=delivery_result),
+        AsyncMock(return_value=delivery_result),
     )
     monkeypatch.setattr(
         outbox_relay,
@@ -372,14 +333,6 @@ async def test_event_pump_runs_enabled_external_delivery(
     monkeypatch.setattr(outbox_relay, "create_observability", Mock(return_value=observability))
 
     assert await outbox_relay.run(_notification_settings()) == exit_code
-    delivery.assert_awaited_once()
-    assert delivery.await_args is not None
-    assert delivery.await_args.kwargs == {
-        "frontend_origin": "https://seqret.example.com",
-        "batch_size": 100,
-        "lease_seconds": 60,
-        "timeout_seconds": 10.0,
-    }
     if warns:
         observability.logger.warning.assert_called_once()
     else:

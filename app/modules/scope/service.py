@@ -5,7 +5,6 @@ import json
 from collections import defaultdict
 from datetime import timedelta
 from typing import Any, cast
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -17,7 +16,7 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftLocationCondition
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
+from app.contracts.ports import StoragePort, validate_storage_url
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
@@ -80,23 +79,6 @@ REQUIRED_APPROVAL_ROLES = (
     ParticipantRole.COMPANY_MANAGER,
 )
 READ_URL_TTL_SECONDS = 5 * 60
-
-
-def _validated_read_url(value: str) -> str:
-    try:
-        if value != value.strip():
-            raise ValueError
-        parsed = urlsplit(value)
-        _ = parsed.port
-        if parsed.scheme.lower() != "https" or parsed.hostname is None:
-            raise ValueError
-    except ValueError:
-        raise ProviderError(
-            ProviderErrorKind.UNAVAILABLE,
-            "storage returned an invalid read URL",
-            retryable=False,
-        ) from None
-    return value
 
 
 def _normalize_scope_content(content: ScopeContent) -> ScopeContent:
@@ -854,7 +836,7 @@ async def create_change_evidence_read_url(
     )
     return ChangeEvidenceReadResponse(
         media_asset_id=asset.id,
-        read_url=_validated_read_url(read_url),
+        read_url=validate_storage_url(read_url, "storage returned an invalid read URL"),
         expires_at=expires_at,
     )
 

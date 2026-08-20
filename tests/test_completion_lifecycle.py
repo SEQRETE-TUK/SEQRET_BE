@@ -1050,20 +1050,6 @@ async def test_completion_authorization_validation_and_not_ready_states(
     ).status_code == 403
 
 
-@pytest.mark.parametrize(
-    "value",
-    (
-        " https://storage.invalid/read/object",
-        "http://storage.invalid/read/object",
-        "https:///read/object",
-        "https://storage.invalid:invalid/read/object",
-    ),
-)
-def test_completion_rejects_invalid_storage_read_urls(value: str) -> None:
-    with pytest.raises(ProviderError, match="invalid completion read URL"):
-        completion_service._validated_read_url(value)
-
-
 @pytest.mark.anyio
 async def test_completion_rejects_missing_or_corrupt_dispatch_and_media_state(
     completion_lifecycle_api: CompletionApi,

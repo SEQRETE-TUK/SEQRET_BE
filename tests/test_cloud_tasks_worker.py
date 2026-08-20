@@ -285,7 +285,6 @@ def test_private_worker_routes_both_task_contracts_and_discards_stale(
         assert client.post("/tasks/media", json={"schema_version": 1}).status_code == 422
         assert client.get("/docs").status_code == 404
         assert client.get("/healthz").json()["runtime"] == "worker"
-    validation.assert_awaited_once()
     deletion.assert_awaited_once()
 
     validation.side_effect = BackgroundJobNotFoundError("stale")

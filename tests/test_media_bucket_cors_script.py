@@ -5,6 +5,10 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX bash runtime")
+
 
 def _fake_gcloud(tmp_path: Path) -> tuple[Path, Path, Path]:
     bin_dir = tmp_path / "bin"

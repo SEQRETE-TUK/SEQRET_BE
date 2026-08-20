@@ -21,7 +21,6 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import ProviderError
 from app.contracts.primitives import (
     AnalysisRunId,
     CaptureSessionId,
@@ -48,7 +47,6 @@ from app.modules.scope_review.service import (
     ScopeReviewConflictError,
     ScopeReviewNotFoundError,
     _company_participation_status,
-    _validated_read_url,
     create_scope_proposal,
     get_scope_confirmation_history,
     get_scope_review,
@@ -1005,20 +1003,6 @@ async def test_scope_review_maps_integrity_errors_to_conflicts(
                 revision_command,
             )
         await session.rollback()
-
-
-@pytest.mark.parametrize(
-    "value",
-    (
-        " https://storage.invalid/read/object",
-        "http://storage.invalid/read/object",
-        "https:///read/object",
-        "https://storage.invalid:invalid/read/object",
-    ),
-)
-def test_scope_review_rejects_invalid_storage_read_urls(value: str) -> None:
-    with pytest.raises(ProviderError, match="invalid read URL"):
-        _validated_read_url(value)
 
 
 def test_scope_review_preserves_legacy_proposal_without_execution_plan() -> None:

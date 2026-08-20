@@ -222,9 +222,9 @@ async def test_analyze_v2_maps_items_and_location_context_without_exposing_ids()
     assert str(request.source_contexts[0].location_id) not in rendered_prompt
 
 
-@pytest.mark.parametrize(
-    ("output", "message"),
-    [
+@pytest.mark.anyio
+async def test_analyze_v2_rejects_untrusted_or_incomplete_output() -> None:
+    cases = [
         (
             '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
             '"quantity": 1, "unit": "개", "confidence": 0.9, "source_indices": [9]}]}',
@@ -256,24 +256,20 @@ async def test_analyze_v2_maps_items_and_location_context_without_exposing_ids()
             '{"source_indices": [0], "confidence": 0.4}]}',
             "duplicate location suggestions",
         ),
-    ],
-)
-@pytest.mark.anyio
-async def test_analyze_v2_rejects_untrusted_or_incomplete_output(
-    output: str,
-    message: str,
-) -> None:
-    provider = _provider(StubModels(text=output))
+    ]
 
-    with pytest.raises(ProviderError, match=message) as error_info:
-        await provider.analyze(
-            request=_request_v2(),
-            idempotency_key=KEY,
-            timeout_seconds=30,
-        )
+    for output, message in cases:
+        provider = _provider(StubModels(text=output))
 
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert error_info.value.retryable is False
+        with pytest.raises(ProviderError, match=message) as error_info:
+            await provider.analyze(
+                request=_request_v2(),
+                idempotency_key=KEY,
+                timeout_seconds=30,
+            )
+
+        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+        assert error_info.value.retryable is False
 
 
 @pytest.mark.anyio
@@ -287,25 +283,24 @@ async def test_analyze_rejects_empty_response() -> None:
     assert error_info.value.retryable is True
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+@pytest.mark.anyio
+async def test_analyze_rejects_malformed_output() -> None:
+    cases = [
         "not json at all",
         '{"items": [{"item_key": "bed", "description": "d", "confidence": 2.0}]}',
         "{}",
         '{"items": []}',
         '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9}]}',
-    ],
-)
-@pytest.mark.anyio
-async def test_analyze_rejects_malformed_output(text: str) -> None:
-    provider = _provider(StubModels(text=text))
+    ]
 
-    with pytest.raises(ProviderError, match="malformed") as error_info:
-        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+    for text in cases:
+        provider = _provider(StubModels(text=text))
 
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert error_info.value.retryable is False
+        with pytest.raises(ProviderError, match="malformed") as error_info:
+            await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+        assert error_info.value.retryable is False
 
 
 @pytest.mark.anyio
@@ -326,49 +321,45 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
     assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
 
 
-@pytest.mark.parametrize("source_indices", [[], [1], [0, 0], [99]])
 @pytest.mark.anyio
-async def test_analyze_maps_any_source_indices_to_only_input(
-    source_indices: list[int],
-) -> None:
-    output = (
-        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
-        f' "source_indices": {source_indices}'
-        "}]}"
-    )
-    provider = _provider(StubModels(text=output))
-    request = _request(source_count=1)
+async def test_analyze_maps_any_source_indices_to_only_input() -> None:
+    for source_indices in ([], [1], [0, 0], [99]):
+        output = (
+            '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+            f' "source_indices": {source_indices}'
+            "}]}"
+        )
+        provider = _provider(StubModels(text=output))
+        request = _request(source_count=1)
 
-    result = await provider.analyze(
-        request=request,
-        idempotency_key=KEY,
-        timeout_seconds=30,
-    )
-
-    assert result.draft_items[0].source_media_asset_ids == request.source_media_asset_ids
-
-
-@pytest.mark.parametrize("source_indices", [[], [0, 0]])
-@pytest.mark.anyio
-async def test_analyze_rejects_ambiguous_or_duplicate_source_indices(
-    source_indices: list[int],
-) -> None:
-    output = (
-        '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
-        f' "source_indices": {source_indices}'
-        "}]}"
-    )
-    provider = _provider(StubModels(text=output))
-
-    with pytest.raises(ProviderError, match="invalid media references") as error_info:
-        await provider.analyze(
-            request=_request(source_count=2),
+        result = await provider.analyze(
+            request=request,
             idempotency_key=KEY,
             timeout_seconds=30,
         )
 
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert error_info.value.retryable is False
+        assert result.draft_items[0].source_media_asset_ids == request.source_media_asset_ids
+
+
+@pytest.mark.anyio
+async def test_analyze_rejects_ambiguous_or_duplicate_source_indices() -> None:
+    for source_indices in ([], [0, 0]):
+        output = (
+            '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
+            f' "source_indices": {source_indices}'
+            "}]}"
+        )
+        provider = _provider(StubModels(text=output))
+
+        with pytest.raises(ProviderError, match="invalid media references") as error_info:
+            await provider.analyze(
+                request=_request(source_count=2),
+                idempotency_key=KEY,
+                timeout_seconds=30,
+            )
+
+        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+        assert error_info.value.retryable is False
 
 
 @pytest.mark.anyio
@@ -411,9 +402,9 @@ async def test_analyze_times_out() -> None:
     assert error_info.value.kind is ProviderErrorKind.DEADLINE_EXCEEDED
 
 
-@pytest.mark.parametrize(
-    ("error", "kind", "retryable"),
-    [
+@pytest.mark.anyio
+async def test_analyze_maps_provider_errors() -> None:
+    cases = [
         (FakeAPIError(400), ProviderErrorKind.INVALID_INPUT, False),
         (FakeAPIError(403), ProviderErrorKind.PERMISSION_DENIED, False),
         (FakeAPIError(404), ProviderErrorKind.NOT_FOUND, False),
@@ -421,21 +412,16 @@ async def test_analyze_times_out() -> None:
         (FakeAPIError(504), ProviderErrorKind.DEADLINE_EXCEEDED, True),
         (FakeAPIError(500), ProviderErrorKind.UNAVAILABLE, True),
         (RuntimeError("offline"), ProviderErrorKind.UNAVAILABLE, True),
-    ],
-)
-@pytest.mark.anyio
-async def test_analyze_maps_provider_errors(
-    error: Exception,
-    kind: ProviderErrorKind,
-    retryable: bool,
-) -> None:
-    provider = _provider(StubModels(error=error))
+    ]
 
-    with pytest.raises(ProviderError, match="provider call failed") as error_info:
-        await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+    for error, kind, retryable in cases:
+        provider = _provider(StubModels(error=error))
 
-    assert error_info.value.kind is kind
-    assert error_info.value.retryable is retryable
+        with pytest.raises(ProviderError, match="provider call failed") as error_info:
+            await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
+
+        assert error_info.value.kind is kind
+        assert error_info.value.retryable is retryable
 
 
 @pytest.mark.anyio

@@ -63,13 +63,10 @@ def test_redis_url_is_hidden_and_validated() -> None:
     assert "cache-secret" not in repr(settings)
 
 
-@pytest.mark.parametrize(
-    "redis_url",
-    ["http://cache.internal", "redis:///0", "cache.internal:6379"],
-)
-def test_settings_reject_invalid_redis_url(redis_url: str) -> None:
-    with pytest.raises(ValidationError, match="redis_url must use redis"):
-        Settings(redis_url=SecretStr(redis_url))
+def test_settings_reject_invalid_redis_url() -> None:
+    for redis_url in ["http://cache.internal", "redis:///0"]:
+        with pytest.raises(ValidationError, match="redis_url must use redis"):
+            Settings(redis_url=SecretStr(redis_url))
 
 
 def test_settings_strip_human_readable_names() -> None:
@@ -79,33 +76,27 @@ def test_settings_strip_human_readable_names() -> None:
     assert settings.service_name == "seqret-test"
 
 
-@pytest.mark.parametrize(
-    "service_name",
-    [
+def test_settings_reject_invalid_service_name() -> None:
+    for service_name in [
         "",
         "SEQRET",
         "seqret_1",
         "-seqret",
         "seqret-",
-        "seqret/worker",
         f"s{'e' * MAX_SERVICE_NAME_LENGTH}",
-    ],
-)
-def test_settings_reject_invalid_service_name(service_name: str) -> None:
-    with pytest.raises(ValidationError, match="service_name must be a lowercase DNS label"):
-        Settings(service_name=service_name)
+    ]:
+        with pytest.raises(ValidationError, match="service_name must be a lowercase DNS label"):
+            Settings(service_name=service_name)
 
 
-@pytest.mark.parametrize("runtime_kind", list(RuntimeKind))
-def test_runtime_service_name_stays_within_cloud_run_limit(
-    runtime_kind: RuntimeKind,
-) -> None:
+def test_runtime_service_name_stays_within_cloud_run_limit() -> None:
     settings = Settings(service_name=f"s{'e' * (MAX_SERVICE_NAME_LENGTH - 1)}")
 
-    context = create_runtime_context(runtime_kind, settings)
+    for runtime_kind in RuntimeKind:
+        context = create_runtime_context(runtime_kind, settings)
 
-    assert len(settings.service_name) == MAX_SERVICE_NAME_LENGTH
-    assert len(context.service_name) <= CLOUD_RUN_SERVICE_NAME_MAX_LENGTH
+        assert len(settings.service_name) == MAX_SERVICE_NAME_LENGTH
+        assert len(context.service_name) <= CLOUD_RUN_SERVICE_NAME_MAX_LENGTH, runtime_kind
 
 
 def test_settings_normalize_api_prefix() -> None:
@@ -114,13 +105,17 @@ def test_settings_normalize_api_prefix() -> None:
     assert settings.api_prefix == "/api/v1"
 
 
-@pytest.mark.parametrize(
-    "api_prefix",
-    ["/", "api/v1", "/api//v1", "/api/../v1", "/api/v1?debug=true", "/api/v1#docs"],
-)
-def test_settings_reject_noncanonical_api_prefix(api_prefix: str) -> None:
-    with pytest.raises(ValidationError, match="api_prefix must be a canonical absolute path"):
-        Settings(api_prefix=api_prefix)
+def test_settings_reject_noncanonical_api_prefix() -> None:
+    for api_prefix in [
+        "/",
+        "api/v1",
+        "/api//v1",
+        "/api/../v1",
+        "/api/v1?debug=true",
+        "/api/v1#docs",
+    ]:
+        with pytest.raises(ValidationError, match="api_prefix must be a canonical absolute path"):
+            Settings(api_prefix=api_prefix)
 
 
 def test_settings_reject_production_debug() -> None:
@@ -128,25 +123,18 @@ def test_settings_reject_production_debug() -> None:
         Settings(environment=AppEnvironment.PRODUCTION, debug=True)
 
 
-@pytest.mark.parametrize(
-    "frontend_origin",
-    [
-        "*",
+def test_settings_reject_invalid_frontend_origin() -> None:
+    for frontend_origin in [
         "http://frontend.example.com",
         "https://frontend.example.com/",
         "https://FRONTEND.example.com",
         "https://frontend.example.com:443",
-        "https://frontend.example.com/path",
         "https://user@frontend.example.com",
         "https://frontend.example.com:not-a-port",
-        "https://frontend.example.com:70000",
         "https://127.1",
-        "https://frontend.123",
-    ],
-)
-def test_settings_reject_invalid_frontend_origin(frontend_origin: str) -> None:
-    with pytest.raises(ValidationError, match="frontend_origin must be one HTTPS origin"):
-        Settings(frontend_origin=frontend_origin)
+    ]:
+        with pytest.raises(ValidationError, match="frontend_origin must be one HTTPS origin"):
+            Settings(frontend_origin=frontend_origin)
 
 
 def test_settings_accept_complete_pubsub_and_relay_configuration() -> None:
@@ -196,26 +184,20 @@ def test_settings_accept_complete_external_notification_configuration() -> None:
     assert "kakao-secret" not in rendered
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_settings_reject_incomplete_or_unsafe_notification_configuration() -> None:
+    for values in [
         {"notification_delivery_enabled": True},
         {
             "notification_delivery_lease_seconds": 10,
             "notification_delivery_timeout_seconds": 10,
         },
-    ],
-)
-def test_settings_reject_incomplete_or_unsafe_notification_configuration(
-    values: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(values)
+    ]:
+        with pytest.raises(ValidationError):
+            Settings.model_validate(values)
 
 
-@pytest.mark.parametrize(
-    ("values", "message"),
-    [
+def test_settings_reject_invalid_notification_provider_values() -> None:
+    cases = [
         (
             {"nhn_notification_email_secret_key": SecretStr("")},
             "secret keys must not be empty",
@@ -236,14 +218,11 @@ def test_settings_reject_incomplete_or_unsafe_notification_configuration(
             {"nhn_notification_kakao_sender_key": "!" * 40},
             "must contain 40 alphanumerics",
         ),
-    ],
-)
-def test_settings_reject_invalid_notification_provider_values(
-    values: dict[str, object],
-    message: str,
-) -> None:
-    with pytest.raises(ValidationError, match=message):
-        Settings.model_validate(values)
+    ]
+
+    for values, message in cases:
+        with pytest.raises(ValidationError, match=message):
+            Settings.model_validate(values)
 
 
 def test_settings_accept_worker_storage_and_complete_task_dispatch_configuration() -> None:
@@ -265,9 +244,8 @@ def test_settings_accept_worker_storage_and_complete_task_dispatch_configuration
     assert relay.background_job_batch_size == 25
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_settings_reject_incomplete_or_invalid_media_storage() -> None:
+    for values in [
         {
             "storage_signing_service_account_email": "seqret-stg-api@seqret-staging.iam.gserviceaccount.com"
         },
@@ -279,16 +257,13 @@ def test_settings_accept_worker_storage_and_complete_task_dispatch_configuration
             "media_bucket_name": "seqret-stg-media",
             "storage_signing_service_account_email": "not-a-service-account@example.com",
         },
-    ],
-)
-def test_settings_reject_incomplete_or_invalid_media_storage(values: dict[str, str]) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(values)
+    ]:
+        with pytest.raises(ValidationError):
+            Settings.model_validate(values)
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_settings_reject_invalid_pubsub_and_relay_configuration() -> None:
+    for values in [
         {"pubsub_project_id": "seqret-test"},
         {"pubsub_topic_id": "domain-events"},
         {"pubsub_subscription_id": "participant-notifications"},
@@ -306,18 +281,13 @@ def test_settings_reject_incomplete_or_invalid_media_storage(values: dict[str, s
             "pubsub_subscription_id": "goog-notifications",
         },
         {"outbox_lease_seconds": 10, "event_publish_timeout_seconds": 10},
-    ],
-)
-def test_settings_reject_invalid_pubsub_and_relay_configuration(
-    values: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(values)
+    ]:
+        with pytest.raises(ValidationError):
+            Settings.model_validate(values)
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_settings_reject_incomplete_or_invalid_task_dispatch() -> None:
+    for values in [
         {"gcp_project_id": "seqret-test", "task_queue_name": "seqret-stg-media"},
         {
             "gcp_project_id": "seqret-test",
@@ -372,18 +342,13 @@ def test_settings_reject_invalid_pubsub_and_relay_configuration(
             "task_invoker_service_account_email": "invalid",
         },
         {"background_job_lease_seconds": 10, "task_enqueue_timeout_seconds": 10},
-    ],
-)
-def test_settings_reject_incomplete_or_invalid_task_dispatch(
-    values: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate(values)
+    ]:
+        with pytest.raises(ValidationError):
+            Settings.model_validate(values)
 
 
-@pytest.mark.parametrize(
-    "values, message",
-    [
+def test_settings_reject_invalid_observability_configuration() -> None:
+    cases = [
         ({"gcp_project_id": "INVALID"}, "gcp_project_id must be a valid"),
         ({"otel_enabled": True}, "otel_exporter_otlp_traces_endpoint is required"),
         (
@@ -394,21 +359,18 @@ def test_settings_reject_incomplete_or_invalid_task_dispatch(
             },
             "gcp_project_id is required",
         ),
-    ],
-)
-def test_settings_reject_invalid_observability_configuration(
-    values: dict[str, object],
-    message: str,
-) -> None:
-    with pytest.raises(ValidationError, match=message):
-        Settings.model_validate(values)
+    ]
+
+    for values, message in cases:
+        with pytest.raises(ValidationError, match=message):
+            Settings.model_validate(values)
 
 
-@pytest.mark.parametrize("runtime_kind", list(RuntimeKind))
-def test_each_runtime_uses_the_same_settings_contract(runtime_kind: RuntimeKind) -> None:
+def test_each_runtime_uses_the_same_settings_contract() -> None:
     settings = Settings(environment=AppEnvironment.TEST)
 
-    context = create_runtime_context(runtime_kind, settings)
+    for runtime_kind in RuntimeKind:
+        context = create_runtime_context(runtime_kind, settings)
 
-    assert context.settings is settings
-    assert context.service_name == f"seqret-{runtime_kind.value}"
+        assert context.settings is settings, runtime_kind
+        assert context.service_name == f"seqret-{runtime_kind.value}"

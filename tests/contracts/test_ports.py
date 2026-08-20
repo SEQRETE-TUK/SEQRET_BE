@@ -166,26 +166,28 @@ def test_storage_upload_target_preserves_provider_opaque_values() -> None:
     assert "X-Signature" not in repr(target)
 
 
-@pytest.mark.parametrize("headers", [(("", "x"),), (("X-Signed", "1"), ("x-signed", "2"))])
-def test_storage_upload_target_rejects_invalid_header_names(
-    headers: tuple[tuple[str, str], ...],
-) -> None:
-    with pytest.raises(ValueError, match="nonempty and unique"):
-        StorageUploadTarget(
-            url="https://storage.invalid/upload",
-            headers=headers,
-        )
+def test_storage_upload_target_rejects_invalid_header_names() -> None:
+    cases: tuple[tuple[tuple[str, str], ...], ...] = (
+        (("", "x"),),
+        (("X-Signed", "1"), ("x-signed", "2")),
+    )
+    for headers in cases:
+        with pytest.raises(ValueError, match="nonempty and unique"):
+            StorageUploadTarget(
+                url="https://storage.invalid/upload",
+                headers=headers,
+            )
 
 
-@pytest.mark.parametrize("generation", ["", " ", "x" * 256])
-def test_storage_metadata_rejects_invalid_generation(generation: str) -> None:
-    with pytest.raises(ValueError):
-        StorageObjectMetadata(
-            object_key="jobs/1/photo.jpg",
-            content_type="image/jpeg",
-            size_bytes=10,
-            generation=generation,
-        )
+def test_storage_metadata_rejects_invalid_generation() -> None:
+    for generation in ("", " ", "x" * 256):
+        with pytest.raises(ValueError):
+            StorageObjectMetadata(
+                object_key="jobs/1/photo.jpg",
+                content_type="image/jpeg",
+                size_bytes=10,
+                generation=generation,
+            )
 
 
 @pytest.mark.anyio
@@ -401,9 +403,8 @@ def test_analysis_request_v2_requires_matching_source_contexts() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
+def test_analysis_location_numeric_conditions_require_explicit_knowledge() -> None:
+    cases: tuple[tuple[str, dict[str, object], str], ...] = (
         ("floor", {"status": "known", "value": None}, "known floor requires a value"),
         (
             "floor",
@@ -420,16 +421,13 @@ def test_analysis_request_v2_requires_matching_source_contexts() -> None:
             {"status": "unknown", "value_m": 35},
             "unknown distance forbids one",
         ),
-    ],
-)
-def test_analysis_location_numeric_conditions_require_explicit_knowledge(
-    field: str,
-    value: dict[str, object],
-    message: str,
-) -> None:
-    condition_type = AnalysisFloorCondition if field == "floor" else AnalysisCarryDistanceCondition
-    with pytest.raises(ValueError, match=message):
-        condition_type.model_validate(value)
+    )
+    for field, value, message in cases:
+        condition_type = (
+            AnalysisFloorCondition if field == "floor" else AnalysisCarryDistanceCondition
+        )
+        with pytest.raises(ValueError, match=message):
+            condition_type.model_validate(value)
 
 
 def test_analysis_location_condition_rejects_duplicate_review_fields_and_sources() -> None:
@@ -468,9 +466,8 @@ def test_analysis_result_v1_rejects_v2_only_fields() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("draft_items", "review_items", "message"),
-    [
+def test_analysis_result_v2_rejects_invalid_item_shapes() -> None:
+    cases: tuple[tuple[tuple[DraftItem, ...], tuple[DraftItem, ...], str], ...] = (
         (
             (
                 DraftItem(
@@ -521,20 +518,15 @@ def test_analysis_result_v1_rejects_v2_only_fields() -> None:
             (),
             "require unique source media asset IDs",
         ),
-    ],
-)
-def test_analysis_result_v2_rejects_invalid_item_shapes(
-    draft_items: tuple[DraftItem, ...],
-    review_items: tuple[DraftItem, ...],
-    message: str,
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        _analysis_v2_result(
-            MediaAssetId(UUID(int=9)),
-            draft_items=draft_items,
-            review_required_items=review_items,
-            location_condition_suggestions=(),
-        )
+    )
+    for draft_items, review_items, message in cases:
+        with pytest.raises(ValueError, match=message):
+            _analysis_v2_result(
+                MediaAssetId(UUID(int=9)),
+                draft_items=draft_items,
+                review_required_items=review_items,
+                location_condition_suggestions=(),
+            )
 
 
 def test_analysis_result_v2_rejects_invalid_location_suggestions() -> None:
@@ -574,9 +566,8 @@ def test_analysis_result_v2_rejects_invalid_location_suggestions() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("source_ids", "object_keys", "message"),
-    [
+def test_analysis_request_requires_unique_one_to_one_sources() -> None:
+    cases: tuple[tuple[tuple[MediaAssetId, ...], tuple[str, ...], str], ...] = (
         ((MediaAssetId(uuid4()),), ("first", "second"), "same length"),
         (
             (MediaAssetId(UUID(int=1)), MediaAssetId(UUID(int=1))),
@@ -588,24 +579,19 @@ def test_analysis_result_v2_rejects_invalid_location_suggestions() -> None:
             ("same", "same"),
             "object keys must be unique",
         ),
-    ],
-)
-def test_analysis_request_requires_unique_one_to_one_sources(
-    source_ids: tuple[MediaAssetId, ...],
-    object_keys: tuple[str, ...],
-    message: str,
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        AnalysisRequest(
-            analysis_run_id=AnalysisRunId(uuid4()),
-            capture_session_id=CaptureSessionId(uuid4()),
-            source_media_asset_ids=source_ids,
-            object_keys=object_keys,
-            content_types=tuple("image/jpeg" for _ in source_ids),
-            model_name="fake-model",
-            model_version="1",
-            prompt_version="1",
-        )
+    )
+    for source_ids, object_keys, message in cases:
+        with pytest.raises(ValueError, match=message):
+            AnalysisRequest(
+                analysis_run_id=AnalysisRunId(uuid4()),
+                capture_session_id=CaptureSessionId(uuid4()),
+                source_media_asset_ids=source_ids,
+                object_keys=object_keys,
+                content_types=tuple("image/jpeg" for _ in source_ids),
+                model_name="fake-model",
+                model_version="1",
+                prompt_version="1",
+            )
 
 
 def test_analysis_request_rejects_unsupported_content_type() -> None:

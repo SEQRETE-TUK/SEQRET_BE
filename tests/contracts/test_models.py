@@ -49,18 +49,17 @@ def test_participant_actor_is_scoped_to_one_job() -> None:
     assert "token" not in repr(actor).lower()
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_participant_actor_requires_complete_verified_identity() -> None:
+    cases = (
         {"participant_id": None},
         {"participant_role": None},
         {"job_id": None},
         {"service_name": "media-worker"},
-    ],
-)
-def test_participant_actor_requires_complete_verified_identity(values: dict[str, object]) -> None:
-    with pytest.raises(ValidationError, match="participant actors require"):
-        _actor_context(**values)
+    )
+
+    for values in cases:
+        with pytest.raises(ValidationError, match="participant actors require"):
+            _actor_context(**values)
 
 
 def test_service_and_system_actor_shapes_are_distinct() -> None:
@@ -78,22 +77,20 @@ def test_service_and_system_actor_shapes_are_distinct() -> None:
     assert system.service_name is None
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_nonparticipant_actor_rejects_cross_kind_identity() -> None:
+    cases = (
         {"actor_kind": ActorKind.SERVICE},
         {"actor_kind": ActorKind.SYSTEM, "service_name": "scheduler"},
         {"actor_kind": ActorKind.SYSTEM, "job_id": JobId(uuid4())},
-    ],
-)
-def test_nonparticipant_actor_rejects_cross_kind_identity(values: dict[str, object]) -> None:
+    )
     common = {
         "request_id": RequestId(uuid4()),
         "trace_id": "0123456789abcdef0123456789abcdef",
     }
 
-    with pytest.raises(ValidationError):
-        ActorContext.model_validate(common | values)
+    for values in cases:
+        with pytest.raises(ValidationError):
+            ActorContext.model_validate(common | values)
 
 
 def test_contract_models_reject_unknown_fields_and_are_immutable() -> None:
@@ -145,9 +142,8 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
     assert _event(occurred_at=occurred_at).occurred_at == occurred_at
 
 
-@pytest.mark.parametrize(
-    ("event_type", "payload"),
-    [
+def test_documented_v1_event_payloads_accept_exact_producer_shape() -> None:
+    cases = (
         (
             DomainEventType.CAPTURE_SUBMITTED_V1,
             {
@@ -205,18 +201,14 @@ def test_domain_event_accepts_explicit_aware_time() -> None:
             DomainEventType.MEDIA_DELETED_V1,
             {"background_job_id": str(uuid4()), "media_asset_id": str(uuid4())},
         ),
-    ],
-)
-def test_documented_v1_event_payloads_accept_exact_producer_shape(
-    event_type: DomainEventType,
-    payload: dict[str, object],
-) -> None:
-    assert _event(event_type=event_type, payload=payload).payload == payload
+    )
+
+    for event_type, payload in cases:
+        assert _event(event_type=event_type, payload=payload).payload == payload
 
 
-@pytest.mark.parametrize(
-    ("event_type", "payload"),
-    [
+def test_documented_v1_event_payloads_reject_drift_and_invalid_values() -> None:
+    cases = (
         (
             DomainEventType.CAPTURE_SUBMITTED_V1,
             {
@@ -330,14 +322,11 @@ def test_documented_v1_event_payloads_accept_exact_producer_shape(
             DomainEventType.MEDIA_DELETED_V1,
             {"background_job_id": 1, "media_asset_id": str(uuid4())},
         ),
-    ],
-)
-def test_documented_v1_event_payloads_reject_drift_and_invalid_values(
-    event_type: DomainEventType,
-    payload: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError, match="contract"):
-        _event(event_type=event_type, payload=payload)
+    )
+
+    for event_type, payload in cases:
+        with pytest.raises(ValidationError, match="contract"):
+            _event(event_type=event_type, payload=payload)
 
 
 def test_domain_event_defensively_rejects_an_unhandled_event_type() -> None:
@@ -348,17 +337,16 @@ def test_domain_event_defensively_rejects_an_unhandled_event_type() -> None:
         event.require_documented_payload()  # type: ignore[operator]
 
 
-@pytest.mark.parametrize(
-    "trace_id",
-    [
+def test_trace_id_requires_lowercase_hex() -> None:
+    cases = (
         "too-short",
         "ABCDEF0123456789ABCDEF0123456789",
         "g123456789abcdef0123456789abcdef",
-    ],
-)
-def test_trace_id_requires_lowercase_hex(trace_id: str) -> None:
-    with pytest.raises(ValidationError):
-        _actor_context(trace_id=trace_id)
+    )
+
+    for trace_id in cases:
+        with pytest.raises(ValidationError):
+            _actor_context(trace_id=trace_id)
 
 
 def _validation_result(**overrides: object) -> MediaValidationResultV1:
@@ -444,9 +432,8 @@ def test_media_validation_result_accepts_exact_success_and_failure_shapes() -> N
     }
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
+def test_media_validation_result_rejects_mixed_terminal_shapes() -> None:
+    cases = (
         {"observed_content_type": None},
         {"error_kind": ProviderErrorKind.CONFLICT},
         {
@@ -459,46 +446,38 @@ def test_media_validation_result_accepts_exact_success_and_failure_shapes() -> N
             "outcome": MediaValidationOutcome.FAILED,
             "error_kind": ProviderErrorKind.INVALID_INPUT,
         },
-    ],
-)
-def test_media_validation_result_rejects_mixed_terminal_shapes(
-    overrides: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError, match="media validation results require"):
-        _validation_result(**overrides)
+    )
+
+    for overrides in cases:
+        with pytest.raises(ValidationError, match="media validation results require"):
+            _validation_result(**overrides)
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
+def test_media_validation_result_rejects_invalid_generation_and_hash() -> None:
+    cases = (
         {"source_generation": ""},
         {"source_generation": " "},
         {"source_generation": "7" * 256},
         {"sha256_hex": "a" * 63},
         {"sha256_hex": "A" * 64},
         {"sha256_hex": "g" * 64},
-    ],
-)
-def test_media_validation_result_rejects_invalid_generation_and_hash(
-    overrides: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError):
-        _validation_result(**overrides)
+    )
+
+    for overrides in cases:
+        with pytest.raises(ValidationError):
+            _validation_result(**overrides)
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
+def test_media_validation_result_rejects_padded_provider_values_before_normalization() -> None:
+    cases = (
         {"source_generation": " 7"},
         {"observed_content_type": "image/jpeg "},
         {"sha256_hex": f"{'a' * 64} "},
-    ],
-)
-def test_media_validation_result_rejects_padded_provider_values_before_normalization(
-    overrides: dict[str, object],
-) -> None:
-    with pytest.raises(ValidationError, match="must not contain surrounding whitespace"):
-        _validation_result(**overrides)
+    )
+
+    for overrides in cases:
+        with pytest.raises(ValidationError, match="must not contain surrounding whitespace"):
+            _validation_result(**overrides)
 
 
 def test_media_validation_result_rejects_non_object_input() -> None:

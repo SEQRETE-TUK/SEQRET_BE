@@ -5,7 +5,6 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -18,7 +17,7 @@ from app.contracts.events import DomainEventType
 from app.contracts.maintenance import BackgroundJobType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.model import ContractModel
-from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
+from app.contracts.ports import StoragePort, validate_storage_url
 from app.contracts.primitives import utc_now
 from app.modules.background_job.models import BackgroundJob
 from app.modules.background_job.service import create_retention_background_job
@@ -1238,23 +1237,6 @@ async def _field_change_summaries(
     )
 
 
-def _validated_read_url(value: str) -> str:
-    try:
-        if value != value.strip():
-            raise ValueError
-        parsed = urlsplit(value)
-        _ = parsed.port
-        if parsed.scheme.lower() != "https" or parsed.hostname is None:
-            raise ValueError
-    except ValueError:
-        raise ProviderError(
-            ProviderErrorKind.UNAVAILABLE,
-            "storage returned an invalid completion read URL",
-            retryable=False,
-        ) from None
-    return value
-
-
 async def _completion_media_previews(
     session: AsyncSession,
     storage: StoragePort,
@@ -1297,7 +1279,10 @@ async def _completion_media_previews(
                 room_zone_id=asset.room_zone_id,
                 room_zone_label=zone_labels[asset.room_zone_id],
                 content_type=asset.content_type,
-                read_url=_validated_read_url(read_url),
+                read_url=validate_storage_url(
+                    read_url,
+                    "storage returned an invalid completion read URL",
+                ),
                 expires_at=expires_at,
             )
         )
