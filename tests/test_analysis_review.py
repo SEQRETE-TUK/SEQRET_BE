@@ -22,7 +22,9 @@ from app.contracts.ai import (
     DraftItem,
     DraftLocationCondition,
 )
+from app.contracts.fakes import FakeObjectStorage
 from app.contracts.media import MediaAssetStatus, MediaPurpose
+from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId
 from app.main import create_app
 from app.modules.analysis_review.schemas import AnalysisReviewComplete
@@ -54,6 +56,7 @@ NOW = datetime(2026, 8, 15, 11, 0, tzinfo=UTC)
 class ReviewHarness:
     client: AsyncClient
     factory: async_sessionmaker[AsyncSession]
+    storage: FakeObjectStorage
 
 
 @dataclass(frozen=True)
@@ -77,9 +80,11 @@ async def review_harness(tmp_path: Path) -> AsyncIterator[ReviewHarness]:
     factory = create_session_factory(engine)
     application = create_app(Settings(environment=AppEnvironment.TEST))
     application.state.database_session_factory = factory
+    storage = FakeObjectStorage()
+    application.state.storage_port = storage
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        yield ReviewHarness(client=client, factory=factory)
+        yield ReviewHarness(client=client, factory=factory, storage=storage)
     await engine.dispose()
 
 
@@ -305,6 +310,35 @@ async def _seed_completed_analysis(
     )
 
 
+async def _seed_ready_video(
+    harness: ReviewHarness,
+    seed: ReviewSeed,
+) -> tuple[UUID, str]:
+    media_asset_id = uuid4()
+    object_key = (
+        f"jobs/{seed.job_id}/captures/{seed.capture_session_id}/analysis-video.mp4"
+    )
+    async with harness.factory.begin() as session:
+        session.add(
+            MediaAsset(
+                id=media_asset_id,
+                capture_session_id=seed.capture_session_id,
+                room_zone_id=seed.zone_ids[0],
+                media_purpose=MediaPurpose.INVENTORY,
+                status=MediaAssetStatus.READY,
+                object_key=object_key,
+                content_type="video/mp4",
+                expected_size_bytes=100,
+                actual_size_bytes=100,
+                sha256_hex="c" * 64,
+                generation="4",
+                created_at=NOW + timedelta(seconds=3),
+                uploaded_at=NOW,
+            )
+        )
+    return media_asset_id, object_key
+
+
 def _complete_payload(seed: ReviewSeed) -> dict[str, Any]:
     return {
         "source_scope_version_id": str(seed.source_scope_version_id),
@@ -478,6 +512,7 @@ async def test_review_query_is_customer_scoped_and_provider_neutral(
     assert body["source_scope_version_id"] == str(seed.source_scope_version_id)
     assert body["review_scope_version_id"] is None
     assert body["review_completed_at"] is None
+    assert body["video_preview"] is None
     assert body["zones"] == [
         {
             "room_zone_id": str(seed.zone_ids[0]),
@@ -504,6 +539,56 @@ async def test_review_query_is_customer_scoped_and_provider_neutral(
     assert "private-model" not in response.text
     assert "private-version" not in response.text
     assert "private-prompt" not in response.text
+
+
+@pytest.mark.anyio
+async def test_review_returns_signed_video_preview(
+    review_harness: ReviewHarness,
+) -> None:
+    created = await _create_job(review_harness)
+    seed = await _seed_completed_analysis(review_harness, created)
+    media_asset_id, object_key = await _seed_ready_video(review_harness, seed)
+
+    response = await review_harness.client.get(
+        f"/api/v1/move-jobs/{seed.job_id}/analysis-review",
+        headers=_headers(_secret(created, "customer")),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    preview = response.json()["video_preview"]
+    assert preview["media_asset_id"] == str(media_asset_id)
+    assert preview["content_type"] == "video/mp4"
+    assert preview["read_url"] == (
+        f"https://storage.invalid/read/{object_key}?generation=4"
+    )
+    assert datetime.fromisoformat(preview["expires_at"]) > datetime.now(UTC)
+
+
+@pytest.mark.anyio
+async def test_review_maps_video_preview_storage_failure(
+    review_harness: ReviewHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = await _create_job(review_harness)
+    seed = await _seed_completed_analysis(review_harness, created)
+    await _seed_ready_video(review_harness, seed)
+
+    async def fail_read_url(**_: Any) -> str:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            "offline",
+            retryable=True,
+        )
+
+    monkeypatch.setattr(review_harness.storage, "create_read_url", fail_read_url)
+    response = await review_harness.client.get(
+        f"/api/v1/move-jobs/{seed.job_id}/analysis-review",
+        headers=_headers(_secret(created, "customer")),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "storage is unavailable"}
 
 
 @pytest.mark.anyio

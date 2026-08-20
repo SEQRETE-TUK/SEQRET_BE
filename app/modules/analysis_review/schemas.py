@@ -104,6 +104,18 @@ class AnalysisReviewItem(ContractModel):
     source_media_asset_ids: tuple[UUID, ...]
 
 
+class AnalysisReviewVideoPreview(ContractModel):
+    """Short-lived read target for the analyzed capture video."""
+
+    media_asset_id: UUID
+    content_type: str
+    read_url: Annotated[
+        str,
+        Field(min_length=1, repr=False, json_schema_extra={"format": "uri"}),
+    ]
+    expires_at: datetime
+
+
 class AnalysisReviewResponse(ContractModel):
     """Latest completed analysis and its optional customer review."""
 
@@ -119,3 +131,4 @@ class AnalysisReviewResponse(ContractModel):
     items: tuple[AnalysisReviewItem, ...]
     location_conditions: tuple[ScopeLocationConditions, ...]
     location_condition_suggestions: tuple[DraftLocationCondition, ...]
+    video_preview: AnalysisReviewVideoPreview | None
