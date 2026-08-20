@@ -57,6 +57,8 @@ ANALYSIS_MODEL_NAME = "gemini-2.5-flash"
 ANALYSIS_MODEL_VERSION = "2025-08"
 ANALYSIS_PROMPT_VERSION = "inventory-2"
 MAX_ANALYSIS_ATTEMPTS = 5
+MAX_ANALYSIS_OUTPUT_ATTEMPTS = 2
+_OUTPUT_FAILURE_STAGES = frozenset({AnalysisFailureStage.PARSE, AnalysisFailureStage.SOURCE_MAP})
 ANALYSIS_PROMPT_LIBRARY = {
     "inventory-1": (
         "촬영 영상에서 이동 대상 이삿짐을 방·구역별로 찾아 나열하고 각 항목의 수량과 "
@@ -228,11 +230,16 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
         # A-owned dispatch row RUNNING (never finalized here), and the loser sees
         # RUNNING and also defers to a 503 instead of terminal-failing.
         if outcome.retryable:
+            max_attempts = (
+                MAX_ANALYSIS_OUTPUT_ATTEMPTS
+                if outcome.failure_stage in _OUTPUT_FAILURE_STAGES
+                else MAX_ANALYSIS_ATTEMPTS
+            )
             async with transactional_session(factory) as session:
                 decision = await prepare_analysis_retry(
                     session,
                     analysis_run_id=task.analysis_run_id,
-                    max_attempts=MAX_ANALYSIS_ATTEMPTS,
+                    max_attempts=max_attempts,
                     now=utc_now(),
                 )
             if decision is AnalysisRetryDecision.RETRY:

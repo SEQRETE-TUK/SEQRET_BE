@@ -341,8 +341,8 @@ async def test_analyze_v2_rejects_untrusted_or_incomplete_output() -> None:
                 timeout_seconds=30,
             )
 
-        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-        assert error_info.value.retryable is False
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+        assert error_info.value.retryable is True
 
 
 @pytest.mark.anyio
@@ -374,8 +374,8 @@ async def test_analyze_rejects_malformed_output() -> None:
         with pytest.raises(ProviderError, match="malformed") as error_info:
             await provider.analyze(request=_request(), idempotency_key=KEY, timeout_seconds=30)
 
-        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-        assert error_info.value.retryable is False
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+        assert error_info.value.retryable is True
         assert error_info.value.failure_stage is AnalysisFailureStage.PARSE
         assert error_info.value.failure_detail is AnalysisFailureDetail.SCHEMA_VALIDATION
 
@@ -395,7 +395,8 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
             timeout_seconds=30,
         )
 
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+    assert error_info.value.retryable is True
     assert error_info.value.failure_stage is AnalysisFailureStage.SOURCE_MAP
     assert error_info.value.failure_detail is AnalysisFailureDetail.INVALID_SOURCE_REFERENCE
 
@@ -437,8 +438,8 @@ async def test_analyze_rejects_ambiguous_or_duplicate_source_indices() -> None:
                 timeout_seconds=30,
             )
 
-        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-        assert error_info.value.retryable is False
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+        assert error_info.value.retryable is True
 
 
 @pytest.mark.anyio
@@ -453,8 +454,8 @@ async def test_analyze_rejects_duplicate_item_keys() -> None:
             timeout_seconds=30,
         )
 
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert error_info.value.retryable is False
+    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+    assert error_info.value.retryable is True
 
 
 @pytest.mark.anyio
@@ -484,16 +485,51 @@ async def test_analyze_times_out() -> None:
 @pytest.mark.anyio
 async def test_analyze_maps_provider_errors() -> None:
     cases = [
-        (FakeAPIError(400), ProviderErrorKind.INVALID_INPUT, False),
-        (FakeAPIError(403), ProviderErrorKind.PERMISSION_DENIED, False),
-        (FakeAPIError(404), ProviderErrorKind.NOT_FOUND, False),
-        (FakeAPIError(409), ProviderErrorKind.CONFLICT, False),
-        (FakeAPIError(504), ProviderErrorKind.DEADLINE_EXCEEDED, True),
-        (FakeAPIError(500), ProviderErrorKind.UNAVAILABLE, True),
-        (RuntimeError("offline"), ProviderErrorKind.UNAVAILABLE, True),
+        (
+            FakeAPIError(400),
+            ProviderErrorKind.INVALID_INPUT,
+            False,
+            AnalysisFailureDetail.PROVIDER_REJECTED,
+        ),
+        (
+            FakeAPIError(403),
+            ProviderErrorKind.PERMISSION_DENIED,
+            False,
+            AnalysisFailureDetail.PROVIDER_REJECTED,
+        ),
+        (
+            FakeAPIError(404),
+            ProviderErrorKind.NOT_FOUND,
+            False,
+            AnalysisFailureDetail.PROVIDER_REJECTED,
+        ),
+        (
+            FakeAPIError(409),
+            ProviderErrorKind.CONFLICT,
+            False,
+            AnalysisFailureDetail.PROVIDER_REJECTED,
+        ),
+        (
+            FakeAPIError(504),
+            ProviderErrorKind.DEADLINE_EXCEEDED,
+            True,
+            AnalysisFailureDetail.PROVIDER_TIMEOUT,
+        ),
+        (
+            FakeAPIError(500),
+            ProviderErrorKind.UNAVAILABLE,
+            True,
+            AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            RuntimeError("offline"),
+            ProviderErrorKind.UNAVAILABLE,
+            True,
+            AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
+        ),
     ]
 
-    for error, kind, retryable in cases:
+    for error, kind, retryable, failure_detail in cases:
         provider = _provider(StubModels(error=error))
 
         with pytest.raises(ProviderError, match="provider call failed") as error_info:
@@ -505,6 +541,7 @@ async def test_analyze_maps_provider_errors() -> None:
         assert error_info.value.provider_status == (
             error.code if isinstance(error, errors.APIError) else None
         )
+        assert error_info.value.failure_detail is failure_detail
 
 
 @pytest.mark.anyio
@@ -572,9 +609,10 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
         )
 
     assert malformed_records[0].__dict__["analysis_stage"] == "parse"
-    assert malformed_records[0].__dict__["retryable"] is False
+    assert malformed_records[0].__dict__["retryable"] is True
     assert index_records[0].__dict__["analysis_stage"] == "source_map"
     assert index_records[0].__dict__["provider_status"] == 0
+    assert index_records[0].__dict__["retryable"] is True
 
     empty_index_output = (
         '{"items": [{"item_key": "bed", "description": "침대", "confidence": 0.9,'
@@ -589,4 +627,4 @@ async def test_malformed_and_source_index_failures_are_distinguished() -> None:
         )
 
     assert empty_index_records[0].__dict__["analysis_stage"] == "source_map"
-    assert empty_index_records[0].__dict__["retryable"] is False
+    assert empty_index_records[0].__dict__["retryable"] is True

@@ -185,6 +185,7 @@ def _retryable_failure_app(
     decision: AnalysisRetryDecision,
     prepare: AsyncMock,
     fail: AsyncMock,
+    failure_stage: AnalysisFailureStage = AnalysisFailureStage.PROVIDER_CALL,
 ) -> FastAPI:
     monkeypatch.setattr(worker, "start_capture_analysis", AsyncMock(return_value=True))
     monkeypatch.setattr(worker, "build_analysis_request", AsyncMock(return_value=_request()))
@@ -196,7 +197,7 @@ def _retryable_failure_app(
                 status=AnalysisTaskStatus.FAILED,
                 error_kind=ProviderErrorKind.UNAVAILABLE,
                 retryable=True,
-                failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+                failure_stage=failure_stage,
                 provider_status=503,
                 failure_detail=AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
             )
@@ -219,6 +220,27 @@ def test_analysis_route_retries_retryable_failure(monkeypatch: pytest.MonkeyPatc
         response = client.post("/tasks/analysis", json=_task().model_dump(mode="json"))
 
     assert response.status_code == 503
+    assert prepare.await_args is not None
+    assert prepare.await_args.kwargs["max_attempts"] == worker.MAX_ANALYSIS_ATTEMPTS
+
+
+def test_analysis_route_limits_output_failure_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare = AsyncMock()
+    fail = AsyncMock()
+    application = _retryable_failure_app(
+        monkeypatch,
+        decision=AnalysisRetryDecision.RETRY,
+        prepare=prepare,
+        fail=fail,
+        failure_stage=AnalysisFailureStage.PARSE,
+    )
+
+    with TestClient(application) as client:
+        response = client.post("/tasks/analysis", json=_task().model_dump(mode="json"))
+
+    assert response.status_code == 503
+    assert prepare.await_args is not None
+    assert prepare.await_args.kwargs["max_attempts"] == worker.MAX_ANALYSIS_OUTPUT_ATTEMPTS
 
 
 def test_analysis_route_terminates_when_retries_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,7 +8,11 @@ import pytest
 
 from app.contracts.ai import AnalysisRequest, AnalysisSourceContext
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, IdempotencyKey, MediaAssetId
-from app.entrypoints.worker import ANALYSIS_MODEL_NAME, ANALYSIS_PROMPT_LIBRARY
+from app.entrypoints.worker import (
+    ANALYSIS_MODEL_NAME,
+    ANALYSIS_PROMPT_LIBRARY,
+    ANALYSIS_PROMPT_VERSION,
+)
 from app.platform.ai.vertex import VertexAIProvider
 
 VERTEX_GCS_URI_ENV = "SEQRET_TEST_VERTEX_GCS_URI"
@@ -52,7 +56,7 @@ async def test_vertex_v2_accepts_staging_video_and_returns_reviewable_items() ->
         content_types=("video/mp4",),
         model_name=ANALYSIS_MODEL_NAME,
         model_version="staging-canary",
-        prompt_version="inventory-1",
+        prompt_version=ANALYSIS_PROMPT_VERSION,
         requested_result_schema_version=2,
         source_contexts=(
             AnalysisSourceContext(

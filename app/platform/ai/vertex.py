@@ -153,6 +153,16 @@ def _classify_provider_error(error: Exception) -> tuple[ProviderErrorKind, bool,
     return ProviderErrorKind.UNAVAILABLE, True, 0
 
 
+def _provider_failure_detail(kind: ProviderErrorKind) -> AnalysisFailureDetail:
+    """Keep the safe detail aligned with the provider-neutral retry class."""
+
+    if kind is ProviderErrorKind.DEADLINE_EXCEEDED:
+        return AnalysisFailureDetail.PROVIDER_TIMEOUT
+    if kind is ProviderErrorKind.UNAVAILABLE:
+        return AnalysisFailureDetail.PROVIDER_UNAVAILABLE
+    return AnalysisFailureDetail.PROVIDER_REJECTED
+
+
 class VertexAIProvider:
     """AIProviderPort adapter keeping Vertex types out of the application layer."""
 
@@ -202,11 +212,11 @@ class VertexAIProvider:
         stage: AnalysisFailureStage = AnalysisFailureStage.PARSE,
         detail: AnalysisFailureDetail = AnalysisFailureDetail.SCHEMA_VALIDATION,
     ) -> NoReturn:
-        self._log_failure(stage, ProviderErrorKind.INVALID_INPUT, False)
+        self._log_failure(stage, ProviderErrorKind.UNAVAILABLE, True)
         raise ProviderError(
-            ProviderErrorKind.INVALID_INPUT,
+            ProviderErrorKind.UNAVAILABLE,
             message,
-            retryable=False,
+            retryable=True,
             failure_stage=stage,
             failure_detail=detail,
         )
@@ -320,11 +330,7 @@ class VertexAIProvider:
                 retryable=retryable,
                 failure_stage=AnalysisFailureStage.PROVIDER_CALL,
                 provider_status=status_code or None,
-                failure_detail=(
-                    AnalysisFailureDetail.PROVIDER_REJECTED
-                    if status_code
-                    else AnalysisFailureDetail.PROVIDER_UNAVAILABLE
-                ),
+                failure_detail=_provider_failure_detail(kind),
             ) from error
 
         return self._to_result(request, text)
@@ -350,11 +356,11 @@ class VertexAIProvider:
                 _RawAnalysisOutputV2.model_validate_json(text),
             )
         except ValidationError as error:
-            self._log_failure(AnalysisFailureStage.PARSE, ProviderErrorKind.INVALID_INPUT, False)
+            self._log_failure(AnalysisFailureStage.PARSE, ProviderErrorKind.UNAVAILABLE, True)
             raise ProviderError(
-                ProviderErrorKind.INVALID_INPUT,
+                ProviderErrorKind.UNAVAILABLE,
                 "analysis provider returned malformed output",
-                retryable=False,
+                retryable=True,
                 failure_stage=AnalysisFailureStage.PARSE,
                 failure_detail=AnalysisFailureDetail.SCHEMA_VALIDATION,
             ) from error
