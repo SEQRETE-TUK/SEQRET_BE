@@ -38,6 +38,7 @@ from app.modules.analysis_workflow.models import (
     CaptureAnalysisDispatch,
     CaptureAnalysisStatus,
 )
+from app.modules.background_job.models import BackgroundJob, BackgroundJobStatus
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.scope.models import ScopeVersion
 from app.modules.scope.schemas import (
@@ -593,12 +594,14 @@ async def test_review_complete_is_atomic_idempotent_and_detects_conflicts(
 ) -> None:
     created = await _create_job(review_harness)
     seed = await _seed_completed_analysis(review_harness, created)
+    video_id, _ = await _seed_ready_video(review_harness, seed)
     url = f"/api/v1/move-jobs/{seed.job_id}/analysis-review/complete"
     headers = _headers(_secret(created, "customer"))
     payload = _complete_payload(seed)
 
     first = await review_harness.client.post(url, headers=headers, json=payload)
     assert first.status_code == 200
+    assert first.headers["cache-control"] == "no-store"
     body = first.json()
     review_scope_version_id = body["review_scope_version_id"]
     assert review_scope_version_id is not None
@@ -632,6 +635,7 @@ async def test_review_complete_is_atomic_idempotent_and_detects_conflicts(
 
     loaded = await review_harness.client.get(url.removesuffix("/complete"), headers=headers)
     assert loaded.status_code == 200
+    assert loaded.json()["video_preview"] is None
     assert loaded.json() == replay.json()
 
     conflicting_payload = _complete_payload(seed)
@@ -643,6 +647,16 @@ async def test_review_complete_is_atomic_idempotent_and_detects_conflicts(
     )
     assert conflict.status_code == 409
     async with review_harness.factory() as session:
+        video = await session.get(MediaAsset, video_id)
+        deletion_jobs = (
+            await session.scalars(
+                select(BackgroundJob).where(BackgroundJob.media_asset_id == video_id)
+            )
+        ).all()
+        assert video is not None
+        assert video.status is MediaAssetStatus.DELETED
+        assert len(deletion_jobs) == 1
+        assert deletion_jobs[0].status is BackgroundJobStatus.PENDING
         count = await session.scalar(
             select(func.count()).select_from(ScopeVersion).where(ScopeVersion.job_id == seed.job_id)
         )

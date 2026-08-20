@@ -147,12 +147,35 @@ async def create_retention_background_job(
     ):
         raise BackgroundJobConflictError(media_asset_id)
 
+    return await create_media_deletion_background_job(
+        session,
+        asset,
+        job_id,
+        participant_id,
+        trace_id=trace_id,
+        scheduled_at=scheduled_at,
+    )
+
+
+async def create_media_deletion_background_job(
+    session: AsyncSession,
+    asset: MediaAsset,
+    job_id: UUID,
+    participant_id: UUID | None,
+    *,
+    trace_id: str,
+    scheduled_at: datetime | None = None,
+) -> BackgroundJobResponse:
+    """Persist one generation-pinned media deletion intent."""
+
+    generation = cast(str, asset.generation)
+
     row = BackgroundJob(
         move_job_id=job_id,
-        media_asset_id=media_asset_id,
+        media_asset_id=asset.id,
         job_type=BackgroundJobType.MEDIA_RETENTION_DELETE,
         target_object_key=asset.object_key,
-        target_generation=asset.generation,
+        target_generation=generation,
         trace_id=trace_id,
         scheduled_at=scheduled_at or utc_now(),
         created_by_participant_id=participant_id,
@@ -165,7 +188,7 @@ async def create_retention_background_job(
         concurrent = await session.scalar(
             select(BackgroundJob).where(
                 BackgroundJob.job_type == BackgroundJobType.MEDIA_RETENTION_DELETE,
-                BackgroundJob.media_asset_id == media_asset_id,
+                BackgroundJob.media_asset_id == asset.id,
             )
         )
         if concurrent is None:

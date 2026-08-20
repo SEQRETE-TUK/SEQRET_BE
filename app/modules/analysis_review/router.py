@@ -86,6 +86,7 @@ async def get_analysis_review_endpoint(
 async def complete_analysis_review_endpoint(
     job_id: UUID,
     command: AnalysisReviewComplete,
+    response: Response,
     actor: CurrentActor,
     session: Session,
 ) -> AnalysisReviewResponse:
@@ -99,3 +100,5 @@ async def complete_analysis_review_endpoint(
         )
     except (AnalysisReviewNotFoundError, AnalysisReviewConflictError) as error:
         raise _review_error(error) from error
+    finally:
+        response.headers["Cache-Control"] = "no-store"

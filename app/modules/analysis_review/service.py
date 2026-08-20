@@ -23,6 +23,7 @@ from app.modules.analysis_workflow.models import (
     CaptureAnalysisDispatch,
     CaptureAnalysisStatus,
 )
+from app.modules.background_job.service import create_media_deletion_background_job
 from app.modules.capture.models import MediaAsset
 from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
 from app.modules.move_job.models import Location, LocationKind, RoomZone
@@ -252,6 +253,38 @@ async def _video_preview(
     )
 
 
+async def _consume_review_videos(
+    session: AsyncSession,
+    row: CaptureAnalysisDispatch,
+    participant_id: UUID,
+) -> None:
+    """Hide accepted analysis videos and enqueue generation-pinned deletion."""
+
+    assets = (
+        await session.scalars(
+            select(MediaAsset)
+            .where(
+                MediaAsset.capture_session_id == row.capture_session_id,
+                MediaAsset.media_purpose == MediaPurpose.INVENTORY,
+                MediaAsset.content_type == "video/mp4",
+                MediaAsset.status.in_({MediaAssetStatus.READY, MediaAssetStatus.DELETED}),
+                MediaAsset.generation.is_not(None),
+            )
+            .with_for_update()
+        )
+    ).all()
+    for asset in assets:
+        await create_media_deletion_background_job(
+            session,
+            asset,
+            row.move_job_id,
+            participant_id,
+            trace_id=row.trace_id,
+        )
+        asset.status = MediaAssetStatus.DELETED
+    await session.flush()
+
+
 async def _to_response(
     session: AsyncSession,
     row: CaptureAnalysisDispatch,
@@ -360,6 +393,7 @@ async def complete_analysis_review(
             or stored_content != normalized_content
         ):
             raise AnalysisReviewConflictError(source.id)
+        await _consume_review_videos(session, row, participant_id)
         return await _to_response(session, row, source, source_result, existing)
 
     try:
@@ -377,4 +411,5 @@ async def complete_analysis_review(
     except ScopeVersionConflictError as error:
         raise AnalysisReviewConflictError(source.id) from error
     review = cast(ScopeVersion, await session.get(ScopeVersion, created.id))
+    await _consume_review_videos(session, row, participant_id)
     return await _to_response(session, row, source, source_result, review)
