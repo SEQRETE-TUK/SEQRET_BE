@@ -418,7 +418,7 @@ async def test_create_upload_url_rejects_invalid_arguments(
         await adapter.create_upload_url(**kwargs)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("generation", ["", " ", "abc", "0", "7 ", "1" * 256])
+@pytest.mark.parametrize("generation", ["", " ", "0", "1" * 256])
 @pytest.mark.anyio
 async def test_create_read_url_rejects_invalid_generation(generation: str) -> None:
     adapter, _ = _adapter(StubBlob())

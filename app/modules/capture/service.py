@@ -2,7 +2,6 @@
 
 import secrets
 from datetime import timedelta
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -10,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import ProviderError, ProviderErrorKind, StoragePort
+from app.contracts.ports import StoragePort, validate_storage_url
 from app.contracts.primitives import utc_now
 from app.modules.analysis_workflow.models import CaptureAnalysisDispatch
 from app.modules.analysis_workflow.schemas import capture_analysis_response
@@ -118,21 +117,6 @@ async def _lock_mutable_job(session: AsyncSession, job_id: UUID) -> None:
         raise CaptureResourceNotFoundError(job_id)
     if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
         raise CaptureWorkflowConflictError(job_id)
-
-
-def _validated_upload_url(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        _ = parsed.port
-        if value != value.strip() or parsed.scheme.lower() != "https" or parsed.hostname is None:
-            raise ValueError
-    except ValueError:
-        raise ProviderError(
-            ProviderErrorKind.UNAVAILABLE,
-            "storage returned an invalid upload URL",
-            retryable=False,
-        ) from None
-    return value
 
 
 async def create_capture_session(
@@ -321,7 +305,10 @@ async def create_media_upload(
         expires_in_seconds=UPLOAD_URL_TTL_SECONDS,
         timeout_seconds=STORAGE_TIMEOUT_SECONDS,
     )
-    upload_url = _validated_upload_url(upload_target.url)
+    upload_url = validate_storage_url(
+        upload_target.url,
+        "storage returned an invalid upload URL",
+    )
 
     await _lock_mutable_job(session, job_id)
     await _lock_capture_for_media(session, job_id, capture_session_id, participant_id)

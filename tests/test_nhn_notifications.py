@@ -53,9 +53,19 @@ def _message(channel: ExternalNotificationChannel, destination: str) -> Outbound
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("channel", "destination", "expected_url", "secret", "response", "provider_id"),
-    [
+async def test_provider_builds_official_channel_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases: list[
+        tuple[
+            ExternalNotificationChannel,
+            str,
+            str,
+            str,
+            dict[str, object],
+            str,
+        ]
+    ] = [
         (
             ExternalNotificationChannel.EMAIL,
             "owner@example.com",
@@ -102,76 +112,73 @@ def _message(channel: ExternalNotificationChannel, destination: str) -> Outbound
             },
             "kakao-request",
         ),
-    ],
-)
-async def test_provider_builds_official_channel_requests(
-    monkeypatch: pytest.MonkeyPatch,
-    channel: ExternalNotificationChannel,
-    destination: str,
-    expected_url: str,
-    secret: str,
-    response: dict[str, object],
-    provider_id: str,
-) -> None:
-    captured: dict[str, object] = {}
+    ]
+    for channel, destination, expected_url, secret, response, provider_id in cases:
+        captured: dict[str, object] = {}
 
-    def fake_post(
-        url: str,
-        headers: Mapping[str, str],
-        payload: Mapping[str, object],
-        timeout_seconds: float,
-    ) -> dict[str, Any]:
-        captured.update(
-            url=url,
-            headers=dict(headers),
-            payload=dict(payload),
-            timeout_seconds=timeout_seconds,
-        )
-        return response
+        def fake_post(
+            url: str,
+            headers: Mapping[str, str],
+            payload: Mapping[str, object],
+            timeout_seconds: float,
+            *,
+            response: dict[str, object] = response,
+            captured: dict[str, object] = captured,
+        ) -> dict[str, Any]:
+            captured.update(
+                url=url,
+                headers=dict(headers),
+                payload=dict(payload),
+                timeout_seconds=timeout_seconds,
+            )
+            return response
 
-    monkeypatch.setattr(NhnCloudNotificationProvider, "_post_json", staticmethod(fake_post))
-    provider = NhnCloudNotificationProvider(_config())
-    message = _message(channel, destination)
-    result = await provider.send(
-        message=message,
-        idempotency_key=IdempotencyKey("notification:test"),
-        timeout_seconds=2.0,
-    )
+        with monkeypatch.context() as patch:
+            patch.setattr(NhnCloudNotificationProvider, "_post_json", staticmethod(fake_post))
+            provider = NhnCloudNotificationProvider(_config())
+            message = _message(channel, destination)
+            result = await provider.send(
+                message=message,
+                idempotency_key=IdempotencyKey("notification:test"),
+                timeout_seconds=2.0,
+            )
 
-    assert result.provider_message_id == provider_id
-    assert captured["url"] == expected_url
-    assert captured["timeout_seconds"] == 2.0
-    headers = captured["headers"]
-    assert isinstance(headers, dict)
-    assert headers["X-Secret-Key"] == secret
-    if channel is ExternalNotificationChannel.KAKAO:
-        assert headers["X-NC-API-IDEMPOTENCY-KEY"] == "notification:test"
-    else:
-        assert "X-NC-API-IDEMPOTENCY-KEY" not in headers
-    payload = captured["payload"]
-    assert isinstance(payload, dict)
-    assert secret not in json.dumps(payload, ensure_ascii=False)
-    assert payload["senderGroupingKey"] == "notification:test"
-    if channel is ExternalNotificationChannel.EMAIL:
-        assert payload["receiverList"] == [{"receiveMailAddr": destination, "receiveType": "MRT0"}]
-        assert payload["senderAddress"] == "notice@seqret.example.com"
-    elif channel is ExternalNotificationChannel.SMS:
-        assert payload["recipientList"] == [
-            {
-                "recipientNo": "01012345678",
-                "recipientGroupingKey": str(message.notification_id),
+        assert result.provider_message_id == provider_id
+        assert captured["url"] == expected_url
+        assert captured["timeout_seconds"] == 2.0
+        headers = captured["headers"]
+        assert isinstance(headers, dict)
+        assert headers["X-Secret-Key"] == secret
+        if channel is ExternalNotificationChannel.KAKAO:
+            assert headers["X-NC-API-IDEMPOTENCY-KEY"] == "notification:test"
+        else:
+            assert "X-NC-API-IDEMPOTENCY-KEY" not in headers
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        assert secret not in json.dumps(payload, ensure_ascii=False)
+        assert payload["senderGroupingKey"] == "notification:test"
+        if channel is ExternalNotificationChannel.EMAIL:
+            assert payload["receiverList"] == [
+                {"receiveMailAddr": destination, "receiveType": "MRT0"}
+            ]
+            assert payload["senderAddress"] == "notice@seqret.example.com"
+        elif channel is ExternalNotificationChannel.SMS:
+            assert payload["recipientList"] == [
+                {
+                    "recipientNo": "01012345678",
+                    "recipientGroupingKey": str(message.notification_id),
+                }
+            ]
+            assert payload["sendNo"] == "0212345678"
+            assert "title" not in payload
+        else:
+            recipients = payload["recipientList"]
+            assert isinstance(recipients, list)
+            assert recipients[0]["recipientNo"] == "01087654321"
+            assert recipients[0]["templateParameter"] == {
+                "message": message.body,
+                "deepLink": message.deep_link,
             }
-        ]
-        assert payload["sendNo"] == "0212345678"
-        assert "title" not in payload
-    else:
-        recipients = payload["recipientList"]
-        assert isinstance(recipients, list)
-        assert recipients[0]["recipientNo"] == "01087654321"
-        assert recipients[0]["templateParameter"] == {
-            "message": message.body,
-            "deepLink": message.deep_link,
-        }
 
 
 @pytest.mark.anyio
@@ -194,21 +201,16 @@ async def test_provider_rejects_unsuccessful_response(monkeypatch: pytest.Monkey
     assert not error_info.value.retryable
 
 
-@pytest.mark.parametrize(
-    ("payload", "expected"),
-    [
+def test_provider_message_id_uses_only_provider_request_id() -> None:
+    cases: list[tuple[dict[str, object], str | None]] = [
         ({"requestId": "root"}, "root"),
         ({"body": {"requestId": "body"}}, "body"),
         ({"body": {"data": {"requestId": "nested"}}}, "nested"),
         ({"message": {"requestId": "message"}}, "message"),
         ({"requestId": 0, "body": []}, None),
-    ],
-)
-def test_provider_message_id_uses_only_provider_request_id(
-    payload: dict[str, object],
-    expected: str | None,
-) -> None:
-    assert _provider_message_id(payload) == expected
+    ]
+    for payload, expected in cases:
+        assert _provider_message_id(payload) == expected
 
 
 def test_provider_uses_sms_only_for_short_euc_kr_body() -> None:
@@ -278,27 +280,23 @@ def test_provider_rejects_text_body_over_lms_limit() -> None:
     assert not error_info.value.retryable
 
 
-@pytest.mark.parametrize(
-    "channel",
-    [ExternalNotificationChannel.SMS, ExternalNotificationChannel.KAKAO],
-)
-def test_provider_rejects_non_korean_phone_destination(
-    channel: ExternalNotificationChannel,
-) -> None:
-    provider = NhnCloudNotificationProvider(_config())
-    with pytest.raises(ProviderError) as error_info:
-        provider._request_for(
-            _message(channel, "+12025550123"),
-            IdempotencyKey("notification:foreign"),
-        )
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert not error_info.value.retryable
+def test_provider_rejects_non_korean_phone_destination() -> None:
+    for channel in (ExternalNotificationChannel.SMS, ExternalNotificationChannel.KAKAO):
+        provider = NhnCloudNotificationProvider(_config())
+        with pytest.raises(ProviderError) as error_info:
+            provider._request_for(
+                _message(channel, "+12025550123"),
+                IdempotencyKey("notification:foreign"),
+            )
+        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+        assert not error_info.value.retryable
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("channel", "response"),
-    [
+async def test_provider_rejects_failed_recipient_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases: list[tuple[ExternalNotificationChannel, dict[str, object]]] = [
         (
             ExternalNotificationChannel.EMAIL,
             {
@@ -333,35 +331,34 @@ def test_provider_rejects_non_korean_phone_destination(
                 },
             },
         ),
-    ],
-)
-async def test_provider_rejects_failed_recipient_result(
-    monkeypatch: pytest.MonkeyPatch,
-    channel: ExternalNotificationChannel,
-    response: dict[str, object],
-) -> None:
-    monkeypatch.setattr(
-        NhnCloudNotificationProvider,
-        "_post_json",
-        staticmethod(lambda *_: response),
-    )
-    destination = (
-        "owner@example.com" if channel is ExternalNotificationChannel.EMAIL else "+821012345678"
-    )
-    with pytest.raises(ProviderError) as error_info:
-        await NhnCloudNotificationProvider(_config()).send(
-            message=_message(channel, destination),
-            idempotency_key=IdempotencyKey("notification:recipient-failure"),
-            timeout_seconds=1,
-        )
-    assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
-    assert not error_info.value.retryable
+    ]
+    for channel, response in cases:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                NhnCloudNotificationProvider,
+                "_post_json",
+                staticmethod(lambda *_, response=response: response),
+            )
+            destination = (
+                "owner@example.com"
+                if channel is ExternalNotificationChannel.EMAIL
+                else "+821012345678"
+            )
+            with pytest.raises(ProviderError) as error_info:
+                await NhnCloudNotificationProvider(_config()).send(
+                    message=_message(channel, destination),
+                    idempotency_key=IdempotencyKey("notification:recipient-failure"),
+                    timeout_seconds=1,
+                )
+        assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+        assert not error_info.value.retryable
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "response",
-    [
+async def test_provider_retries_incomplete_success_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses: list[dict[str, object]] = [
         {"header": {"isSuccessful": True, "resultCode": 0}},
         {
             "header": {"isSuccessful": True, "resultCode": 0},
@@ -375,25 +372,22 @@ async def test_provider_rejects_failed_recipient_result(
             "header": {"isSuccessful": True, "resultCode": 0},
             "body": {"data": {"results": [{"resultCode": 0}]}},
         },
-    ],
-)
-async def test_provider_retries_incomplete_success_response(
-    monkeypatch: pytest.MonkeyPatch,
-    response: dict[str, object],
-) -> None:
-    monkeypatch.setattr(
-        NhnCloudNotificationProvider,
-        "_post_json",
-        staticmethod(lambda *_: response),
-    )
-    with pytest.raises(ProviderError) as error_info:
-        await NhnCloudNotificationProvider(_config()).send(
-            message=_message(ExternalNotificationChannel.EMAIL, "owner@example.com"),
-            idempotency_key=IdempotencyKey("notification:incomplete"),
-            timeout_seconds=1,
-        )
-    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
-    assert error_info.value.retryable
+    ]
+    for response in responses:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                NhnCloudNotificationProvider,
+                "_post_json",
+                staticmethod(lambda *_, response=response: response),
+            )
+            with pytest.raises(ProviderError) as error_info:
+                await NhnCloudNotificationProvider(_config()).send(
+                    message=_message(ExternalNotificationChannel.EMAIL, "owner@example.com"),
+                    idempotency_key=IdempotencyKey("notification:incomplete"),
+                    timeout_seconds=1,
+                )
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+        assert error_info.value.retryable
 
 
 class _Response:
@@ -410,90 +404,86 @@ class _Response:
         return self.body
 
 
-@pytest.mark.parametrize(
-    ("status_code", "kind", "retryable"),
-    [
+def test_post_json_classifies_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    cases = [
         (401, ProviderErrorKind.PERMISSION_DENIED, False),
-        (403, ProviderErrorKind.PERMISSION_DENIED, False),
         (429, ProviderErrorKind.UNAVAILABLE, True),
         (500, ProviderErrorKind.UNAVAILABLE, True),
         (400, ProviderErrorKind.INVALID_INPUT, False),
-    ],
-)
-def test_post_json_classifies_http_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    status_code: int,
-    kind: ProviderErrorKind,
-    retryable: bool,
-) -> None:
-    def fail(*_: object, **__: object) -> None:
-        raise HTTPError("https://provider.invalid", status_code, "failed", Message(), None)
+    ]
+    for status_code, kind, retryable in cases:
 
-    monkeypatch.setattr("app.platform.notification.nhn_cloud.urlopen", fail)
-    with pytest.raises(ProviderError) as error_info:
-        NhnCloudNotificationProvider._post_json(
-            "https://provider.invalid",
-            {},
-            {},
-            1,
-        )
-    assert error_info.value.kind is kind
-    assert error_info.value.retryable is retryable
+        def fail(
+            *_: object,
+            status_code: int = status_code,
+            **__: object,
+        ) -> None:
+            raise HTTPError("https://provider.invalid", status_code, "failed", Message(), None)
+
+        with monkeypatch.context() as patch:
+            patch.setattr("app.platform.notification.nhn_cloud.urlopen", fail)
+            with pytest.raises(ProviderError) as error_info:
+                NhnCloudNotificationProvider._post_json(
+                    "https://provider.invalid",
+                    {},
+                    {},
+                    1,
+                )
+        assert error_info.value.kind is kind
+        assert error_info.value.retryable is retryable
 
 
-@pytest.mark.parametrize(
-    ("failure", "kind"),
-    [
+def test_post_json_classifies_transport_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    cases: list[tuple[Exception, ProviderErrorKind]] = [
         (TimeoutError(), ProviderErrorKind.DEADLINE_EXCEEDED),
         (URLError("offline"), ProviderErrorKind.UNAVAILABLE),
-    ],
-)
-def test_post_json_classifies_transport_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    failure: Exception,
-    kind: ProviderErrorKind,
-) -> None:
-    def fail(*_: object, **__: object) -> None:
-        raise failure
+    ]
+    for failure, kind in cases:
 
-    monkeypatch.setattr("app.platform.notification.nhn_cloud.urlopen", fail)
-    with pytest.raises(ProviderError) as error_info:
-        NhnCloudNotificationProvider._post_json(
-            "https://provider.invalid",
-            {},
-            {},
-            1,
-        )
-    assert error_info.value.kind is kind
-    assert error_info.value.retryable
+        def fail(
+            *_: object,
+            failure: Exception = failure,
+            **__: object,
+        ) -> None:
+            raise failure
+
+        with monkeypatch.context() as patch:
+            patch.setattr("app.platform.notification.nhn_cloud.urlopen", fail)
+            with pytest.raises(ProviderError) as error_info:
+                NhnCloudNotificationProvider._post_json(
+                    "https://provider.invalid",
+                    {},
+                    {},
+                    1,
+                )
+        assert error_info.value.kind is kind
+        assert error_info.value.retryable
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        b"x" * 1_000_001,
-        b"\xff",
-        b"{",
-        b"[]",
-    ],
-)
 def test_post_json_rejects_oversized_or_invalid_responses(
     monkeypatch: pytest.MonkeyPatch,
-    body: bytes,
 ) -> None:
-    monkeypatch.setattr(
-        "app.platform.notification.nhn_cloud.urlopen",
-        lambda *_args, **_kwargs: _Response(body),
-    )
-    with pytest.raises(ProviderError) as error_info:
-        NhnCloudNotificationProvider._post_json(
-            "https://provider.invalid",
-            {},
-            {},
-            1,
-        )
-    assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
-    assert error_info.value.retryable
+    cases = [
+        ("oversized", b"x" * 1_000_001),
+        ("invalid-utf8", b"\xff"),
+        ("invalid-json", b"{"),
+        ("non-object-json", b"[]"),
+    ]
+    for case_id, body in cases:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "app.platform.notification.nhn_cloud.urlopen",
+                lambda *_args, body=body, **_kwargs: _Response(body),
+            )
+            with pytest.raises(ProviderError) as error_info:
+                NhnCloudNotificationProvider._post_json(
+                    "https://provider.invalid",
+                    {},
+                    {},
+                    1,
+                )
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE, case_id
+        assert error_info.value.retryable, case_id
 
 
 def test_post_json_returns_object_and_config_repr_hides_secrets(

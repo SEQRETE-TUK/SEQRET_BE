@@ -3,6 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Protocol, Self, runtime_checkable
+from urllib.parse import urlsplit
 
 from pydantic import ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
@@ -70,6 +71,25 @@ class ProviderError(RuntimeError):
         super().__init__(message)
         self.kind = kind
         self.retryable = retryable
+
+
+def validate_storage_url(value: str, error_message: str) -> str:
+    """Reject malformed provider URLs without exposing their contents."""
+
+    try:
+        if value != value.strip():
+            raise ValueError
+        parsed = urlsplit(value)
+        _ = parsed.port
+        if parsed.scheme.lower() != "https" or parsed.hostname is None:
+            raise ValueError
+    except ValueError:
+        raise ProviderError(
+            ProviderErrorKind.UNAVAILABLE,
+            error_message,
+            retryable=False,
+        ) from None
+    return value
 
 
 @runtime_checkable

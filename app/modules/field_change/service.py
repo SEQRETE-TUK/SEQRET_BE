@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.contracts.actor import ParticipantRole
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
-from app.contracts.ports import StoragePort
+from app.contracts.ports import StoragePort, validate_storage_url
 from app.contracts.primitives import utc_now
 from app.modules.capture.models import CaptureSession, MediaAsset
 from app.modules.capture.service import STORAGE_TIMEOUT_SECONDS
@@ -64,7 +64,6 @@ from app.modules.scope_review.schemas import (
     ScopeMediaPreview,
     ScopeReviewJobHeader,
 )
-from app.modules.scope_review.service import _validated_read_url
 from app.platform.event_bus import enqueue_domain_event
 
 READ_URL_TTL_SECONDS = 5 * 60
@@ -383,7 +382,7 @@ async def create_field_issue_evidence_read_url(
         media_asset_id=asset.id,
         room_zone_id=asset.room_zone_id,
         content_type=asset.content_type,
-        read_url=_validated_read_url(read_url),
+        read_url=validate_storage_url(read_url, "storage returned an invalid read URL"),
         expires_at=expires_at,
     )
 
@@ -649,7 +648,7 @@ async def _evidence_previews(
             expires_in_seconds=READ_URL_TTL_SECONDS,
             timeout_seconds=STORAGE_TIMEOUT_SECONDS,
         )
-        validated_url = _validated_read_url(read_url)
+        validated_url = validate_storage_url(read_url, "storage returned an invalid read URL")
         previews.append(
             ScopeMediaPreview(
                 media_asset_id=asset.id,

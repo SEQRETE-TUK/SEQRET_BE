@@ -3,7 +3,6 @@
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,9 +14,8 @@ from app.contracts.actor import ParticipantRole
 from app.contracts.ai import AnalysisResult, DraftItem
 from app.contracts.media import MediaAssetStatus
 from app.contracts.ports import (
-    ProviderError,
-    ProviderErrorKind,
     StoragePort,
+    validate_storage_url,
 )
 from app.contracts.primitives import utc_now
 from app.modules.access.models import InvitationStatus, ParticipantInvitation
@@ -585,23 +583,6 @@ async def confirm_scope_proposal(
     )
 
 
-def _validated_read_url(value: str) -> str:
-    try:
-        if value != value.strip():
-            raise ValueError
-        parsed = urlsplit(value)
-        _ = parsed.port
-        if parsed.scheme.lower() != "https" or parsed.hostname is None:
-            raise ValueError
-    except ValueError:
-        raise ProviderError(
-            ProviderErrorKind.UNAVAILABLE,
-            "storage returned an invalid read URL",
-            retryable=False,
-        ) from None
-    return value
-
-
 async def _media_previews(
     session: AsyncSession,
     storage: StoragePort,
@@ -641,7 +622,10 @@ async def _media_previews(
                 media_asset_id=asset.id,
                 room_zone_id=asset.room_zone_id,
                 content_type=asset.content_type,
-                read_url=_validated_read_url(read_url),
+                read_url=validate_storage_url(
+                    read_url,
+                    "storage returned an invalid read URL",
+                ),
                 expires_at=expires_at,
             )
         )

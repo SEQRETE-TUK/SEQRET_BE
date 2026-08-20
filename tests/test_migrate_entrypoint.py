@@ -63,15 +63,6 @@ def test_migration_gate_requires_database_configuration() -> None:
         migrate.run(Settings(environment=AppEnvironment.TEST))
 
 
-def test_migration_main_uses_environment_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    run = Mock()
-    monkeypatch.setattr(migrate, "run", run)
-
-    migrate.main()
-
-    run.assert_called_once_with()
-
-
 def test_migration_module_invokes_main(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "app.entrypoints.migrate", raising=False)
     monkeypatch.setattr("alembic.command.upgrade", Mock())

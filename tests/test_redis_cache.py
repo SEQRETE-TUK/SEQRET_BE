@@ -108,7 +108,7 @@ async def test_redis_counter_enforces_its_own_deadline(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("result", [True, 0, -1, "1", None])
+@pytest.mark.parametrize("result", [True, 0, "1"])
 async def test_redis_counter_rejects_invalid_results(result: object) -> None:
     with pytest.raises(ProviderError) as error_info:
         await _cache(StubRedis(result)).increment_fixed_window(

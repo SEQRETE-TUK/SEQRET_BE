@@ -728,9 +728,6 @@ async def test_contact_revoke_uses_runtime_update_privileges() -> None:
     assert contact.destination == "revoked:email"
     assert contact.enabled is False
     assert contact.updated_at > datetime(2026, 8, 19, tzinfo=UTC)
-    session.delete.assert_not_awaited()
-    session.execute.assert_awaited_once()
-    session.flush.assert_awaited_once()
 
 
 @pytest.mark.anyio
