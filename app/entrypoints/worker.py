@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.routes.system import router as system_router
 from app.config import Settings
-from app.contracts.ai import AnalysisTaskV1
+from app.contracts.ai import AnalysisFailureDetail, AnalysisFailureStage, AnalysisTaskV1
 from app.contracts.maintenance import MediaDeletionTaskV1, MediaValidationTaskV1
 from app.contracts.ports import AIProviderPort, ProviderErrorKind
 from app.contracts.primitives import utc_now
@@ -184,6 +184,8 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                     task,
                     error_kind=ProviderErrorKind.INVALID_INPUT,
                     retryable=False,
+                    failure_stage=AnalysisFailureStage.INPUT_LOOKUP,
+                    failure_detail=AnalysisFailureDetail.NO_READY_MEDIA,
                     completed_at=utc_now(),
                 )
             return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -206,6 +208,8 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                         task,
                         error_kind=ProviderErrorKind.CONFLICT,
                         retryable=False,
+                        failure_stage=AnalysisFailureStage.RESULT_LOAD,
+                        failure_detail=AnalysisFailureDetail.RESULT_MISSING,
                         completed_at=utc_now(),
                     )
                 else:
@@ -243,6 +247,9 @@ def create_worker_app(settings: Settings | None = None) -> FastAPI:
                 task,
                 error_kind=outcome.error_kind or ProviderErrorKind.CONFLICT,
                 retryable=outcome.retryable,
+                failure_stage=outcome.failure_stage,
+                provider_status=outcome.provider_status,
+                failure_detail=outcome.failure_detail,
                 completed_at=utc_now(),
             )
         return Response(status_code=status.HTTP_204_NO_CONTENT)

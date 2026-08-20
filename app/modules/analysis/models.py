@@ -67,6 +67,14 @@ class AiAnalysisRun(Base):
             name="ai_analysis_run_failure_code_present",
         ),
         CheckConstraint(
+            "failure_stage IS NULL OR length(failure_stage) > 0",
+            name="ai_analysis_run_failure_stage_present",
+        ),
+        CheckConstraint(
+            "failure_detail_code IS NULL OR length(failure_detail_code) > 0",
+            name="ai_analysis_run_failure_detail_present",
+        ),
+        CheckConstraint(
             "(status = 'COMPLETED') = (model_name IS NOT NULL)",
             name="ai_analysis_run_completed_model",
         ),
@@ -110,6 +118,9 @@ class AiAnalysisRun(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(100))
     result_schema_version: Mapped[int | None] = mapped_column(Integer)
     failure_code: Mapped[str | None] = mapped_column(String(64))
+    failure_stage: Mapped[str | None] = mapped_column(String(32))
+    provider_status: Mapped[int | None] = mapped_column(Integer)
+    failure_detail_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

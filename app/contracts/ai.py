@@ -1,5 +1,6 @@
 """Versioned AI output that remains an unconfirmed draft."""
 
+from enum import StrEnum
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
@@ -32,6 +33,36 @@ AnalysisLocationConditionField = Literal[
     "carry_distance",
     "access_note",
 ]
+
+
+class AnalysisFailureStage(StrEnum):
+    """Stable stage where one capture analysis stopped."""
+
+    PROMPT = "prompt"
+    INPUT_LOOKUP = "input_lookup"
+    PROVIDER_CALL = "provider_call"
+    PARSE = "parse"
+    SOURCE_MAP = "source_map"
+    RESULT_LOAD = "result_load"
+    SCOPE_IMPORT = "scope_import"
+
+
+class AnalysisFailureDetail(StrEnum):
+    """Safe diagnostic detail that never contains provider or media contents."""
+
+    PROMPT_NOT_CONFIGURED = "prompt_not_configured"
+    NO_READY_MEDIA = "no_ready_media"
+    PROVIDER_REJECTED = "provider_rejected"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    EMPTY_RESPONSE = "empty_response"
+    SCHEMA_VALIDATION = "schema_validation"
+    INVALID_SOURCE_REFERENCE = "invalid_source_reference"
+    MIXED_SOURCE_LOCATION = "mixed_source_location"
+    DUPLICATE_ITEM_KEY = "duplicate_item_key"
+    DUPLICATE_LOCATION = "duplicate_location"
+    RESULT_MISSING = "result_missing"
+    SCOPE_IMPORT_INVALID = "scope_import_invalid"
 
 
 class AnalysisSourceContext(ContractModel):

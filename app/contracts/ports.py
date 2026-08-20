@@ -7,7 +7,12 @@ from urllib.parse import urlsplit
 
 from pydantic import ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
-from app.contracts.ai import AnalysisRequest, AnalysisResult
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisRequest,
+    AnalysisResult,
+)
 from app.contracts.events import DomainEvent
 from app.contracts.model import ContractModel
 from app.contracts.notification import NotificationSendResult, OutboundNotification
@@ -67,10 +72,22 @@ class ProviderErrorKind(StrEnum):
 class ProviderError(RuntimeError):
     """Provider-neutral adapter failure without request secrets."""
 
-    def __init__(self, kind: ProviderErrorKind, message: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        kind: ProviderErrorKind,
+        message: str,
+        *,
+        retryable: bool,
+        failure_stage: AnalysisFailureStage | None = None,
+        provider_status: int | None = None,
+        failure_detail: AnalysisFailureDetail | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
         self.retryable = retryable
+        self.failure_stage = failure_stage
+        self.provider_status = provider_status
+        self.failure_detail = failure_detail
 
 
 def validate_storage_url(value: str, error_message: str) -> str:

@@ -12,7 +12,14 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.config import AppEnvironment, Settings
-from app.contracts.ai import AnalysisRequest, AnalysisResult, AnalysisTaskV1, DraftItem
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisRequest,
+    AnalysisResult,
+    AnalysisTaskV1,
+    DraftItem,
+)
 from app.contracts.ports import ProviderErrorKind
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, MediaAssetId, TraceId
 from app.entrypoints import worker
@@ -148,6 +155,8 @@ def test_analysis_route_acks_when_no_inventory_media(monkeypatch: pytest.MonkeyP
     assert fail_call is not None
     assert fail_call.kwargs["error_kind"] is ProviderErrorKind.INVALID_INPUT
     assert fail_call.kwargs["retryable"] is False
+    assert fail_call.kwargs["failure_stage"] is AnalysisFailureStage.INPUT_LOOKUP
+    assert fail_call.kwargs["failure_detail"] is AnalysisFailureDetail.NO_READY_MEDIA
 
 
 @pytest.mark.parametrize("terminal", [False, True])
@@ -187,6 +196,9 @@ def _retryable_failure_app(
                 status=AnalysisTaskStatus.FAILED,
                 error_kind=ProviderErrorKind.UNAVAILABLE,
                 retryable=True,
+                failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+                provider_status=503,
+                failure_detail=AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
             )
         ),
     )
@@ -224,6 +236,9 @@ def test_analysis_route_terminates_when_retries_exhausted(monkeypatch: pytest.Mo
     assert fail_call is not None
     assert fail_call.kwargs["error_kind"] is ProviderErrorKind.UNAVAILABLE
     assert fail_call.kwargs["retryable"] is True
+    assert fail_call.kwargs["failure_stage"] is AnalysisFailureStage.PROVIDER_CALL
+    assert fail_call.kwargs["provider_status"] == 503
+    assert fail_call.kwargs["failure_detail"] is AnalysisFailureDetail.PROVIDER_UNAVAILABLE
 
 
 def test_analysis_route_fails_when_completed_result_is_missing(
@@ -249,6 +264,8 @@ def test_analysis_route_fails_when_completed_result_is_missing(
     assert fail_call is not None
     assert fail_call.kwargs["error_kind"] is ProviderErrorKind.CONFLICT
     assert fail_call.kwargs["retryable"] is False
+    assert fail_call.kwargs["failure_stage"] is AnalysisFailureStage.RESULT_LOAD
+    assert fail_call.kwargs["failure_detail"] is AnalysisFailureDetail.RESULT_MISSING
 
 
 def test_analysis_route_normalizes_stored_failure_without_kind(

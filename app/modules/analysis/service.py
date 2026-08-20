@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.contracts.ai import (
     AnalysisCarryDistanceCondition,
     AnalysisElevatorAvailability,
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
     AnalysisFloorCondition,
     AnalysisKnowledgeStatus,
     AnalysisLocationConditionField,
@@ -64,6 +66,9 @@ class AnalysisRunSnapshot:
 
     status: AnalysisRunStatus
     failure_kind: ProviderErrorKind | None
+    failure_stage: AnalysisFailureStage | None
+    provider_status: int | None
+    failure_detail: AnalysisFailureDetail | None
 
 
 class AnalysisRunNotFoundError(RuntimeError):
@@ -156,6 +161,9 @@ async def complete_analysis_run(
     run.prompt_version = result.prompt_version
     run.result_schema_version = result.result_schema_version
     run.failure_code = None
+    run.failure_stage = None
+    run.provider_status = None
+    run.failure_detail_code = None
     run.completed_at = now
 
     ordinal = 0
@@ -214,6 +222,9 @@ async def fail_analysis_run(
     *,
     analysis_run_id: AnalysisRunId,
     error_kind: ProviderErrorKind,
+    failure_stage: AnalysisFailureStage | None = None,
+    provider_status: int | None = None,
+    failure_detail: AnalysisFailureDetail | None = None,
     now: datetime,
 ) -> None:
     """Record a provider failure so a human can still work manually."""
@@ -223,7 +234,20 @@ async def fail_analysis_run(
         raise AnalysisRunNotFoundError(str(analysis_run_id))
 
     if run.status is AnalysisRunStatus.FAILED:
-        if run.failure_code == error_kind.value:
+        if (
+            run.failure_code == error_kind.value
+            and run.failure_stage in {None, failure_stage.value if failure_stage else None}
+            and run.provider_status in {None, provider_status}
+            and run.failure_detail_code in {None, failure_detail.value if failure_detail else None}
+        ):
+            run.failure_stage = run.failure_stage or (
+                failure_stage.value if failure_stage else None
+            )
+            run.provider_status = run.provider_status or provider_status
+            run.failure_detail_code = run.failure_detail_code or (
+                failure_detail.value if failure_detail else None
+            )
+            await session.flush()
             return
         raise AnalysisRunConflictError("failed run does not match the replayed error")
     if run.status is not AnalysisRunStatus.RUNNING:
@@ -231,6 +255,9 @@ async def fail_analysis_run(
 
     run.status = AnalysisRunStatus.FAILED
     run.failure_code = error_kind.value
+    run.failure_stage = failure_stage.value if failure_stage else None
+    run.provider_status = provider_status
+    run.failure_detail_code = failure_detail.value if failure_detail else None
     run.completed_at = now
     await session.flush()
 
@@ -336,7 +363,17 @@ async def get_analysis_run_snapshot(
     if run is None:
         raise AnalysisRunNotFoundError(str(analysis_run_id))
     failure_kind = None if run.failure_code is None else ProviderErrorKind(run.failure_code)
-    return AnalysisRunSnapshot(status=run.status, failure_kind=failure_kind)
+    failure_stage = None if run.failure_stage is None else AnalysisFailureStage(run.failure_stage)
+    failure_detail = (
+        None if run.failure_detail_code is None else AnalysisFailureDetail(run.failure_detail_code)
+    )
+    return AnalysisRunSnapshot(
+        status=run.status,
+        failure_kind=failure_kind,
+        failure_stage=failure_stage,
+        provider_status=run.provider_status,
+        failure_detail=failure_detail,
+    )
 
 
 async def reopen_analysis_run(
@@ -365,6 +402,9 @@ async def reopen_analysis_run(
     run.started_at = now
     run.completed_at = None
     run.failure_code = None
+    run.failure_stage = None
+    run.provider_status = None
+    run.failure_detail_code = None
     run.model_name = None
     run.model_version = None
     run.prompt_version = None
@@ -400,6 +440,9 @@ async def prepare_analysis_retry(
         run.started_at = now
         run.completed_at = None
         run.failure_code = None
+        run.failure_stage = None
+        run.provider_status = None
+        run.failure_detail_code = None
         run.model_name = None
         run.model_version = None
         run.prompt_version = None

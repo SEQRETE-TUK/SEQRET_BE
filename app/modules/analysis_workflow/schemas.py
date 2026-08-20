@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+from app.contracts.ai import AnalysisFailureDetail, AnalysisFailureStage
 from app.contracts.model import ContractModel
 from app.modules.analysis_workflow.models import (
     CaptureAnalysisDispatch,
@@ -19,6 +20,9 @@ class CaptureAnalysisResponse(ContractModel):
     scope_version_id: UUID | None
     failure_code: str | None
     retryable: bool | None
+    failure_stage: AnalysisFailureStage | None
+    provider_status: int | None
+    failure_detail_code: AnalysisFailureDetail | None
     submitted_at: datetime
     completed_at: datetime | None
 
@@ -35,6 +39,15 @@ def capture_analysis_response(row: CaptureAnalysisDispatch) -> CaptureAnalysisRe
         scope_version_id=row.scope_version_id,
         failure_code=row.failure_code,
         retryable=row.retryable,
+        failure_stage=(
+            AnalysisFailureStage(row.failure_stage) if row.failure_stage is not None else None
+        ),
+        provider_status=row.provider_status,
+        failure_detail_code=(
+            AnalysisFailureDetail(row.failure_detail_code)
+            if row.failure_detail_code is not None
+            else None
+        ),
         submitted_at=(
             submitted_at.replace(tzinfo=UTC) if submitted_at.tzinfo is None else submitted_at
         ),

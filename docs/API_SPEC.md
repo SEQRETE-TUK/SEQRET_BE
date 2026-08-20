@@ -940,7 +940,7 @@ version은 `409`다. AI 조건은 작업 원본을 자동 변경하지 않고 �
 | `GET /move-jobs`, `PATCH /move-jobs/{id}` | 역할별 다중 작업 목록·검색·필터와 고객의 견적 전 기본정보 서버 수정을 제공한다. v2 조건 변경은 새 범위 snapshot을 만들며 잠긴 범위는 거부한다. |
 | `GET /move-jobs/{id}` | 현재 기본정보 원본과 호환 조회로 유지하고 화면 단위 view에는 필요한 header만 재사용 |
 | `DELETE /move-jobs/{id}` | 견적 전 고객 작업을 취소하고 모든 capability를 철회하는 frontend 실행 계약으로 유지 |
-| capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. FE #4가 현재 계약으로 첫 E2E를 연결했으며, 이후 화면용 capture command/view로 축소할지는 별도로 결정한다. |
+| capture session 생성·목록, asset upload·complete, submit·analysis status 6개 | storage와 durable 분석 흐름을 재사용한다. 실패 상태는 `failure_code`, `retryable`, `failure_stage`, 선택적 `provider_status`, `failure_detail_code`로 원인을 구분하되 provider 원문은 노출하지 않는다. |
 | analysis review 조회·완료 2개 | 최신 완료 분석의 v1/v2 구조화 품목·위치 조건 제안을 조회하고 고객 편집본을 불변 자식 scope version으로 한 번만 생성한다. FE는 v2 필드와 위치조건 검수 UI를 추가 연결해야 한다. |
 | scope review 현재 조회·이력·제안·수정요청·확인 5개 | FE 범위 화면용 실행 계약이다. 기존 scope version·approval을 내부 원본으로 재사용하며 범위 v1·v2 내용과 버전별 견적·양측 확인 시각을 노출한다. |
 | dispatch setup·조회·확정, field brief·check-in 5개 | 작업별 resource snapshot을 기준으로 배차를 확정하고 대표 현장기사에게 알림·브리프·당일 checklist 체크인을 제공한다. |

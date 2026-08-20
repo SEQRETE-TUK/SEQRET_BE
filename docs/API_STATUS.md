@@ -158,7 +158,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions` | 명시적 미디어 동의 snapshot과 촬영 session 생성 | 현재 정책 버전과 안내 확인 없이는 생성 거부 |
 | `GET /api/v1/move-jobs/{job_id}/capture-sessions` | 본인 세션·미디어 validation·분석 상태 복구 | 첫 촬영·AI E2E slice의 query로 바로 사용 가능; signed capability와 provider 내부값은 제외 |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/submit` | READY inventory 촬영을 동결하고 분석 intent 생성 | 첫 촬영·AI E2E slice의 command로 바로 사용 가능; 화면용 adapter 여부는 FE 연동 후 결정 |
-| `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis` | 분석 queue·실행·범위 초안 terminal 상태 조회 | 첫 촬영·AI E2E slice의 polling query로 바로 사용 가능; review item view는 별도 필요 |
+| `GET /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/analysis` | 분석 queue·실행·범위 초안 terminal 상태 조회 | 실패 시 `failure_stage`·`provider_status`·`failure_detail_code`를 안전한 진단값으로 반환; 원문·provider task는 제외 |
 | `GET /api/v1/move-jobs/{job_id}/analysis-review` | 최신 완료 분석의 공간별 검증 수·편집 항목 조회 | FE AI 검토 화면의 단일 query; model·prompt·provider task 정보는 제외 |
 | `POST /api/v1/move-jobs/{job_id}/analysis-review/complete` | 고객 검토 결과를 불변 scope version으로 확정 | FE AI 검토 CTA의 단일 command; stale 원본과 상충 재전송은 `409` |
 | `POST /api/v1/move-jobs/{job_id}/capture-sessions/{capture_session_id}/media-assets/upload` | signed upload URL 발급 | `POST /media-uploads`로 축소 |
@@ -210,8 +210,9 @@ versioned contract로 승인해야 한다. 현재 HTTP mutation 전체에 `Idemp
 없고 API CORS는 credential 요청과 `DELETE`, `GET`, `PATCH`, `POST`, `PUT`을 허용한다. 제안 계약은
 OpenAPI에 등록된 뒤에만 frontend에 적용한다.
 촬영 제출은 capture 소유자에게 멱등이며 제출 뒤 추가 media mutation을 막는다. 분석 상태 API는
-`scope_version_id` 또는 provider-neutral 실패만 노출하므로, FE는 provider task ID나 오류 원문을
-별도 계약으로 추정하지 않는다.
+`scope_version_id` 또는 provider-neutral 실패를 노출한다. 실패에는 `failure_code`·`retryable`과
+`failure_stage`·선택적 HTTP `provider_status`·`failure_detail_code`가 포함되며, FE는 provider task ID,
+GCS URI, 모델 응답과 오류 원문을 별도 계약으로 추정하거나 표시하지 않는다.
 
 ## 6. 운영 route 3개
 
@@ -252,7 +253,7 @@ INT-12까지 현재 backend는 전체 순회 가능한 다중 작업, 구조화 
 
 ### migration
 
-INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했고 A-23은 `a_23_0001`과 `scope_proposal.execution_plan`을 추가했다. INT-09는 `int_09_0001`과 workspace account·membership·session·contact point, 기본정보 수정 감사와 외부 notification delivery 필드를 추가했다. INT-12는 `int_12_0001`과 `location.detail_address`, location·scope·change snapshot의 사다리차 backfill 및 scope hash 재계산을 추가했다. 단일 head는 `int_12_0001`이며 A-20·A-21·A-22는 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
+INT-01은 `int_01_0001`과 `capture_analysis_dispatch`, A-02는 `a_02_0002`와 `participant_invitation`, INT-02는 `int_02_0001`과 `scope_proposal`·`scope_revision_request`, INT-03은 `int_03_0002`와 `field_issue`·`field_issue_evidence`·`change_proposal_detail`, A-13은 `a_13_0001`과 `dispatch_setup`·`dispatch_plan`·`field_check_in`, INT-04는 `int_04_0001`과 `completion_submission`·`completion_submission_evidence`·`completion_request`·`completion_problem_report` 및 완료 checklist를 추가했다. A-16은 `a_16_0001`과 `location.conditions`, A-19는 `a_19_0001`과 촬영별 미디어 동의 snapshot을 추가했다. B-08은 `b_08_0001`과 AI v2 품목 필드·`analysis_location_condition_suggestion`을 추가했고 A-23은 `a_23_0001`과 `scope_proposal.execution_plan`을 추가했다. INT-09는 `int_09_0001`과 workspace account·membership·session·contact point, 기본정보 수정 감사와 외부 notification delivery 필드를 추가했다. INT-12는 `int_12_0001`과 `location.detail_address`, location·scope·change snapshot의 사다리차 backfill 및 scope hash 재계산을 추가했다. INT-17은 `int_17_0001`과 B 실행·A 공개 상태의 실패 단계, provider 상태, 안전한 세부 코드를 추가했다. 단일 head는 `int_17_0001`이며 A-20·A-21·A-22는 DB migration 없이 versioned 계약과 기존 JSON scope·analysis source를 재사용한다.
 
 ## 8. frontend 연동 기준
 

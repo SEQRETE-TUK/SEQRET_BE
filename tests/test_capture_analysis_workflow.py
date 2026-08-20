@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.contracts.actor import ParticipantRole
-from app.contracts.ai import AnalysisResult, AnalysisTaskV1, DraftItem
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisResult,
+    AnalysisTaskV1,
+    DraftItem,
+)
 from app.contracts.fakes import FakeTaskQueue
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind
@@ -828,6 +834,9 @@ async def test_complete_turns_unimportable_result_into_manual_fallback(
     assert response.status is CaptureAnalysisStatus.FAILED
     assert response.failure_code == ProviderErrorKind.INVALID_INPUT
     assert response.retryable is False
+    assert response.failure_stage is AnalysisFailureStage.SCOPE_IMPORT
+    assert response.provider_status is None
+    assert response.failure_detail_code is AnalysisFailureDetail.SCOPE_IMPORT_INVALID
     assert response.scope_version_id is None
 
 
@@ -862,6 +871,9 @@ async def test_failure_is_idempotent_and_rejects_contradictory_terminal_outcome(
             task,
             error_kind=ProviderErrorKind.UNAVAILABLE,
             retryable=True,
+            failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+            provider_status=503,
+            failure_detail=AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
             completed_at=NOW,
         )
     async with factory.begin() as session:
@@ -870,6 +882,9 @@ async def test_failure_is_idempotent_and_rejects_contradictory_terminal_outcome(
             task,
             error_kind=ProviderErrorKind.UNAVAILABLE,
             retryable=True,
+            failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+            provider_status=503,
+            failure_detail=AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
             completed_at=NOW + timedelta(minutes=1),
         )
         with pytest.raises(CaptureAnalysisConflictError):
@@ -890,6 +905,9 @@ async def test_failure_is_idempotent_and_rejects_contradictory_terminal_outcome(
             )
 
     assert first.status is CaptureAnalysisStatus.FAILED
+    assert first.failure_stage is AnalysisFailureStage.PROVIDER_CALL
+    assert first.provider_status == 503
+    assert first.failure_detail_code is AnalysisFailureDetail.PROVIDER_UNAVAILABLE
     assert repeated.completed_at == first.completed_at
     async with factory() as session:
         assert (
