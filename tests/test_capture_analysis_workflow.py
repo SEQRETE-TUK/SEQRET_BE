@@ -726,6 +726,77 @@ async def test_complete_attaches_existing_analysis_scope(
 
 
 @pytest.mark.anyio
+async def test_complete_chains_reanalysis_after_unreviewed_ai_scope(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seed = await _seed_capture(factory, MediaAssetStatus.READY)
+    row = await _submit(factory, seed)
+    task = _task(row)
+    result = _result(seed, row)
+    previous_capture_id = uuid4()
+    previous_run_id = uuid4()
+    previous_scope_id = uuid4()
+    async with factory.begin() as session:
+        stored = await session.get(CaptureAnalysisDispatch, row.analysis_run_id)
+        assert stored is not None
+        stored.status = CaptureAnalysisStatus.RUNNING
+        session.add(
+            CaptureSession(
+                id=previous_capture_id,
+                job_id=seed.job_id,
+                created_by_participant_id=seed.participant_id,
+                media_consent_policy_version="2026-08-17.v1",
+                privacy_notice_acknowledged=True,
+                media_retention_days=30,
+                media_consented_at=NOW,
+            )
+        )
+        session.add(
+            ScopeVersion(
+                id=previous_scope_id,
+                job_id=seed.job_id,
+                sequence_number=1,
+                content={"schema_version": 1, "items": []},
+                content_hash="b" * 64,
+                source_analysis_run_id=previous_run_id,
+                source_capture_session_id=previous_capture_id,
+                analysis_source=result.model_copy(
+                    update={
+                        "analysis_run_id": previous_run_id,
+                        "capture_session_id": previous_capture_id,
+                    }
+                ).model_dump(mode="json"),
+                created_by_participant_id=None,
+            )
+        )
+        session.add(
+            CaptureAnalysisDispatch(
+                analysis_run_id=previous_run_id,
+                capture_session_id=previous_capture_id,
+                move_job_id=seed.job_id,
+                submitted_by_participant_id=seed.participant_id,
+                status=CaptureAnalysisStatus.COMPLETED,
+                trace_id="f" * 32,
+                scheduled_at=NOW - timedelta(minutes=1),
+                scope_version_id=previous_scope_id,
+                submitted_at=NOW - timedelta(minutes=1),
+                completed_at=NOW - timedelta(minutes=1),
+            )
+        )
+
+    async with factory.begin() as session:
+        response = await complete_capture_analysis(session, task, result, completed_at=NOW)
+
+    assert response.status is CaptureAnalysisStatus.COMPLETED
+    assert response.scope_version_id is not None
+    async with factory() as session:
+        created = await session.get(ScopeVersion, response.scope_version_id)
+        assert created is not None
+        assert created.parent_version_id == previous_scope_id
+        assert created.sequence_number == 2
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("invalid_kind", ["empty", "existing_root"])
 async def test_complete_turns_unimportable_result_into_manual_fallback(
     factory: async_sessionmaker[AsyncSession],

@@ -459,9 +459,15 @@ async def complete_capture_analysis(
         )
     )
     if scope_version is None:
+        parent_version_id = await _previous_unreviewed_analysis_scope(session, row)
         try:
             async with session.begin_nested():
-                imported = await import_analysis_draft(session, row.move_job_id, result)
+                imported = await import_analysis_draft(
+                    session,
+                    row.move_job_id,
+                    result,
+                    parent_version_id=parent_version_id,
+                )
         except (
             AnalysisDraftInvalidError,
             ScopeResourceNotFoundError,
@@ -497,6 +503,36 @@ async def complete_capture_analysis(
     )
     await session.flush()
     return capture_analysis_response(row)
+
+
+async def _previous_unreviewed_analysis_scope(
+    session: AsyncSession,
+    row: CaptureAnalysisDispatch,
+) -> UUID | None:
+    previous = await session.scalar(
+        select(ScopeVersion)
+        .join(
+            CaptureAnalysisDispatch,
+            CaptureAnalysisDispatch.scope_version_id == ScopeVersion.id,
+        )
+        .where(
+            CaptureAnalysisDispatch.move_job_id == row.move_job_id,
+            CaptureAnalysisDispatch.analysis_run_id != row.analysis_run_id,
+            CaptureAnalysisDispatch.status == CaptureAnalysisStatus.COMPLETED,
+            ScopeVersion.locked_at.is_(None),
+        )
+        .order_by(
+            CaptureAnalysisDispatch.completed_at.desc(),
+            CaptureAnalysisDispatch.analysis_run_id.desc(),
+        )
+        .limit(1)
+    )
+    if previous is None:
+        return None
+    child_id = await session.scalar(
+        select(ScopeVersion.id).where(ScopeVersion.parent_version_id == previous.id)
+    )
+    return previous.id if child_id is None else None
 
 
 async def fail_capture_analysis(
