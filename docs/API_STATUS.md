@@ -87,7 +87,7 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 | 업체 배차 | `GET /api/v1/move-jobs/{job_id}/dispatch` | 차량·작업자 후보와 충돌 조회 | 구현 | 현재 범위에 묶인 작업별 immutable 후보 snapshot, 요구사항·충돌·선택 상태 반환 |
 | 업체 배차 | `PUT /api/v1/move-jobs/{job_id}/dispatch` | 배정 확정과 알림 생성 | 구현 | 용량·인원·기술·자격·대표 기사를 원자 검증하고 `dispatch_confirmed.v1` 알림 연결 |
 | 업체·고객 완료 | `GET /api/v1/move-jobs/{job_id}/completion-summary` | 완료 사진, 근무, 변경, 금액, 요청·문서 요약 | 구현 | 업체와 요청받은 고객의 단일 view; 체크리스트 항목과 UPLOADED·READY generation-pinned preview 포함, 최종 확인은 READY에서만 처리 |
-| 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 7일 완료 확인 요청 | 구현 | 최신 제출·활성 요청·정확 replay 검증과 고객 알림 intent 연결 |
+| 업체 완료 | `POST /api/v1/move-jobs/{job_id}/completion-requests` | 고객에게 7일 완료 확인 요청 | 구현 | 최신 제출·활성 요청·정확 replay 검증과 고객 알림 intent 연결; 미처리 현장 이슈가 있으면 `409` |
 | 업체 완료 | `GET /api/v1/move-jobs/{job_id}/documents/archive` | 증빙 PDF 4종·manifest ZIP 다운로드 | 구현 | 결정적 archive; 준비 전 `409`, 완료 DB 사실과 생성 실패 분리 |
 | 현장기사 범위 | `GET /api/v1/move-jobs/{job_id}/field-brief` | 최신 범위, 경로, 일정, 담당자와 현장 조건 조회 | 구현 | 확정 배정·현재 잠긴 범위·마스킹 위치·checklist와 체크인 상태를 한 view로 반환 |
 | 현장기사 범위 | `POST /api/v1/move-jobs/{job_id}/check-ins` | 현장 도착 시각 기록 | 구현 | 배정된 대표 기사, 예정일 당일과 checklist 전체 확인을 검증하고 정확 replay 허용 |
@@ -98,8 +98,8 @@ generation-pinned upload, 불변 scope version, capability role과 감사 계약
 
 | 화면 | Method · Path | 용도 | 상태 | 재사용 기반·남은 일 |
 | --- | --- | --- | --- | --- |
-| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 구현 | 체크인·현재 배차·범위·작업자·선택적 upload-complete 미디어 검증과 정정 제출 지원; 고객 최종 확인은 READY 필수 |
-| 고객 완료 확인 | `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 문제 신고 | 구현 | 책임 자동판단 없이 문제를 분리하고 확인 시 완료·보존 intent를 원자 반영 |
+| 현장기사 완료 기록 | `POST /api/v1/move-jobs/{job_id}/completion-submissions` | 완료 사진, 체크리스트, 실제 근무와 현장 확인 제출 | 구현 | 체크인·현재 배차·범위·작업자·선택적 upload-complete 미디어 검증과 정정 제출 지원; 미처리 현장 이슈가 있으면 `409`, 고객 최종 확인은 READY 필수 |
+| 고객 완료 확인 | `POST /api/v1/move-jobs/{job_id}/completion-requests/{request_id}/decision` | 완료 확인 또는 문제 신고 | 구현 | 책임 자동판단 없이 문제를 분리하고 확인 시 완료·보존 intent를 원자 반영; 미처리 현장 이슈가 있으면 업체 요청·고객 확인을 `409`로 차단 |
 
 두 P0 API는 승인되어 [API 명세](API_SPEC.md)와 OpenAPI에 편입됐다. 목표 19개 중 화면용 upload adapter를 제외한 18개가 구현됐다.
 

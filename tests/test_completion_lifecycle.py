@@ -48,9 +48,10 @@ from app.modules.completion.schemas import (
     CompletionWorkerShiftCreate,
 )
 from app.modules.dispatch.models import DispatchPlan, DispatchSetup, FieldCheckIn
+from app.modules.field_change.models import ChangeProposalDetail, FieldIssue, FieldIssueType
 from app.modules.move_job.models import MoveJobStatus
 from app.modules.notification.service import consume_notification_event
-from app.modules.scope.models import ScopeVersion
+from app.modules.scope.models import ChangeRequest, ChangeRequestStatus, ScopeVersion
 from app.platform.db import Base, create_session_factory
 from app.platform.event_bus.models import OutboxEvent
 from app.platform.event_bus.service import _to_domain_event
@@ -379,6 +380,181 @@ async def _context(
         "work_ended_at": completed_at.isoformat(),
     }
     return created, payload
+
+
+async def _insert_open_field_issue(
+    factory: async_sessionmaker[AsyncSession],
+    created: dict[str, Any],
+    scope_id: str,
+) -> str:
+    async with factory.begin() as session:
+        issue = FieldIssue(
+            job_id=UUID(created["job"]["id"]),
+            client_reference=uuid4(),
+            base_scope_version_id=UUID(scope_id),
+            reported_by_participant_id=UUID(_participant_id(created, "field_worker")),
+            issue_type=FieldIssueType.SITE_BLOCKER,
+            title="완료 전 처리 필요",
+            description="업체와 고객이 처리해야 하는 현장 보고",
+            created_at=datetime.now(UTC),
+        )
+        session.add(issue)
+        await session.flush()
+        return str(issue.id)
+
+
+async def _set_field_issue_status(
+    factory: async_sessionmaker[AsyncSession],
+    created: dict[str, Any],
+    scope_id: str,
+    issue_id: str,
+    status: ChangeRequestStatus,
+) -> None:
+    async with factory.begin() as session:
+        scope = await session.get(ScopeVersion, UUID(scope_id))
+        assert scope is not None
+        now = datetime.now(UTC)
+        terminal = status in {ChangeRequestStatus.APPROVED, ChangeRequestStatus.REJECTED}
+        clarification = status is ChangeRequestStatus.CLARIFICATION_REQUESTED
+        request = ChangeRequest(
+            job_id=UUID(created["job"]["id"]),
+            base_scope_version_id=scope.id,
+            requested_by_participant_id=UUID(_participant_id(created, "company_manager")),
+            description="현장 보고 처리",
+            proposed_content=scope.content,
+            status=status,
+            clarification_requested_by_participant_id=(
+                UUID(_participant_id(created, "customer")) if clarification else None
+            ),
+            clarification_request="추가 설명 필요" if clarification else None,
+            clarification_requested_at=now if clarification else None,
+            decided_by_participant_id=(
+                UUID(_participant_id(created, "customer")) if terminal else None
+            ),
+            decision_note="처리 종료" if status is ChangeRequestStatus.REJECTED else None,
+            decided_at=now if terminal else None,
+            result_scope_version_id=(scope.id if status is ChangeRequestStatus.APPROVED else None),
+            created_at=now,
+        )
+        session.add(request)
+        await session.flush()
+        session.add(
+            ChangeProposalDetail(
+                change_request_id=request.id,
+                field_issue_id=UUID(issue_id),
+                title="현장 보고 처리안",
+                base_amount_krw=0,
+                adjustments=[],
+                total_amount_krw=0,
+                created_at=now,
+            )
+        )
+
+
+@pytest.mark.anyio
+async def test_completion_requires_field_reports_to_be_resolved(
+    completion_lifecycle_api: CompletionApi,
+) -> None:
+    client, factory, _ = completion_lifecycle_api
+    created, submission_payload = await _context(completion_lifecycle_api, with_media=False)
+    job_id = created["job"]["id"]
+    scope_id = submission_payload["scope_version_id"]
+    submission_url = f"/api/v1/move-jobs/{job_id}/completion-submissions"
+
+    issue_id = await _insert_open_field_issue(factory, created, scope_id)
+    blocked_submission = await client.post(
+        submission_url,
+        headers=_headers(created, "field_worker"),
+        json=submission_payload,
+    )
+    assert blocked_submission.status_code == 409
+    await _set_field_issue_status(
+        factory,
+        created,
+        scope_id,
+        issue_id,
+        ChangeRequestStatus.REJECTED,
+    )
+
+    submitted = await client.post(
+        submission_url,
+        headers=_headers(created, "field_worker"),
+        json=submission_payload,
+    )
+    assert submitted.status_code == 201
+    submission_id = submitted.json()["completion_submission_id"]
+
+    issue_id = await _insert_open_field_issue(factory, created, scope_id)
+    blocked_request = await client.post(
+        f"/api/v1/move-jobs/{job_id}/completion-requests",
+        headers=_headers(created, "company_manager"),
+        json={"client_reference": str(uuid4()), "completion_submission_id": submission_id},
+    )
+    assert blocked_request.status_code == 409
+    await _set_field_issue_status(
+        factory,
+        created,
+        scope_id,
+        issue_id,
+        ChangeRequestStatus.REJECTED,
+    )
+
+    request = await client.post(
+        f"/api/v1/move-jobs/{job_id}/completion-requests",
+        headers=_headers(created, "company_manager"),
+        json={"client_reference": str(uuid4()), "completion_submission_id": submission_id},
+    )
+    assert request.status_code == 201
+
+    issue_id = await _insert_open_field_issue(factory, created, scope_id)
+    blocked_decision = await client.post(
+        f"/api/v1/move-jobs/{job_id}/completion-requests/{request.json()['completion_request_id']}/decision",
+        headers=_headers(created, "customer"),
+        json={"decision": "confirm"},
+    )
+    assert blocked_decision.status_code == 409
+    await _set_field_issue_status(
+        factory,
+        created,
+        scope_id,
+        issue_id,
+        ChangeRequestStatus.REJECTED,
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "blocked"),
+    (
+        (ChangeRequestStatus.PENDING, True),
+        (ChangeRequestStatus.CLARIFICATION_REQUESTED, True),
+        (ChangeRequestStatus.APPROVED, False),
+        (ChangeRequestStatus.REJECTED, False),
+    ),
+)
+@pytest.mark.anyio
+async def test_completion_gate_matches_field_issue_status(
+    completion_lifecycle_api: CompletionApi,
+    status: ChangeRequestStatus,
+    blocked: bool,
+) -> None:
+    _, factory, _ = completion_lifecycle_api
+    created, submission_payload = await _context(completion_lifecycle_api, with_media=False)
+    scope_id = submission_payload["scope_version_id"]
+    issue_id = await _insert_open_field_issue(factory, created, scope_id)
+    await _set_field_issue_status(factory, created, scope_id, issue_id, status)
+
+    async with factory.begin() as session:
+        if blocked:
+            with pytest.raises(completion_service.CompletionConflictError):
+                await completion_service._ensure_field_issues_resolved(
+                    session,
+                    UUID(created["job"]["id"]),
+                )
+        else:
+            await completion_service._ensure_field_issues_resolved(
+                session,
+                UUID(created["job"]["id"]),
+            )
 
 
 @pytest.mark.anyio
@@ -1428,7 +1604,7 @@ async def test_completion_defensive_invariants_reject_corrupt_relations(
         "_latest_request",
         AsyncMock(return_value=None),
     )
-    session.scalar = AsyncMock(side_effect=[None, submission])
+    session.scalar = AsyncMock(side_effect=[None, None, submission])
     with pytest.raises(completion_service.CompletionResourceNotFoundError):
         await completion_service.create_completion_request(
             session,
@@ -1503,7 +1679,7 @@ async def test_completion_defensive_invariants_reject_corrupt_relations(
         "_ensure_completion_confirmation",
         AsyncMock(),
     )
-    session.scalar = AsyncMock(side_effect=[request, submission])
+    session.scalar = AsyncMock(side_effect=[request, submission, None])
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: []))
     with pytest.raises(completion_service.CompletionConflictError):
         await completion_service.decide_completion_request(

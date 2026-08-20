@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -58,7 +58,7 @@ from app.modules.completion.schemas import (
 )
 from app.modules.dispatch.models import DispatchPlan, DispatchSetup, FieldCheckIn
 from app.modules.dispatch.schemas import DispatchWorkerOption
-from app.modules.field_change.models import ChangeProposalDetail
+from app.modules.field_change.models import ChangeProposalDetail, FieldIssue
 from app.modules.move_job.models import (
     JobParticipant,
     Location,
@@ -162,6 +162,7 @@ async def confirm_completion(
     )
     if participant is None:
         raise CompletionResourceNotFoundError(job_id)
+    await _ensure_field_issues_resolved(session, job_id)
 
     scope_version = await session.scalar(
         select(ScopeVersion).where(
@@ -532,6 +533,31 @@ async def _latest_request(
     return cast(CompletionRequest | None, await session.scalar(statement))
 
 
+async def _ensure_field_issues_resolved(session: AsyncSession, job_id: UUID) -> None:
+    """Prevent completion from advancing while any field report is unresolved."""
+
+    unresolved_issue_id = await session.scalar(
+        select(FieldIssue.id)
+        .outerjoin(
+            ChangeProposalDetail,
+            ChangeProposalDetail.field_issue_id == FieldIssue.id,
+        )
+        .outerjoin(ChangeRequest, ChangeRequest.id == ChangeProposalDetail.change_request_id)
+        .where(
+            FieldIssue.job_id == job_id,
+            or_(
+                ChangeProposalDetail.change_request_id.is_(None),
+                ChangeRequest.status.not_in(
+                    {ChangeRequestStatus.APPROVED, ChangeRequestStatus.REJECTED}
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    if unresolved_issue_id is not None:
+        raise CompletionConflictError(unresolved_issue_id)
+
+
 async def submit_completion(
     session: AsyncSession,
     job_id: UUID,
@@ -567,6 +593,7 @@ async def submit_completion(
         raise CompletionConflictError(command.client_reference)
     if job.status in {MoveJobStatus.COMPLETED, MoveJobStatus.CANCELED}:
         raise CompletionConflictError(job_id)
+    await _ensure_field_issues_resolved(session, job_id)
 
     latest = await _latest_submission(session, job_id, lock=True)
     latest_request = await _latest_request(session, job_id)
@@ -849,6 +876,7 @@ async def create_completion_request(
         ):
             return await _request_response(session, replay)
         raise CompletionConflictError(command.client_reference)
+    await _ensure_field_issues_resolved(session, job_id)
 
     submission = await session.scalar(
         select(CompletionSubmission)
@@ -1047,6 +1075,7 @@ async def decide_completion_request(
     confirmed_assets: tuple[MediaAsset, ...] = ()
 
     if command.decision == "confirm":
+        await _ensure_field_issues_resolved(session, job_id)
         confirmed_assets = tuple(
             (await session.scalars(select(MediaAsset).where(MediaAsset.id.in_(evidence_ids)))).all()
         )

@@ -702,6 +702,8 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 - 완료 미디어는 선택 사항이다. 전달한 ID는 같은 기사가 upload complete를 마친 `UPLOADED|READY`
   completion 객체여야 하고 generation이 고정돼야 한다. 이 조건으로 FE는 complete 응답 직후 제출할 수
   있지만 고객의 최종 완료 확인은 비동기 검증이 모두 `READY`로 끝난 뒤에만 허용한다.
+- 미처리 현장 이슈(`open`, `customer_review`, `clarification_requested`)가 하나라도 있으면 완료 제출은
+  `409`로 거절한다. 해당 이슈가 고객 승인 또는 거절로 종결된 뒤에만 다음 완료 단계로 진행할 수 있다.
 - 같은 `client_reference`와 정확한 payload는 최초 결과를 반환한다. 고객 문제 신고·요청 만료·철회 뒤에는 새 reference로 정정 제출할 수 있다.
 
 ### 5.8 완료 확인 요청·철회·결정
@@ -732,6 +734,8 @@ provider가 연결되더라도 접근 권한을 확인한 현장기사에게만 
 - 고객만 최신 살아 있는 요청을 `confirm|report_issue`로 결정한다. 확인 body에는 문제 필드를 넣지 않고,
   문제 신고는 `missing_work|damage|amount|other`와 설명이 필수다. completion 미디어가 있으면 `confirm`은
   모두 `READY`인 경우에만 처리한다.
+- 미처리 현장 이슈가 남아 있으면 업체의 확인 요청 생성과 고객의 `confirm` 결정 모두 `409`로 거절한다.
+  `report_issue`는 별도로 처리할 수 있다.
 - 문제 신고는 작업을 완료하지 않고 정정 제출을 허용한다. 확인은 작업을 `completed`로 전이하고 선택적 완료 미디어의 보존 삭제 intent를 함께 만든다.
 - terminal 요청의 정확한 결정 replay는 같은 결과를 반환하고 상충 결정은 `409`다.
 
