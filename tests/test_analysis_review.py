@@ -315,9 +315,7 @@ async def _seed_ready_video(
     seed: ReviewSeed,
 ) -> tuple[UUID, str]:
     media_asset_id = uuid4()
-    object_key = (
-        f"jobs/{seed.job_id}/captures/{seed.capture_session_id}/analysis-video.mp4"
-    )
+    object_key = f"jobs/{seed.job_id}/captures/{seed.capture_session_id}/analysis-video.mp4"
     async with harness.factory.begin() as session:
         session.add(
             MediaAsset(
@@ -559,9 +557,7 @@ async def test_review_returns_signed_video_preview(
     preview = response.json()["video_preview"]
     assert preview["media_asset_id"] == str(media_asset_id)
     assert preview["content_type"] == "video/mp4"
-    assert preview["read_url"] == (
-        f"https://storage.invalid/read/{object_key}?generation=4"
-    )
+    assert preview["read_url"] == (f"https://storage.invalid/read/{object_key}?generation=4")
     assert datetime.fromisoformat(preview["expires_at"]) > datetime.now(UTC)
 
 
