@@ -115,6 +115,24 @@ async def test_one_move_connection_code_opens_each_selected_role(
     )
     assert invited.status_code == 201
 
+    preview = await workspace_client.post(
+        "/api/v1/connections/preview",
+        json={"connection_code": code.lower(), "role": "customer"},
+    )
+    assert preview.status_code == 200
+    assert preview.headers["cache-control"] == "no-store"
+    assert preview.json() == {"role": "customer", "display_name": "김고객"}
+    assert "set-cookie" not in preview.headers
+    unassigned_preview = await workspace_client.post(
+        "/api/v1/connections/preview",
+        json={"connection_code": code, "role": "field_worker"},
+    )
+    assert unassigned_preview.status_code == 200
+    assert unassigned_preview.json() == {
+        "role": "field_worker",
+        "display_name": "현장기사",
+    }
+
     connected_customer = await workspace_client.post(
         "/api/v1/connections",
         json={"connection_code": code.lower(), "role": "customer"},
@@ -156,6 +174,11 @@ async def test_one_move_connection_code_opens_each_selected_role(
         json={"connection_code": "MOVE-00000000", "role": "customer"},
     )
     assert rejected.status_code == 401
+    rejected_preview = await workspace_client.post(
+        "/api/v1/connections/preview",
+        json={"connection_code": "MOVE-00000000", "role": "customer"},
+    )
+    assert rejected_preview.status_code == 401
     malformed_prefix = await workspace_client.post(
         "/api/v1/connections",
         json={"connection_code": "NOPE-00000000", "role": "customer"},

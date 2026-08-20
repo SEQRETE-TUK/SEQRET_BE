@@ -38,6 +38,7 @@ from app.modules.access.schemas import (
     InvitationListResponse,
     InvitationResponse,
     MoveConnectionCreate,
+    MoveConnectionPreviewResponse,
     WorkspaceContactPointListResponse,
     WorkspaceContactPointResponse,
     WorkspaceContactPointUpsert,
@@ -61,6 +62,7 @@ from app.modules.access.workspace import (
     delete_contact_point,
     get_workspace_session,
     list_contact_points,
+    preview_move_connection,
     resolve_move_connection,
     revoke_workspace_session,
     upsert_contact_point,
@@ -141,6 +143,32 @@ async def create_workspace_session_endpoint(
         _set_workspace_cookie(request, response, issued.cookie_secret)
     response.headers["Cache-Control"] = "no-store"
     return issued.response
+
+
+@identity_router.post(
+    "/connections/preview",
+    response_model=MoveConnectionPreviewResponse,
+    responses=protected_error_responses(),
+    summary="공용 이사 연결 코드 표시명 미리보기",
+)
+async def preview_move_connection_endpoint(
+    command: MoveConnectionCreate,
+    response: Response,
+    session: Session,
+) -> MoveConnectionPreviewResponse:
+    try:
+        result = await preview_move_connection(
+            session,
+            command.connection_code,
+            command.role,
+        )
+    except InvalidMoveConnectionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid move connection code",
+        ) from error
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @identity_router.post(
