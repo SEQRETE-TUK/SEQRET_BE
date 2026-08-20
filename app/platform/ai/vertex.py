@@ -13,11 +13,11 @@ Idempotency is intentionally enforced at the analysis-run persistence layer
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
-from typing import NoReturn, Protocol, cast
+from typing import Annotated, NoReturn, Protocol, cast
 
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.contracts.ai import (
     AnalysisCarryDistanceCondition,
@@ -38,41 +38,90 @@ from app.contracts.ai import (
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import IdempotencyKey, MediaAssetId
 
+MAX_ANALYSIS_ITEMS = 500
+MAX_LOCATION_CONDITIONS = 2
+MAX_PERSISTED_QUANTITY = 2_147_483_647
+_SourceIndex = Annotated[int, Field(ge=0)]
+_VERTEX_STATEFUL_CONSTRAINTS = frozenset(
+    {"maxItems", "maxLength", "maximum", "minItems", "minLength", "minimum"}
+)
+
 
 class _StrictProviderModel(BaseModel):
     """Provider JSON model that rejects fields outside the versioned schema."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        str_strip_whitespace=True,
+    )
 
 
 class _RawDraftItem(_StrictProviderModel):
     """Strict shape the model must return for one draft item."""
 
-    item_key: str = Field(min_length=1, max_length=100)
+    item_key: str = Field(
+        min_length=1,
+        max_length=100,
+        description="Identifier unique within this response.",
+    )
     description: str = Field(min_length=1, max_length=2000)
     confidence: float = Field(ge=0.0, le=1.0)
-    source_indices: tuple[int, ...]
+    source_indices: tuple[_SourceIndex, ...] = Field(
+        description="Unique zero-based indices from the supplied media sources.",
+    )
     review_required: bool = False
 
 
 class _RawAnalysisOutput(_StrictProviderModel):
     """Strict envelope validated fail-closed before mapping to the contract."""
 
-    items: tuple[_RawDraftItem, ...] = Field(min_length=1)
+    items: tuple[_RawDraftItem, ...] = Field(
+        min_length=1,
+        max_length=MAX_ANALYSIS_ITEMS,
+    )
 
 
 class _RawDraftItemV2(_StrictProviderModel):
     """Structured item output used only by result schema v2."""
 
-    item_key: str = Field(min_length=1, max_length=100)
+    item_key: str = Field(
+        min_length=1,
+        max_length=100,
+        description="Identifier unique within this response.",
+    )
     description: str = Field(min_length=1, max_length=2000)
     name: str = Field(min_length=1, max_length=200)
-    quantity: int | None = Field(default=None, ge=1)
-    unit: str | None = Field(default=None, min_length=1, max_length=20)
+    quantity: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_PERSISTED_QUANTITY,
+        description="Positive count, or null together with unit when uncertain.",
+    )
+    unit: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        description="Counting unit, or null together with quantity when uncertain.",
+    )
     work_note: str | None = Field(default=None, min_length=1, max_length=500)
     confidence: float = Field(ge=0.0, le=1.0)
-    source_indices: tuple[int, ...] = Field(min_length=1)
-    review_required: bool = False
+    source_indices: tuple[_SourceIndex, ...] = Field(
+        min_length=1,
+        description="Unique zero-based indices from the supplied media sources.",
+    )
+    review_required: bool = Field(
+        default=False,
+        description="True when any item fact needs human confirmation.",
+    )
+
+    @field_validator("unit", "work_note", mode="before")
+    @classmethod
+    def normalize_blank_optional_text(cls, value: object) -> object:
+        """Treat provider blank optional text as unknown instead of malformed."""
+
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 class _RawFloorCondition(_StrictProviderModel):
@@ -88,7 +137,10 @@ class _RawCarryDistanceCondition(_StrictProviderModel):
 class _RawLocationConditionV2(_StrictProviderModel):
     """Location suggestion keyed only by input indices, never provider IDs."""
 
-    source_indices: tuple[int, ...] = Field(min_length=1)
+    source_indices: tuple[_SourceIndex, ...] = Field(
+        min_length=1,
+        description="Unique zero-based indices from the supplied media sources.",
+    )
     residence_type: AnalysisResidenceType = "unknown"
     floor: _RawFloorCondition = Field(default_factory=_RawFloorCondition)
     elevator: AnalysisElevatorAvailability = "unknown"
@@ -97,14 +149,57 @@ class _RawLocationConditionV2(_StrictProviderModel):
     carry_distance: _RawCarryDistanceCondition = Field(default_factory=_RawCarryDistanceCondition)
     access_note: str | None = Field(default=None, min_length=1, max_length=1000)
     confidence: float = Field(ge=0.0, le=1.0)
-    review_required_fields: tuple[AnalysisLocationConditionField, ...] = ()
+    review_required_fields: tuple[AnalysisLocationConditionField, ...] = Field(
+        default=(),
+        max_length=7,
+    )
+
+    @field_validator("access_note", mode="before")
+    @classmethod
+    def normalize_blank_access_note(cls, value: object) -> object:
+        """Treat an empty optional access note as absent."""
+
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 class _RawAnalysisOutputV2(_StrictProviderModel):
     """Strict v2 envelope for inventory and quote-impacting conditions."""
 
-    items: tuple[_RawDraftItemV2, ...] = Field(min_length=1)
-    location_conditions: tuple[_RawLocationConditionV2, ...] = ()
+    items: tuple[_RawDraftItemV2, ...] = Field(
+        min_length=1,
+        max_length=MAX_ANALYSIS_ITEMS,
+    )
+    location_conditions: tuple[_RawLocationConditionV2, ...] = Field(
+        default=(),
+        max_length=MAX_LOCATION_CONDITIONS,
+    )
+
+
+def _strip_vertex_stateful_constraints(value: object) -> None:
+    """Keep Vertex's generation schema structural and validate limits locally.
+
+    Vertex rejects otherwise-valid, nested response schemas when numeric, text,
+    and especially long array bounds create too many serving states. The strict
+    Pydantic models above remain the source of truth for parsing and persistence
+    safety after generation.
+    """
+
+    if isinstance(value, dict):
+        for key in _VERTEX_STATEFUL_CONSTRAINTS:
+            value.pop(key, None)
+        for child in value.values():
+            _strip_vertex_stateful_constraints(child)
+    elif isinstance(value, list):
+        for child in value:
+            _strip_vertex_stateful_constraints(child)
+
+
+def _vertex_response_schema(model: type[BaseModel]) -> dict[str, object]:
+    """Build a fresh SDK-safe schema because google-genai mutates schema dicts."""
+
+    schema = model.model_json_schema()
+    _strip_vertex_stateful_constraints(schema)
+    return cast(dict[str, object], schema)
 
 
 class GenerateContentResponse(Protocol):
@@ -289,13 +384,14 @@ class VertexAIProvider:
                 strict=True,
             )
         )
+        response_model = (
+            _RawAnalysisOutput
+            if request.requested_result_schema_version == 1
+            else _RawAnalysisOutputV2
+        )
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=(
-                _RawAnalysisOutput
-                if request.requested_result_schema_version == 1
-                else _RawAnalysisOutputV2
-            ),
+            response_schema=_vertex_response_schema(response_model),
             temperature=0,
         )
 

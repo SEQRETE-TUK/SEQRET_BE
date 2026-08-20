@@ -54,6 +54,7 @@
 - `AnalysisRequest.source_media_asset_ids[n]`, `object_keys[n]`, `content_types[n]`은 같은 미디어를 가리킨다. 세 배열은 길이가 같고 ID와 object key 배열 안에서 중복이 없어야 한다. `content_types`는 A가 validation을 끝낸 `image/jpeg`, `image/png`, `video/mp4` 중 하나이며 B adapter는 확장자가 없는 object key에서 MIME type을 추정하지 않는다.
 - v2 분석 요청은 `requested_result_schema_version=2`와 각 source에 정확히 대응하는 `source_contexts[]`를 사용한다. context에는 media asset, location, origin/destination kind와 room-zone ID만 포함하고 주소 원문은 포함하지 않는다.
 - `AnalysisResult` v1은 기존 `description` 중심 품목만 유지한다. v2는 같은 품목에 `name`, `quantity`, `unit`, `work_note`를 구조화하고, 수량·단위가 불확실한 품목은 `review_required_items`에 함께 비운다. `draft_items`의 v2 품목은 수량·단위가 모두 있어야 한다.
+- Vertex에는 필드 구조·타입·enum만 담은 단순 출력 schema를 전달하고, B adapter가 응답을 별도의 엄격한 Pydantic schema로 다시 검증한다. 엄격한 검증은 작업범위와 같은 1~500개 품목 상한, 최대 2개 출·도착지 조건, 0 이상의 source index와 PostgreSQL `integer` 범위 수량을 적용한다. 선택 문자열의 공백값은 `null`로 정규화해 수량·단위가 불확실한 품목을 검수 대상으로 보존한다.
 - v2 `location_condition_suggestions[]`는 주거 형태, 층, 엘리베이터, 계단, 주차·진입, 운반거리와 접근 메모를 값 또는 명시적 `unknown`으로 전달한다. 각 제안은 source media ID, confidence와 `review_required_fields`를 보존하며 자동으로 작업 원본이나 확정 범위를 갱신하지 않는다.
 - 모든 v2 품목과 위치 조건은 고객 검수 대상이다. B는 제안까지만 생성하고 A의 application command가 작업 topology와 source media를 다시 검증한 뒤 수정 가능한 범위 초안으로 가져온다.
 - merge 순서는 이 계약과 fake → B의 Storage adapter rebase → 실제 provider 통합 검증이다. upload 반환형과 delete generation은 호환성을 깨는 계약 변경이므로 기존 B adapter를 먼저 병합하지 않는다.

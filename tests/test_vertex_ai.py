@@ -1,21 +1,29 @@
 """B-04 Vertex AI (google-genai) adapter tests without network access."""
 
+import json
 import logging
 import time
+from copy import deepcopy
 from uuid import uuid4
 
 import pytest
-from google.genai import errors, types
+from google.genai import _transformers, errors, types
 
 from app.contracts.ai import (
     AnalysisFailureDetail,
     AnalysisFailureStage,
     AnalysisRequest,
+    AnalysisResult,
     AnalysisSourceContext,
 )
 from app.contracts.ports import AIProviderPort, ProviderError, ProviderErrorKind
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, IdempotencyKey, MediaAssetId
-from app.platform.ai.vertex import VertexAIProvider
+from app.platform.ai.vertex import (
+    MAX_ANALYSIS_ITEMS,
+    MAX_LOCATION_CONDITIONS,
+    MAX_PERSISTED_QUANTITY,
+    VertexAIProvider,
+)
 
 PROMPTS = {"inventory-1": "이삿짐을 방별로 나열하라"}
 KEY = IdempotencyKey("analysis:1")
@@ -228,6 +236,116 @@ async def test_analyze_v2_maps_items_and_location_context_without_exposing_ids()
     assert "result schema v2" in rendered_prompt
     assert "source_index=0, location=origin" in rendered_prompt
     assert str(request.source_contexts[0].location_id) not in rendered_prompt
+    assert AnalysisResult.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.anyio
+async def test_analyze_v2_uses_simple_wire_schema_and_strict_local_contract() -> None:
+    output = (
+        '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
+        '"quantity": 1, "unit": "개", "confidence": 0.9, "source_indices": [0]}]}'
+    )
+    models = StubModels(text=output)
+
+    await _provider(models).analyze(
+        request=_request_v2(),
+        idempotency_key=KEY,
+        timeout_seconds=30,
+    )
+
+    config = models.calls[0]["config"]
+    assert isinstance(config, types.GenerateContentConfig)
+    json_schema = config.response_schema
+    assert isinstance(json_schema, dict)
+    items_schema = json_schema["properties"]["items"]
+    assert items_schema["items"] == {"$ref": "#/$defs/_RawDraftItemV2"}
+    assert items_schema["type"] == "array"
+    assert "minItems" not in items_schema
+    assert "maxItems" not in items_schema
+    location_schema = json_schema["properties"]["location_conditions"]
+    assert "maxItems" not in location_schema
+    item_properties = json_schema["$defs"]["_RawDraftItemV2"]["properties"]
+    assert "maximum" not in item_properties["quantity"]["anyOf"][0]
+    assert "minimum" not in item_properties["source_indices"]["items"]
+    assert json_schema["required"] == ["items"]
+
+    wire_schema = _transformers.t_schema(None, deepcopy(json_schema))
+    assert wire_schema is not None
+    assert wire_schema.properties is not None
+    wire_items = wire_schema.properties["items"]
+    assert wire_items.min_items is None
+    assert wire_items.max_items is None
+    assert wire_items.items is not None
+    assert wire_items.items.properties is not None
+    wire_source_indices = wire_items.items.properties["source_indices"]
+    assert wire_source_indices.items is not None
+    assert wire_source_indices.items.minimum is None
+
+
+@pytest.mark.anyio
+async def test_analyze_v2_normalizes_blank_optional_text_to_reviewable_unknowns() -> None:
+    output = (
+        '{"items": [{"item_key": "boxes", "description": "박스", "name": "박스", '
+        '"quantity": 3, "unit": "   ", "work_note": "  ", "confidence": 0.6, '
+        '"source_indices": [0]}], "location_conditions": [{"source_indices": [0], '
+        '"access_note": "  ", "confidence": 0.4}]}'
+    )
+
+    result = await _provider(StubModels(text=output)).analyze(
+        request=_request_v2(),
+        idempotency_key=KEY,
+        timeout_seconds=30,
+    )
+
+    assert result.draft_items == ()
+    assert len(result.review_required_items) == 1
+    item = result.review_required_items[0]
+    assert item.quantity is None
+    assert item.unit is None
+    assert item.work_note is None
+    assert result.location_condition_suggestions[0].access_note is None
+
+
+@pytest.mark.anyio
+async def test_analyze_v2_rejects_values_outside_persistence_contract() -> None:
+    item = {
+        "item_key": "bed",
+        "description": "침대",
+        "name": "침대",
+        "quantity": 1,
+        "unit": "개",
+        "confidence": 0.9,
+        "source_indices": [0],
+    }
+    cases = (
+        {"items": [{**item, "quantity": MAX_PERSISTED_QUANTITY + 1}]},
+        {"items": [{**item, "source_indices": [-1]}]},
+        {
+            "items": [
+                {**item, "item_key": f"item-{index}"} for index in range(MAX_ANALYSIS_ITEMS + 1)
+            ],
+        },
+        {
+            "items": [item],
+            "location_conditions": [
+                {"source_indices": [0], "confidence": 0.5}
+                for _ in range(MAX_LOCATION_CONDITIONS + 1)
+            ],
+        },
+    )
+
+    for payload in cases:
+        with pytest.raises(ProviderError, match="malformed") as error_info:
+            await _provider(StubModels(text=json.dumps(payload))).analyze(
+                request=_request_v2(),
+                idempotency_key=KEY,
+                timeout_seconds=30,
+            )
+
+        assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
+        assert error_info.value.retryable is True
+        assert error_info.value.failure_stage is AnalysisFailureStage.PARSE
+        assert error_info.value.failure_detail is AnalysisFailureDetail.SCHEMA_VALIDATION
 
 
 @pytest.mark.anyio

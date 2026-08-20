@@ -6,14 +6,14 @@ from uuid import uuid4
 import google.auth
 import pytest
 
-from app.contracts.ai import AnalysisRequest, AnalysisSourceContext
+from app.contracts.ai import AnalysisRequest, AnalysisResult, AnalysisSourceContext
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, IdempotencyKey, MediaAssetId
 from app.entrypoints.worker import (
     ANALYSIS_MODEL_NAME,
     ANALYSIS_PROMPT_LIBRARY,
     ANALYSIS_PROMPT_VERSION,
 )
-from app.platform.ai.vertex import VertexAIProvider
+from app.platform.ai.vertex import MAX_ANALYSIS_ITEMS, MAX_LOCATION_CONDITIONS, VertexAIProvider
 
 VERTEX_GCS_URI_ENV = "SEQRET_TEST_VERTEX_GCS_URI"
 VERTEX_PROJECT_ENV = "SEQRET_TEST_GCP_PROJECT_ID"
@@ -82,8 +82,11 @@ async def test_vertex_v2_accepts_staging_video_and_returns_reviewable_items() ->
 
     items = result.draft_items + result.review_required_items
     assert items
+    assert len(items) <= MAX_ANALYSIS_ITEMS
+    assert len(result.location_condition_suggestions) <= MAX_LOCATION_CONDITIONS
     assert all(item.source_media_asset_ids == (media_asset_id,) for item in items)
     assert all(item.quantity is not None and item.unit is not None for item in result.draft_items)
     assert all(
         (item.quantity is None) == (item.unit is None) for item in result.review_required_items
     )
+    assert AnalysisResult.model_validate_json(result.model_dump_json()) == result
