@@ -26,6 +26,7 @@ from app.modules.access.models import (
 )
 from app.modules.access.schemas import (
     InvitationResponse,
+    MoveConnectionPreviewResponse,
     WorkspaceContactPointListResponse,
     WorkspaceContactPointResponse,
     WorkspaceContactPointUpsert,
@@ -45,6 +46,11 @@ WORKSPACE_SESSION_TTL = timedelta(days=30)
 WORKSPACE_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
 PHONE_PATTERN = re.compile(r"^\+[1-9][0-9]{7,14}$")
 REVOKED_CONTACT_DESTINATION_PREFIX = "revoked:"
+DEFAULT_ROLE_NAMES = {
+    ParticipantRole.CUSTOMER: "고객",
+    ParticipantRole.COMPANY_MANAGER: "이사업체",
+    ParticipantRole.FIELD_WORKER: "현장기사",
+}
 
 
 class InvalidWorkspaceSessionError(PermissionError):
@@ -362,13 +368,10 @@ async def create_or_extend_workspace_session(
     )
 
 
-async def resolve_move_connection(
+async def _load_move_connection_job(
     session: AsyncSession,
     connection_code: str,
-    role: ParticipantRole,
-) -> JobParticipant:
-    """Resolve a displayable move code and materialize the selected demo role."""
-
+) -> MoveJob:
     # ponytail: 32-bit display codes can collide; use a stored random code if this leaves demo use.
     prefix = connection_code.removeprefix("MOVE-").lower()
     jobs = tuple(
@@ -385,7 +388,37 @@ async def resolve_move_connection(
     )
     if len(jobs) != 1:
         raise InvalidMoveConnectionError
-    job = jobs[0]
+    return jobs[0]
+
+
+async def preview_move_connection(
+    session: AsyncSession,
+    connection_code: str,
+    role: ParticipantRole,
+) -> MoveConnectionPreviewResponse:
+    """Resolve the display identity without creating participants or sessions."""
+
+    job = await _load_move_connection_job(session, connection_code)
+    display_name = await session.scalar(
+        select(JobParticipant.display_name).where(
+            JobParticipant.job_id == job.id,
+            JobParticipant.role == role,
+        )
+    )
+    return MoveConnectionPreviewResponse(
+        role=role,
+        display_name=display_name or DEFAULT_ROLE_NAMES[role],
+    )
+
+
+async def resolve_move_connection(
+    session: AsyncSession,
+    connection_code: str,
+    role: ParticipantRole,
+) -> JobParticipant:
+    """Resolve a displayable move code and materialize the selected demo role."""
+
+    job = await _load_move_connection_job(session, connection_code)
     participant = await session.scalar(
         select(JobParticipant).where(
             JobParticipant.job_id == job.id,
@@ -396,11 +429,7 @@ async def resolve_move_connection(
         participant = JobParticipant(
             job_id=job.id,
             role=role,
-            display_name={
-                ParticipantRole.CUSTOMER: "고객",
-                ParticipantRole.COMPANY_MANAGER: "이사업체",
-                ParticipantRole.FIELD_WORKER: "현장기사",
-            }[role],
+            display_name=DEFAULT_ROLE_NAMES[role],
         )
         session.add(participant)
         await session.flush()

@@ -95,6 +95,13 @@ class MoveConnectionCreate(ContractModel):
         return normalized
 
 
+class MoveConnectionPreviewResponse(ContractModel):
+    """Display identity resolved without creating a workspace session."""
+
+    role: ParticipantRole
+    display_name: str
+
+
 class WorkspaceMemberResponse(ContractModel):
     """One job role restored from a server-owned workspace session."""
 
