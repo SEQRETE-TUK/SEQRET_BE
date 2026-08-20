@@ -20,7 +20,8 @@ ALEMBIC_ANALYSIS_PREVIOUS = "a_05_0001"
 ALEMBIC_CHANGE_PREVIOUS = "a_06_0001"
 ALEMBIC_PREVIOUS = "a_07_0001"
 ALEMBIC_MAIN_HEAD = "a_09_0002"
-ALEMBIC_HEAD = "int_12_0001"
+ALEMBIC_HEAD = "int_17_0001"
+ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS = "int_12_0001"
 ALEMBIC_MOVE_CONTRACT_PREVIOUS = "int_09_0001"
 ALEMBIC_FRONTEND_PREVIOUS = "a_23_0001"
 ALEMBIC_AI_V2_HEAD = "b_08_0001"
@@ -100,6 +101,37 @@ def test_alembic_has_one_linear_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
 
     assert script.get_heads() == [ALEMBIC_HEAD]
+
+
+def test_analysis_failure_diagnostics_migration_roundtrips(tmp_path: Path) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'analysis-diagnostics.sqlite3').as_posix()}"
+    configuration = _alembic_config(database_url)
+    engine = create_engine(database_url)
+    diagnostic_columns = {"failure_stage", "provider_status", "failure_detail_code"}
+
+    try:
+        command.upgrade(configuration, ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS)
+        for table_name in ("ai_analysis_run", "capture_analysis_dispatch"):
+            assert diagnostic_columns.isdisjoint(
+                {column["name"] for column in inspect(engine).get_columns(table_name)}
+            )
+
+        command.upgrade(configuration, "head")
+        for table_name in ("ai_analysis_run", "capture_analysis_dispatch"):
+            assert diagnostic_columns <= {
+                column["name"] for column in inspect(engine).get_columns(table_name)
+            }
+
+        command.downgrade(configuration, ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS)
+        for table_name in ("ai_analysis_run", "capture_analysis_dispatch"):
+            assert diagnostic_columns.isdisjoint(
+                {column["name"] for column in inspect(engine).get_columns(table_name)}
+            )
+
+        command.upgrade(configuration, "head")
+        assert _current_revision(engine) == ALEMBIC_HEAD
+    finally:
+        engine.dispose()
 
 
 def test_move_detail_migration_backfills_and_guards_history(tmp_path: Path) -> None:
@@ -254,7 +286,7 @@ def test_move_detail_migration_backfills_and_guards_history(tmp_path: Path) -> N
 
         with pytest.raises(RuntimeError, match="move detail rows exist"):
             command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS
 
         with engine.begin() as connection:
             safe_conditions = dict(updated_conditions)
@@ -283,7 +315,7 @@ def test_move_detail_migration_backfills_and_guards_history(tmp_path: Path) -> N
             )
         with pytest.raises(RuntimeError, match="move detail rows exist"):
             command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS
 
         with engine.begin() as connection:
             scope_content["location_conditions"][0]["conditions"]["ladder"] = "unknown"
@@ -313,7 +345,7 @@ def test_move_detail_migration_backfills_and_guards_history(tmp_path: Path) -> N
             )
         with pytest.raises(RuntimeError, match="move detail rows exist"):
             command.downgrade(configuration, ALEMBIC_MOVE_CONTRACT_PREVIOUS)
-        assert _current_revision(engine) == ALEMBIC_HEAD
+        assert _current_revision(engine) == ALEMBIC_ANALYSIS_DIAGNOSTICS_PREVIOUS
 
         with engine.begin() as connection:
             change_content["location_conditions"][0]["conditions"]["ladder"] = "unknown"

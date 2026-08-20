@@ -13,7 +13,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.contracts.ai import AnalysisRequest
+from app.contracts.ai import AnalysisFailureDetail, AnalysisFailureStage, AnalysisRequest
 from app.contracts.ports import AIProviderPort, ProviderError, ProviderErrorKind
 from app.contracts.primitives import IdempotencyKey, TraceId
 from app.modules.analysis.models import AnalysisRunStatus
@@ -49,6 +49,9 @@ class AnalysisTaskOutcome:
     status: AnalysisTaskStatus
     error_kind: ProviderErrorKind | None = None
     retryable: bool = False
+    failure_stage: AnalysisFailureStage | None = None
+    provider_status: int | None = None
+    failure_detail: AnalysisFailureDetail | None = None
 
 
 async def handle_analysis_task(
@@ -85,6 +88,9 @@ async def handle_analysis_task(
             AnalysisTaskStatus.FAILED,
             error_kind=snapshot.failure_kind,
             retryable=snapshot.failure_kind in _RETRYABLE_ERROR_KINDS,
+            failure_stage=snapshot.failure_stage,
+            provider_status=snapshot.provider_status,
+            failure_detail=snapshot.failure_detail,
         )
 
     idempotency_key = IdempotencyKey(f"analysis:{request.analysis_run_id}")
@@ -100,12 +106,18 @@ async def handle_analysis_task(
                 session,
                 analysis_run_id=request.analysis_run_id,
                 error_kind=error.kind,
+                failure_stage=error.failure_stage,
+                provider_status=error.provider_status,
+                failure_detail=error.failure_detail,
                 now=now,
             )
         return AnalysisTaskOutcome(
             AnalysisTaskStatus.FAILED,
             error_kind=error.kind,
             retryable=error.retryable,
+            failure_stage=error.failure_stage,
+            provider_status=error.provider_status,
+            failure_detail=error.failure_detail,
         )
 
     async with transactional_session(factory) as session:

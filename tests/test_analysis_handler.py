@@ -13,7 +13,13 @@ from sqlalchemy.pool import NullPool
 # Import model modules so create_all sees capture_session/move_job FK targets.
 import app.modules.capture.models
 import app.modules.move_job.models  # noqa: F401
-from app.contracts.ai import AnalysisRequest, AnalysisResult, DraftItem
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisRequest,
+    AnalysisResult,
+    DraftItem,
+)
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import (
     AnalysisRunId,
@@ -108,9 +114,20 @@ class CountingProvider:
 
 
 class FailingProvider:
-    def __init__(self, *, kind: ProviderErrorKind, retryable: bool) -> None:
+    def __init__(
+        self,
+        *,
+        kind: ProviderErrorKind,
+        retryable: bool,
+        failure_stage: AnalysisFailureStage | None = None,
+        provider_status: int | None = None,
+        failure_detail: AnalysisFailureDetail | None = None,
+    ) -> None:
         self._kind = kind
         self._retryable = retryable
+        self._failure_stage = failure_stage
+        self._provider_status = provider_status
+        self._failure_detail = failure_detail
         self.calls = 0
 
     async def analyze(
@@ -122,7 +139,14 @@ class FailingProvider:
     ) -> AnalysisResult:
         del request, idempotency_key, timeout_seconds
         self.calls += 1
-        raise ProviderError(self._kind, "provider unavailable", retryable=self._retryable)
+        raise ProviderError(
+            self._kind,
+            "provider unavailable",
+            retryable=self._retryable,
+            failure_stage=self._failure_stage,
+            provider_status=self._provider_status,
+            failure_detail=self._failure_detail,
+        )
 
 
 @pytest.mark.anyio
@@ -149,17 +173,29 @@ async def test_provider_failure_records_failed_outcome(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     request = _request()
-    provider = FailingProvider(kind=ProviderErrorKind.UNAVAILABLE, retryable=True)
+    provider = FailingProvider(
+        kind=ProviderErrorKind.UNAVAILABLE,
+        retryable=True,
+        failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+        provider_status=503,
+        failure_detail=AnalysisFailureDetail.PROVIDER_UNAVAILABLE,
+    )
 
     outcome = await handle_analysis_task(factory, provider, request, trace_id=TRACE_ID, now=NOW)
 
     assert outcome.status is AnalysisTaskStatus.FAILED
     assert outcome.error_kind is ProviderErrorKind.UNAVAILABLE
     assert outcome.retryable is True
+    assert outcome.failure_stage is AnalysisFailureStage.PROVIDER_CALL
+    assert outcome.provider_status == 503
+    assert outcome.failure_detail is AnalysisFailureDetail.PROVIDER_UNAVAILABLE
     async with transactional_session(factory) as session:
         run = await session.get(AiAnalysisRun, request.analysis_run_id)
     assert run is not None
     assert run.status is AnalysisRunStatus.FAILED
+    assert run.failure_stage == "provider_call"
+    assert run.provider_status == 503
+    assert run.failure_detail_code == "provider_unavailable"
 
 
 @pytest.mark.anyio

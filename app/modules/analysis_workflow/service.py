@@ -8,7 +8,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.contracts.ai import AnalysisResult, AnalysisTaskV1
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisResult,
+    AnalysisTaskV1,
+)
 from app.contracts.events import DomainEventType
 from app.contracts.media import MediaAssetStatus, MediaPurpose
 from app.contracts.ports import ProviderError, ProviderErrorKind, TaskQueuePort
@@ -408,10 +413,17 @@ def _mark_failed(
     error_kind: ProviderErrorKind,
     retryable: bool,
     completed_at: datetime,
+    *,
+    failure_stage: AnalysisFailureStage | None = None,
+    provider_status: int | None = None,
+    failure_detail: AnalysisFailureDetail | None = None,
 ) -> None:
     row.status = CaptureAnalysisStatus.FAILED
     row.failure_code = error_kind.value
     row.retryable = retryable
+    row.failure_stage = failure_stage.value if failure_stage else None
+    row.provider_status = provider_status
+    row.failure_detail_code = failure_detail.value if failure_detail else None
     row.scope_version_id = None
     row.dispatch_token = None
     row.dispatch_locked_until = None
@@ -479,6 +491,8 @@ async def complete_capture_analysis(
                 ProviderErrorKind.INVALID_INPUT,
                 False,
                 operation_time,
+                failure_stage=AnalysisFailureStage.SCOPE_IMPORT,
+                failure_detail=AnalysisFailureDetail.SCOPE_IMPORT_INVALID,
             )
             await session.flush()
             return capture_analysis_response(row)
@@ -541,13 +555,30 @@ async def fail_capture_analysis(
     *,
     error_kind: ProviderErrorKind,
     retryable: bool,
+    failure_stage: AnalysisFailureStage | None = None,
+    provider_status: int | None = None,
+    failure_detail: AnalysisFailureDetail | None = None,
     completed_at: datetime | None = None,
 ) -> CaptureAnalysisResponse:
     """Finalize one provider-neutral failure exactly once."""
 
     row = await _load_task_row(session, task)
     if row.status is CaptureAnalysisStatus.FAILED:
-        if row.failure_code == error_kind.value and row.retryable is retryable:
+        if (
+            row.failure_code == error_kind.value
+            and row.retryable is retryable
+            and row.failure_stage in {None, failure_stage.value if failure_stage else None}
+            and row.provider_status in {None, provider_status}
+            and row.failure_detail_code in {None, failure_detail.value if failure_detail else None}
+        ):
+            row.failure_stage = row.failure_stage or (
+                failure_stage.value if failure_stage else None
+            )
+            row.provider_status = row.provider_status or provider_status
+            row.failure_detail_code = row.failure_detail_code or (
+                failure_detail.value if failure_detail else None
+            )
+            await session.flush()
             return capture_analysis_response(row)
         raise CaptureAnalysisConflictError(task.analysis_run_id)
     if row.status is CaptureAnalysisStatus.COMPLETED:
@@ -558,6 +589,9 @@ async def fail_capture_analysis(
         error_kind,
         retryable,
         completed_at or utc_now(),
+        failure_stage=failure_stage,
+        provider_status=provider_status,
+        failure_detail=failure_detail,
     )
     await session.flush()
     return capture_analysis_response(row)

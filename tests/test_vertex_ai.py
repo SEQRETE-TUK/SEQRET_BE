@@ -5,9 +5,14 @@ import time
 from uuid import uuid4
 
 import pytest
-from google.genai import errors
+from google.genai import errors, types
 
-from app.contracts.ai import AnalysisRequest, AnalysisSourceContext
+from app.contracts.ai import (
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
+    AnalysisRequest,
+    AnalysisSourceContext,
+)
 from app.contracts.ports import AIProviderPort, ProviderError, ProviderErrorKind
 from app.contracts.primitives import AnalysisRunId, CaptureSessionId, IdempotencyKey, MediaAssetId
 from app.platform.ai.vertex import VertexAIProvider
@@ -165,6 +170,9 @@ async def test_analyze_maps_structured_output_to_draft() -> None:
         "gs://seqret-media/jobs/1/room0",
         "gs://seqret-media/jobs/1/room1",
     ]
+    config = call["config"]
+    assert isinstance(config, types.GenerateContentConfig)
+    assert config.temperature == 0
 
 
 @pytest.mark.anyio
@@ -223,6 +231,48 @@ async def test_analyze_v2_maps_items_and_location_context_without_exposing_ids()
 
 
 @pytest.mark.anyio
+async def test_analyze_v2_promotes_uncertain_model_combinations_to_review() -> None:
+    output = (
+        '{"items": ['
+        '{"item_key": "boxes", "description": "박스 수량 미상", "name": "박스", '
+        '"quantity": null, "unit": null, "confidence": 0.5, "source_indices": [0]},'
+        '{"item_key": "chairs", "description": "의자 단위 미상", "name": "의자", '
+        '"quantity": 2, "unit": null, "confidence": 0.6, "source_indices": [0]}], '
+        '"location_conditions": [{"source_indices": [0], '
+        '"floor": {"status": "known", "value": null}, '
+        '"carry_distance": {"status": "unknown", "value_m": 10}, '
+        '"confidence": 0.4, "review_required_fields": ["floor", "floor"]},'
+        '{"source_indices": [1], '
+        '"floor": {"status": "unknown", "value": 8}, '
+        '"carry_distance": {"status": "known", "value_m": null}, '
+        '"confidence": 0.5, '
+        '"review_required_fields": ["carry_distance", "carry_distance"]}]} '
+    )
+    request = _request_v2()
+
+    result = await _provider(StubModels(text=output)).analyze(
+        request=request,
+        idempotency_key=KEY,
+        timeout_seconds=30,
+    )
+
+    assert result.draft_items == ()
+    assert [item.item_key for item in result.review_required_items] == ["boxes", "chairs"]
+    assert all(item.quantity is None and item.unit is None for item in result.review_required_items)
+    origin, destination = result.location_condition_suggestions
+    assert origin.floor.status == "unknown"
+    assert origin.floor.value is None
+    assert origin.carry_distance.status == "unknown"
+    assert origin.carry_distance.value_m is None
+    assert origin.review_required_fields == ("floor", "carry_distance")
+    assert destination.floor.status == "unknown"
+    assert destination.floor.value is None
+    assert destination.carry_distance.status == "unknown"
+    assert destination.carry_distance.value_m is None
+    assert destination.review_required_fields == ("carry_distance", "floor")
+
+
+@pytest.mark.anyio
 async def test_analyze_v2_maps_any_source_indices_to_only_input() -> None:
     output = (
         '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
@@ -267,12 +317,6 @@ async def test_analyze_v2_rejects_untrusted_or_incomplete_output() -> None:
         ),
         (
             '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
-            '"quantity": null, "unit": null, "confidence": 0.9, '
-            '"source_indices": [0]}]}',
-            "malformed output",
-        ),
-        (
-            '{"items": [{"item_key": "bed", "description": "침대", "name": "침대", '
             '"quantity": 1, "unit": "개", "confidence": 0.9, "source_indices": [0]}, '
             '{"item_key": "bed", "description": "중복 침대", "name": "침대", '
             '"quantity": 1, "unit": "개", "confidence": 0.8, "source_indices": [0]}]}',
@@ -310,6 +354,8 @@ async def test_analyze_rejects_empty_response() -> None:
 
     assert error_info.value.kind is ProviderErrorKind.UNAVAILABLE
     assert error_info.value.retryable is True
+    assert error_info.value.failure_stage is AnalysisFailureStage.PARSE
+    assert error_info.value.failure_detail is AnalysisFailureDetail.EMPTY_RESPONSE
 
 
 @pytest.mark.anyio
@@ -330,6 +376,8 @@ async def test_analyze_rejects_malformed_output() -> None:
 
         assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
         assert error_info.value.retryable is False
+        assert error_info.value.failure_stage is AnalysisFailureStage.PARSE
+        assert error_info.value.failure_detail is AnalysisFailureDetail.SCHEMA_VALIDATION
 
 
 @pytest.mark.anyio
@@ -348,6 +396,8 @@ async def test_analyze_rejects_out_of_range_source_index() -> None:
         )
 
     assert error_info.value.kind is ProviderErrorKind.INVALID_INPUT
+    assert error_info.value.failure_stage is AnalysisFailureStage.SOURCE_MAP
+    assert error_info.value.failure_detail is AnalysisFailureDetail.INVALID_SOURCE_REFERENCE
 
 
 @pytest.mark.anyio
@@ -451,6 +501,10 @@ async def test_analyze_maps_provider_errors() -> None:
 
         assert error_info.value.kind is kind
         assert error_info.value.retryable is retryable
+        assert error_info.value.failure_stage is AnalysisFailureStage.PROVIDER_CALL
+        assert error_info.value.provider_status == (
+            error.code if isinstance(error, errors.APIError) else None
+        )
 
 
 @pytest.mark.anyio

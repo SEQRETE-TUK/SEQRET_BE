@@ -934,6 +934,9 @@ async def test_capture_submit_status_and_media_freeze_api(
     assert submitted.json()["analysis_run_id"] == repeated.json()["analysis_run_id"]
     assert status_response.json()["status"] == "pending"
     assert status_response.json()["scope_version_id"] is None
+    assert status_response.json()["failure_stage"] is None
+    assert status_response.json()["provider_status"] is None
+    assert status_response.json()["failure_detail_code"] is None
     assert (await client.get(status_url, headers=_headers(worker_secret))).status_code == 404
 
     upload_url = (

@@ -82,6 +82,14 @@ class CaptureAnalysisDispatch(Base):
             "failure_code IS NULL OR length(failure_code) > 0",
             name="capture_analysis_dispatch_failure_present",
         ),
+        CheckConstraint(
+            "failure_stage IS NULL OR length(failure_stage) > 0",
+            name="capture_analysis_dispatch_failure_stage_present",
+        ),
+        CheckConstraint(
+            "failure_detail_code IS NULL OR length(failure_detail_code) > 0",
+            name="capture_analysis_dispatch_failure_detail_present",
+        ),
         Index(
             "ix_capture_analysis_dispatch_due",
             "status",
@@ -129,6 +137,9 @@ class CaptureAnalysisDispatch(Base):
     last_dispatch_error_code: Mapped[str | None] = mapped_column(String(64))
     failure_code: Mapped[str | None] = mapped_column(String(64))
     retryable: Mapped[bool | None] = mapped_column(Boolean)
+    failure_stage: Mapped[str | None] = mapped_column(String(32))
+    provider_status: Mapped[int | None] = mapped_column(Integer)
+    failure_detail_code: Mapped[str | None] = mapped_column(String(64))
     scope_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("scope_version.id", ondelete="RESTRICT"),
         unique=True,

@@ -13,7 +13,6 @@ Idempotency is intentionally enforced at the analysis-run persistence layer
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
-from enum import StrEnum
 from typing import NoReturn, Protocol, cast
 
 from google import genai
@@ -23,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.contracts.ai import (
     AnalysisCarryDistanceCondition,
     AnalysisElevatorAvailability,
+    AnalysisFailureDetail,
+    AnalysisFailureStage,
     AnalysisFloorCondition,
     AnalysisKnowledgeStatus,
     AnalysisLocationConditionField,
@@ -36,15 +37,6 @@ from app.contracts.ai import (
 )
 from app.contracts.ports import ProviderError, ProviderErrorKind
 from app.contracts.primitives import IdempotencyKey, MediaAssetId
-
-
-class AnalysisFailureStage(StrEnum):
-    """Stage that a Vertex analysis failure is attributed to, for diagnosis."""
-
-    PROMPT = "prompt"
-    PROVIDER_CALL = "provider_call"
-    PARSE = "parse"
-    SOURCE_MAP = "source_map"
 
 
 class _StrictProviderModel(BaseModel):
@@ -186,7 +178,7 @@ class VertexAIProvider:
         kind: ProviderErrorKind,
         retryable: bool,
         *,
-        status_code: int = 0,
+        status_code: int | None = None,
     ) -> None:
         """Emit one structured failure event; never logs media, prompts, or URIs."""
 
@@ -197,7 +189,7 @@ class VertexAIProvider:
             extra={
                 "event": "analysis_provider_failure",
                 "analysis_stage": stage.value,
-                "provider_status": status_code,
+                "provider_status": status_code or 0,
                 "error_kind": kind.value,
                 "retryable": retryable,
             },
@@ -208,12 +200,15 @@ class VertexAIProvider:
         message: str,
         *,
         stage: AnalysisFailureStage = AnalysisFailureStage.PARSE,
+        detail: AnalysisFailureDetail = AnalysisFailureDetail.SCHEMA_VALIDATION,
     ) -> NoReturn:
         self._log_failure(stage, ProviderErrorKind.INVALID_INPUT, False)
         raise ProviderError(
             ProviderErrorKind.INVALID_INPUT,
             message,
             retryable=False,
+            failure_stage=stage,
+            failure_detail=detail,
         )
 
     @staticmethod
@@ -263,6 +258,8 @@ class VertexAIProvider:
                 ProviderErrorKind.INVALID_INPUT,
                 "analysis prompt version is not configured",
                 retryable=False,
+                failure_stage=AnalysisFailureStage.PROMPT,
+                failure_detail=AnalysisFailureDetail.PROMPT_NOT_CONFIGURED,
             ) from error
 
         rendered_prompt = (
@@ -289,6 +286,7 @@ class VertexAIProvider:
                 if request.requested_result_schema_version == 1
                 else _RawAnalysisOutputV2
             ),
+            temperature=0,
         )
 
         def call() -> str | None:
@@ -308,6 +306,8 @@ class VertexAIProvider:
                 ProviderErrorKind.DEADLINE_EXCEEDED,
                 "analysis provider call failed",
                 retryable=True,
+                failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+                failure_detail=AnalysisFailureDetail.PROVIDER_TIMEOUT,
             ) from error
         except Exception as error:
             kind, retryable, status_code = _classify_provider_error(error)
@@ -315,7 +315,16 @@ class VertexAIProvider:
                 AnalysisFailureStage.PROVIDER_CALL, kind, retryable, status_code=status_code
             )
             raise ProviderError(
-                kind, "analysis provider call failed", retryable=retryable
+                kind,
+                "analysis provider call failed",
+                retryable=retryable,
+                failure_stage=AnalysisFailureStage.PROVIDER_CALL,
+                provider_status=status_code or None,
+                failure_detail=(
+                    AnalysisFailureDetail.PROVIDER_REJECTED
+                    if status_code
+                    else AnalysisFailureDetail.PROVIDER_UNAVAILABLE
+                ),
             ) from error
 
         return self._to_result(request, text)
@@ -327,6 +336,8 @@ class VertexAIProvider:
                 ProviderErrorKind.UNAVAILABLE,
                 "analysis provider returned no content",
                 retryable=True,
+                failure_stage=AnalysisFailureStage.PARSE,
+                failure_detail=AnalysisFailureDetail.EMPTY_RESPONSE,
             )
         try:
             if request.requested_result_schema_version == 1:
@@ -344,6 +355,8 @@ class VertexAIProvider:
                 ProviderErrorKind.INVALID_INPUT,
                 "analysis provider returned malformed output",
                 retryable=False,
+                failure_stage=AnalysisFailureStage.PARSE,
+                failure_detail=AnalysisFailureDetail.SCHEMA_VALIDATION,
             ) from error
 
     def _source_assets(
@@ -359,6 +372,7 @@ class VertexAIProvider:
             self._reject_output(
                 "analysis output contained invalid media references",
                 stage=AnalysisFailureStage.SOURCE_MAP,
+                detail=AnalysisFailureDetail.INVALID_SOURCE_REFERENCE,
             )
         sources = []
         for index in normalized:
@@ -366,6 +380,7 @@ class VertexAIProvider:
                 self._reject_output(
                     "analysis output referenced unknown media",
                     stage=AnalysisFailureStage.SOURCE_MAP,
+                    detail=AnalysisFailureDetail.INVALID_SOURCE_REFERENCE,
                 )
             sources.append(request.source_media_asset_ids[index])
         return tuple(sources)
@@ -382,6 +397,7 @@ class VertexAIProvider:
         if len(item_keys) != len(set(item_keys)):
             self._reject_output(
                 "analysis provider returned duplicate item keys",
+                detail=AnalysisFailureDetail.DUPLICATE_ITEM_KEY,
             )
         for item in raw.items:
             sources = self._source_assets(
@@ -416,7 +432,10 @@ class VertexAIProvider:
         review_required_items: list[DraftItem] = []
         item_keys = [item.item_key for item in raw.items]
         if len(item_keys) != len(set(item_keys)):
-            self._reject_output("analysis provider returned duplicate item keys")
+            self._reject_output(
+                "analysis provider returned duplicate item keys",
+                detail=AnalysisFailureDetail.DUPLICATE_ITEM_KEY,
+            )
 
         for item in raw.items:
             sources = self._source_assets(
@@ -424,17 +443,23 @@ class VertexAIProvider:
                 item.source_indices,
                 allow_single_source_fallback=True,
             )
+            quantity = item.quantity
+            unit = item.unit
+            review_required = item.review_required or quantity is None or unit is None
+            if (quantity is None) != (unit is None):
+                quantity = None
+                unit = None
             draft = DraftItem(
                 item_key=item.item_key,
                 description=item.description,
                 name=item.name,
-                quantity=item.quantity,
-                unit=item.unit,
+                quantity=quantity,
+                unit=unit,
                 work_note=item.work_note,
                 confidence=item.confidence,
                 source_media_asset_ids=sources,
             )
-            (review_required_items if item.review_required else draft_items).append(draft)
+            (review_required_items if review_required else draft_items).append(draft)
 
         location_suggestions: list[DraftLocationCondition] = []
         location_ids: set[object] = set()
@@ -455,32 +480,51 @@ class VertexAIProvider:
                 self._reject_output(
                     "analysis location output mixed source locations",
                     stage=AnalysisFailureStage.SOURCE_MAP,
+                    detail=AnalysisFailureDetail.MIXED_SOURCE_LOCATION,
                 )
             location_id = contexts[0].location_id
             location_kind = contexts[0].location_kind
             if location_id in location_ids or location_kind in location_kinds:
-                self._reject_output("analysis provider returned duplicate location suggestions")
+                self._reject_output(
+                    "analysis provider returned duplicate location suggestions",
+                    detail=AnalysisFailureDetail.DUPLICATE_LOCATION,
+                )
             location_ids.add(location_id)
             location_kinds.add(location_kind)
+            review_required_fields = list(dict.fromkeys(condition.review_required_fields))
+            floor_status = condition.floor.status
+            floor_value = condition.floor.value
+            if (floor_status == "known") != (floor_value is not None):
+                floor_status = "unknown"
+                floor_value = None
+                if "floor" not in review_required_fields:
+                    review_required_fields.append("floor")
+            carry_distance_status = condition.carry_distance.status
+            carry_distance_value = condition.carry_distance.value_m
+            if (carry_distance_status == "known") != (carry_distance_value is not None):
+                carry_distance_status = "unknown"
+                carry_distance_value = None
+                if "carry_distance" not in review_required_fields:
+                    review_required_fields.append("carry_distance")
             location_suggestions.append(
                 DraftLocationCondition(
                     location_id=location_id,
                     location_kind=location_kind,
                     residence_type=condition.residence_type,
                     floor=AnalysisFloorCondition(
-                        status=condition.floor.status,
-                        value=condition.floor.value,
+                        status=floor_status,
+                        value=floor_value,
                     ),
                     elevator=condition.elevator,
                     stairs=condition.stairs,
                     parking_access=condition.parking_access,
                     carry_distance=AnalysisCarryDistanceCondition(
-                        status=condition.carry_distance.status,
-                        value_m=condition.carry_distance.value_m,
+                        status=carry_distance_status,
+                        value_m=carry_distance_value,
                     ),
                     access_note=condition.access_note,
                     confidence=condition.confidence,
-                    review_required_fields=condition.review_required_fields,
+                    review_required_fields=tuple(review_required_fields),
                     source_media_asset_ids=sources,
                 )
             )
